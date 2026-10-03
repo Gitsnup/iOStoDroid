@@ -62,3 +62,12 @@ class ArchiveTests(unittest.TestCase):
         source = ipa(self.root / 'test.ipa'); target = self.root / 'existing'; target.mkdir(); (target / 'sentinel').write_text('safe')
         with self.assertRaises(FileExistsError): extract_ipa(source, target)
         self.assertEqual((target / 'sentinel').read_text(), 'safe')
+
+    def test_nonstring_metadata_rejected(self):
+        p = self.root / 'Info.plist'
+        p.write_bytes(plistlib.dumps({'CFBundleIdentifier': 'org.test', 'CFBundleExecutable': 'Main', 'CFBundleVersion': b'bad'}))
+        with self.assertRaises(InputError): read_plist(p)
+    def test_xml_entity_rejected(self):
+        p = self.root / 'Info.plist'
+        p.write_bytes(b'<!DOCTYPE plist [<!ENTITY a SYSTEM "file:///etc/passwd">]><plist><dict><key>CFBundleExecutable</key><string>&a;</string></dict></plist>')
+        with self.assertRaises(InputError): read_plist(p)

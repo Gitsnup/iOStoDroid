@@ -86,3 +86,28 @@ class MachOTests(unittest.TestCase):
             p = subprocess.run([str(analyzer_path()), str(self.path)], capture_output=True, timeout=3)
             self.assertIn(p.returncode, (0, 1), p.stderr)
             if not p.returncode: json.loads(p.stdout)
+
+    def test_bind_repeat_scaled_skip_and_signed_addend(self):
+        bind = b'\x31\x40_sym\x00\x70\x00\x60\x7f\xb2\xc0\x02\x08\x00'
+        cmd = struct.pack('<12I', 0x80000022, 48, 0, 0, 0x2000, len(bind), 0, 0, 0, 0, 0, 0)
+        imports = self.parse(macho(extras=[cmd], blobs={0x2000: bind}))['slices'][0]['imports']
+        self.assertEqual([i['offset'] for i in imports], [0, 24, 40])
+        self.assertTrue(all(i['addend'] == -1 and i['ordinal'] == -15 for i in imports))
+    def test_section_outside_segment_rejected(self):
+        data = bytearray(macho()); struct.pack_into('<Q', data, 32+72+32, 1)
+        with self.assertRaises(InputError): self.parse(data)
+    def test_excessively_long_symbol_rejected(self):
+        with self.assertRaises(InputError): self.parse(macho(imports=['x'*4097]))
+    def test_unixthread_pc_sp(self):
+        state = bytearray(272); struct.pack_into('<Q', state, 256, 0x100001000); struct.pack_into('<Q', state, 248, 0x777000)
+        command = struct.pack('<4I', 5, 16+len(state), 6, 68) + state
+        entry = self.parse(macho(extras=[command]))['slices'][0]['threadEntry']
+        self.assertEqual(entry['programCounter'], 0x100001000); self.assertEqual(entry['stackPointer'], 0x777000)
+    def test_chained_page_starts(self):
+        starts = struct.pack('<II', 1, 8) + struct.pack('<IHHQIHH', 24, 4096, 2, 0, 0, 1, 0xffff)
+        blob = struct.pack('<7I', 0, 28, 60, 60, 0, 1, 0) + starts
+        cmd = struct.pack('<4I', 0x80000034, 16, 0x2000, len(blob))
+        chain = self.parse(macho(extras=[cmd], blobs={0x2000: blob}))['slices'][0]['chainedFixups']
+        self.assertEqual(chain['segments'][0]['pointerFormat'], 2)
+        self.assertEqual(chain['segments'][0]['pageStarts'], [65535])
+        self.assertEqual(chain['pointerTraversal'], 'not-implemented')

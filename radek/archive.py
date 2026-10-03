@@ -108,6 +108,9 @@ def read_plist(path: Path) -> dict:
     for key in ('CFBundleExecutable', 'CFBundleIdentifier'):
         if not isinstance(value.get(key), str) or not value[key]:
             raise InputError('missing ' + key)
+    for key in ('CFBundleName', 'CFBundleDisplayName', 'CFBundleVersion', 'CFBundleShortVersionString'):
+        if key in value and not isinstance(value[key], str):
+            raise InputError('invalid non-string bundle field: ' + key)
     executable = safe_name(value['CFBundleExecutable'])
     if len(executable.parts) != 1:
         raise InputError('bundle executable must be a filename')

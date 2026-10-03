@@ -2,7 +2,7 @@
 
 Only authorized, unprotected inputs may be processed. Authorization is confirmed in UI/CLI; it is not a license verification mechanism. Encrypted Mach-O slices are rejected before reconstruction, including encrypted secondary slices/images. This project does not decrypt FairPlay, patch DRM checks, or validate Apple code signatures as a source of trust.
 
-Input limits: 512 MiB archive, 1 GiB expanded data, 256 MiB per member/executable, 20,000 members, 250:1 maximum member expansion ratio, 8 MiB plist, bounded paths/depth. PNG dimensions are limited to 4096²; CgBI inflation is bounded. Native counts/ranges, ULEB overflow, export trie recursion and FAT overlaps are checked. Android ZIP64 archives are explicitly unsupported.
+Input limits: 512 MiB archive, 1 GiB expanded data, 256 MiB per member/host executable (64 MiB per on-device executable), 20,000 members, 250:1 maximum member expansion ratio, 8 MiB plist, bounded paths/depth. PNG dimensions are limited to 4096²; CgBI inflation is bounded. Native counts/ranges, ULEB overflow, export trie recursion and FAT overlaps are checked. Android ZIP64 archives are explicitly unsupported.
 
 Extraction occurs under newly created private workspaces; links/special files, traversal, absolute paths, case collisions and encrypted archives are rejected. Partial extraction is removed on failure. Original executables are only read, decoded and analyzed, never executed on the conversion host. The current backend excludes memory/branches/syscalls/imports by proof, not by hoping they work on Android.
 

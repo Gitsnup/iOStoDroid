@@ -106,7 +106,7 @@ public final class MainActivity extends Activity {
     (res / 'app_icon.png').write_bytes(icon or fallback_icon())
     assembly = work / 'converted.S'
     words = struct.unpack('<' + 'I' * (len(machine_code) // 4), machine_code)
-    assembly.write_text('.text\n.p2align 2\n.global Java_dev_radek_generated_MainActivity_runNative\n.type Java_dev_radek_generated_MainActivity_runNative_runNative, %function\n'.replace('MainActivity_runNative_runNative', 'MainActivity_runNative') +
+    assembly.write_text('.text\n.p2align 2\n.global Java_dev_radek_generated_MainActivity_runNative\n.type Java_dev_radek_generated_MainActivity_runNative, %function\n' +
                         'Java_dev_radek_generated_MainActivity_runNative:\n' +
                         ''.join(f'  .inst 0x{w:08x}\n' for w in words) +
                         '.size Java_dev_radek_generated_MainActivity_runNative, .-Java_dev_radek_generated_MainActivity_runNative\n.section .note.GNU-stack,"",%progbits\n')
@@ -184,7 +184,42 @@ def elf_info(data: bytes) -> dict:
             if index >= size or end < 0:
                 raise InputError('invalid ELF dependency')
             needed.append(table[index:end].decode('ascii'))
-    return {'architecture': 'arm64-v8a', 'needed': needed}
+    # Independently inspect the dynamic symbol table, including the JNI entry.
+    section_offset = struct.unpack_from('<Q', data, 40)[0]
+    section_stride, section_count = struct.unpack_from('<HH', data, 58)
+    if section_stride != 64 or not section_count or section_count > 65535 or section_offset + section_count*64 > len(data):
+        raise InputError('missing/malformed ELF section table')
+    sections = [struct.unpack_from('<IIQQQQIIQQ', data, section_offset+i*64) for i in range(section_count)]
+    exports, undefined = {}, []
+    for section in sections:
+        _, kind, _, _, off, size, link, _, _, stride = section
+        if kind != 11:
+            continue
+        if stride != 24 or size % 24 or size//24 > 200000 or off+size > len(data) or link >= section_count:
+            raise InputError('invalid ELF dynamic symbols')
+        strings = sections[link]
+        if strings[1] != 3 or strings[4]+strings[5] > len(data):
+            raise InputError('invalid ELF dynamic strings')
+        table = data[strings[4]:strings[4]+strings[5]]
+        for sym in range(off+24, off+size, 24):
+            index, info, visibility, shndx, address, length = struct.unpack_from('<IBBHQQ', data, sym)
+            end = table.find(b'\x00', index)
+            if end < 0 or end-index > 4096:
+                raise InputError('invalid ELF symbol name')
+            name = table[index:end].decode('utf-8', errors='strict')
+            if info >> 4 not in (1, 2):
+                continue
+            if shndx == 0:
+                undefined.append(name)
+            elif visibility & 3 in (0, 3):
+                item = {'address': address, 'size': length, 'type': info & 15}
+                mapping = next(((base, start) for base, start, amount in loads if base <= address and address+length <= base+amount), None)
+                if mapping is not None and length:
+                    import hashlib
+                    base, start = mapping
+                    item['sha256'] = hashlib.sha256(data[start+address-base:start+address-base+length]).hexdigest()
+                exports[name] = item
+    return {'architecture': 'arm64-v8a', 'needed': needed, 'exports': exports, 'undefinedSymbols': undefined}
 
 
 def validate_apk(path: Path, tools: Toolchain, expected_package: str, expected_entry: str,
@@ -222,8 +257,15 @@ def validate_apk(path: Path, tools: Toolchain, expected_package: str, expected_e
             metadata = json.loads(z.read('assets/conversion.json'))
             if metadata.get('package') != expected_package or metadata.get('contract') != 'closed-integer-entry-v1':
                 raise InputError('conversion metadata/package mismatch')
-            if not metadata.get('conversion', {}).get('outputBytes'):
+            conversion = metadata.get('conversion', {})
+            if not conversion.get('outputBytes'):
                 raise InputError('missing reconstruction provenance')
+            native = libraries['libconverted.so']
+            entry = native['exports'].get('Java_dev_radek_generated_MainActivity_runNative')
+            if entry is None or entry['type'] != 2 or entry['size'] != conversion['outputBytes'] or entry.get('sha256') != conversion.get('machineCodeSha256'):
+                raise InputError('native JNI entry/code does not match verified reconstruction')
+            if native['undefinedSymbols'] or native['needed']:
+                raise InputError('closed native program unexpectedly depends on external code')
             for resource in metadata.get('resourceInventory', []):
                 import hashlib
                 name = 'assets/bundle/' + resource['path']
@@ -244,5 +286,5 @@ def validate_apk(path: Path, tools: Toolchain, expected_package: str, expected_e
         raise InputError('manifest icon is absent')
     signature = run([tools.tool('apksigner'), 'verify', '--verbose', '--print-certs', '--min-sdk-version', '26', path], log)
     run([tools.tool('zipalign'), '-c', '-P', '16', '4', path], log)
-    return {'status': 'PASSED', 'checks': ['structure', 'binary-manifest', 'package', 'launcher', 'DEX', 'signing', 'ARM64-ELF', 'dependencies', 'resources', 'icon', 'alignment'] + (['assets', 'resource-hashes', 'conversion-provenance'] if converted else []),
+    return {'status': 'PASSED', 'checks': ['structure', 'binary-manifest', 'package', 'launcher', 'DEX', 'signing', 'ARM64-ELF', 'dependencies', 'resources', 'icon', 'alignment'] + (['assets', 'resource-hashes', 'native-JNI-entry', 'native-code-hash', 'conversion-provenance'] if converted else []),
             'libraries': libraries, 'signature': signature.strip(), 'runtimeExecution': 'NOT_TESTED'}

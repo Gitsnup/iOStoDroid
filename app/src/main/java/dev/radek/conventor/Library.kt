@@ -93,14 +93,15 @@ class Library(private val context: Context) {
                 val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeFile(icon.path, options)
                 if (options.outWidth !in 1..4096 || options.outHeight !in 1..4096) continue
-                val bitmap = BitmapFactory.decodeFile(icon.path) ?: continue
+                val decodeOptions = BitmapFactory.Options().apply { inSampleSize = maxOf(1, maxOf(options.outWidth, options.outHeight) / 512) }
+                val bitmap = BitmapFactory.decodeFile(icon.path, decodeOptions) ?: continue
                 File(dir, "icon.png").outputStream().use { require(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
                 bitmap.recycle(); iconFound = true; break
             }
             report.put("icon", JSONObject().put("status", if (iconFound) "SUPPORTED" else "PARTIAL")
                 .put("reason", if (iconFound) "Decoded bundle icon" else "No decodable loose icon. Host tool supports additional CgBI PNGs; Assets.car is unsupported."))
             val binary = File(app, executable)
-            require(binary.isFile && binary.length() <= 256 * 1024 * 1024) { "missing/oversized executable" }
+            require(binary.isFile && binary.length() <= 64 * 1024 * 1024) { "Missing executable or exceeds the on-device 64 MiB analysis limit; use the host analyzer for larger files" }
             log(ConversionState.ANALYZING, "Parsing Mach-O load commands, symbols, fixups and dependencies")
             val macho = JSONObject(NativeBridge.analyze(binary.readBytes()))
             report.put("machO", macho)
@@ -128,7 +129,7 @@ class Library(private val context: Context) {
                 val head = ByteArray(4)
                 val size = file.inputStream().use { it.read(head) }
                 if (size == 4 && head.joinToString("") { "%02x".format(it.toInt() and 255) } in magics) {
-                    require(file.length() <= 256 * 1024 * 1024)
+                    require(file.length() <= 64 * 1024 * 1024) { "Embedded executable exceeds 64 MiB on-device limit" }
                     inspect(file, JSONObject(NativeBridge.analyze(file.readBytes())))
                     incompatible = true
                 }

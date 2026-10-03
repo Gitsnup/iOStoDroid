@@ -6,6 +6,7 @@ Only the explicitly decoded straight-line integer subset is lowerable today.
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 import struct
+import hashlib
 
 
 class Unsupported(ValueError):
@@ -58,6 +59,7 @@ class Program:
     def report(self):
         return {'architecture': self.architecture, 'blocks': [asdict(b) for b in self.blocks],
                 'sourceBytes': self.source_size, 'outputBytes': len(self.machine_code),
+                'machineCodeSha256': hashlib.sha256(self.machine_code).hexdigest(),
                 'backend': 'preserved-arm64' if self.architecture == 'arm64' else 'offline-arm32-to-arm64'}
 
 

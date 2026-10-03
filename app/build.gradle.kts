@@ -26,11 +26,17 @@ android {
 }
 
 /** The compiled converted-app runtime classes, wherever AGP placed them. */
-fun runtimeClasses(root: File): Set<File> =
-    if (!root.isDirectory) emptySet()
-    else root.walkTopDown().filter { it.isFile && it.extension == "class" &&
-        (it.path.replace('\\', '/').contains("/dev/radek/generated/") ||
-            it.path.replace('\\', '/').contains("/dev/radek/runtime/")) }.toSet()
+fun runtimeClasses(root: File): Set<File> {
+    val wanted = listOf("/dev/radek/generated/", "/dev/radek/runtime/")
+    if (!root.isDirectory) return emptySet()
+    return root.walkTopDown()
+        .onEnter { !it.name.startsWith("tmp") && !it.name.startsWith(".") }
+        .filter { file ->
+            file.isFile && file.extension == "class" &&
+                wanted.any { prefix -> file.path.replace('\\', '/').contains(prefix) }
+        }
+        .toSet()
+}
 
 /**
  * Packages the converted-app runtime (`dev.radek.generated`) as `assets/runtime.dex`
@@ -47,11 +53,11 @@ tasks.register("bundleRuntimeDex") {
     dependsOn("compileDebugJavaWithJavac")
     val assetsDir = layout.buildDirectory.dir("generated/runtimeAssets/assets")
     // AGP's javac output path is version dependent, so the runtime classes are
-    // located by pattern instead of by a hard-coded directory.
-    val classesDir = layout.buildDirectory.dir("intermediates/javac/debug")
+    // located by walking the build directory instead of a hard-coded path.
+    val buildDir = layout.buildDirectory
     // The classes directory does not exist until javac has run, so it is declared
     // as an optional file collection (Gradle rejects a missing inputs.dir).
-    inputs.files(runtimeClasses(classesDir.get().asFile)).optional(true)
+    inputs.files(runtimeClasses(buildDir.get().asFile)).optional(true)
     // Deliberately no outputs.dir: the generated directory is a *source* of the
     // main asset set, and declaring a producer would make every asset/lint task
     // demand an implicit dependency on this one. Ordering is wired explicitly
@@ -59,9 +65,9 @@ tasks.register("bundleRuntimeDex") {
     doLast {
         val output = assetsDir.get().asFile
         try {
-            val classes = runtimeClasses(classesDir.get().asFile)
+            val classes = runtimeClasses(buildDir.get().asFile)
             if (classes.isEmpty()) {
-                logger.warn("bundleRuntimeDex: no compiled runtime classes; generated APKs will reuse classes.dex")
+                logger.warn("bundleRuntimeDex: no compiled runtime classes under $buildDir; generated APKs will reuse classes.dex")
                 return@doLast
             }
             val sdk = android.sdkDirectory

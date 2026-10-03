@@ -115,7 +115,7 @@ object Elf {
         val symOffset = alignUp(hashOffset + hash.size, 8)
         val dynsym = ByteArray(48)                          // index 0 is the mandatory null entry
         put32(dynsym, 24, symbolOffset.toLong())            // st_name
-        dynsym[28] = 0x12                                   // STB_GLOBAL << 4 | STT_FUNC
+        dynsym[28] = (((STB_GLOBAL shl 4) or STT_FUNC) and 0xFF).toByte()
         dynsym[29] = 0                                      // st_other
         put16(dynsym, 30, SEC_TEXT)                         // st_shndx
         put64(dynsym, 32, PAGE.toLong())                    // st_value == .text virtual address

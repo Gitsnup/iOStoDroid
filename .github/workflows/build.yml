@@ -55,6 +55,12 @@ jobs:
         run: |
           python3 tools/make_fixture.py --output .local/fixture.ipa
           python3 -m radek convert .local/fixture.ipa --authorized --output .local/fixture-result
+      - name: Convert armv6 and Thumb fixtures (old 32-bit iOS games)
+        run: |
+          for arch in armv6 armv6thumb armv7 armv7s thumb thumb2; do
+            python3 tools/make_fixture.py --arch "$arch" --output ".local/fixture-$arch.ipa"
+            python3 -m radek convert ".local/fixture-$arch.ipa" --authorized --output ".local/fixture-$arch-result"
+          done
       - name: Upload RadekiOSConventor APK
         uses: actions/upload-artifact@v6
         with:

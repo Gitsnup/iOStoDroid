@@ -220,9 +220,9 @@ object Ir {
      * @param thumbMode true when the entry symbol carries N_ARM_THUMB_DEF.
      */
     fun lift(code: ByteArray, architecture: String, thumbMode: Boolean): Program {
-        val arm32 = architecture in ARM32
-        if (architecture != "arm64" && !arm32) throw Unsupported("no safe backend for $architecture")
-        val thumb = arm32 && thumbMode
+        val isArm32 = architecture in ARM32
+        if (architecture != "arm64" && !isArm32) throw Unsupported("no safe backend for $architecture")
+        val thumb = isArm32 && thumbMode
         val limit = if (architecture == "arm64") 16 else 13
         val instructions = mutableListOf<Instruction>()
         val initialized = mutableSetOf<Int>()

@@ -40,6 +40,9 @@ class SliceReconstruction:
     apis: dict = field(default_factory=dict)
     call_graph: dict = field(default_factory=dict)
     stats: dict = field(default_factory=dict)
+    sections: list = field(default_factory=list)
+    exports: list = field(default_factory=list)
+    strings: list = field(default_factory=list)
     error: str | None = None
 
     def report(self) -> dict:
@@ -53,6 +56,10 @@ class SliceReconstruction:
             "swift": self.swift_runtime.report() if self.swift_runtime else None,
             "apis": self.apis,
             "callGraph": self.call_graph,
+            "sections": self.sections,
+            "exportCount": len(self.exports),
+            "exports": self.exports[:40],
+            "strings": self.strings[:200],
             "error": self.error,
         }
 
@@ -89,6 +96,25 @@ def reconstruct_slice(path: Path, slice_info: dict, budget: "Budget") -> SliceRe
         item.listing = [helper.function(f) for f in functions[:MAX_FUNCTIONS_IN_REPORT]]
         item.apis = apis.analyze(image, functions)
         item.call_graph = source.call_graph(functions, image)
+        item.sections = [
+            {
+                "segment": section.segment,
+                "name": section.name,
+                "address": f"0x{section.address:x}",
+                "size": section.size,
+                "type": section.type,
+            }
+            for section in image.sections
+        ][:200]
+        item.exports = sorted(
+            {str(entry.get("name")) for entry in image.exports if entry.get("name")}
+        )
+        seen: set[str] = set()
+        for function in item.listing:
+            for value in function.strings:
+                if value not in seen:
+                    seen.add(value)
+        item.strings = sorted(seen)
     except (struct.error, ValueError, MemoryError) as exc:
         item.error = f"{type(exc).__name__}: {exc}"
     except Exception as exc:  # noqa: BLE001 - a reconstruction failure must not break analysis

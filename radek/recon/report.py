@@ -113,6 +113,39 @@ def markdown(reconstruction: dict, application: dict | None = None) -> str:
                     lines.append(f"- note: {note}")
                 lines.append("")
 
+            sections = slice_data.get("sections") or []
+            if sections:
+                lines.append("#### Sections")
+                lines.append("")
+                lines.append("| Segment | Section | Address | Size |")
+                lines.append("|---|---|---|---|")
+                for item in sections[:40]:
+                    lines.append(
+                        f"| {item['segment']} | {item['name']} | {item['address']} | {item['size']} |"
+                    )
+                if len(sections) > 40:
+                    lines.append(f"\n_… {len(sections) - 40} further sections_")
+                lines.append("")
+
+            strings = slice_data.get("strings") or []
+            if strings:
+                lines.append("#### Strings referenced by reconstructed code")
+                lines.append("")
+                for value in strings[:40]:
+                    lines.append(f"- {_short(repr(value), 120)}")
+                if len(strings) > 40:
+                    lines.append(f"- … {len(strings) - 40} further strings")
+                lines.append("")
+
+            if slice_data.get("exportCount"):
+                exports = slice_data.get("exports") or []
+                sample = ", ".join(f"`{name}`" for name in exports[:10])
+                lines.append(
+                    f"#### Exports: {slice_data['exportCount']} symbol(s)"
+                    + (f" (e.g. {sample})" if sample else "")
+                )
+                lines.append("")
+
             apis_data = slice_data.get("apis") or {}
             if apis_data:
                 lines.append("#### Framework API usage (reachable imports only)")
@@ -141,6 +174,15 @@ def markdown(reconstruction: dict, application: dict | None = None) -> str:
                         + (f" (called from {', '.join(use['callers'][:3])})" if use.get("callers") else "")
                     )
                 lines.append("")
+                unused = apis_data.get("unused") or []
+                if unused:
+                    lines.append("#### Imported but unreachable (no reconstructed caller)")
+                    lines.append("")
+                    for name in unused[:20]:
+                        lines.append(f"- `{name}`")
+                    if len(unused) > 20:
+                        lines.append(f"- … {len(unused) - 20} further unreferenced imports")
+                    lines.append("")
 
             functions = slice_data.get("functions") or []
             if functions:

@@ -16,6 +16,7 @@ from radek.pngcodec import (
     jpeg_dimensions,
     png_chunk,
     resize,
+    scale_to,
     sniff,
     square,
 )
@@ -229,6 +230,31 @@ class PngCodecTests(unittest.TestCase):
         canvas = square(Image(8, 4, bytes(8 * 4 * 4)), 8)
         self.assertEqual((canvas.width, canvas.height), (8, 8))
         self.assertEqual(canvas.pixels[:4], bytes((0, 0, 0, 0)))  # padding stays transparent
+
+    def test_scale_to_enlarges_and_preserves_pixels(self):
+        image = Image(2, 2, bytes([10, 20, 30, 255]) * 4)
+        scaled = scale_to(image, 8)
+        self.assertEqual((scaled.width, scaled.height), (8, 8))
+        self.assertEqual(tuple(scaled.pixels[:4]), (10, 20, 30, 255))
+        self.assertEqual(tuple(scaled.pixels[-4:]), (10, 20, 30, 255))
+        # Alpha is carried through, not flattened.
+        faded = Image(2, 2, bytes([10, 20, 30, 0]) * 4)
+        self.assertEqual(tuple(scale_to(faded, 4).pixels[:4]), (10, 20, 30, 0))
+
+    def test_square_can_enlarge_small_artwork(self):
+        image = Image(4, 2, bytes([1, 2, 3, 255]) * 8)
+        squared = square(image, 8, enlarge=True)
+        self.assertEqual((squared.width, squared.height), (8, 8))
+        self.assertEqual(tuple(squared.pixels[:4]), (0, 0, 0, 0))  # transparent padding
+        middle = (2 * 8 + 0) * 4
+        self.assertEqual(tuple(squared.pixels[middle : middle + 4]), (1, 2, 3, 255))
+
+    def test_large_downscale_is_decimated_then_filtered(self):
+        size = 64
+        image = Image(size, size, bytes([200, 10, 10, 255]) * (size * size))
+        out = resize(image, 8)
+        self.assertEqual((out.width, out.height), (8, 8))
+        self.assertEqual(tuple(out.pixels[:4]), (200, 10, 10, 255))
 
     def test_jpeg_dimensions(self):
         jpeg = b"\xff\xd8\xff\xe0" + struct.pack(">H", 16) + b"JFIF\x00" + bytes(9)

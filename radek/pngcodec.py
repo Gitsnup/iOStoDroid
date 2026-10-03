@@ -438,6 +438,22 @@ def encode(image: Image) -> bytes:
 # --- resampling ---------------------------------------------------------------
 
 
+def _decimate(image: Image, step: int) -> Image:
+    """Cheap nearest-neighbour reduction by an integer factor."""
+    width = max(1, image.width // step)
+    height = max(1, image.height // step)
+    xmap = [min(image.width - 1, x * step) for x in range(width)]
+    out = bytearray(width * height * 4)
+    stride = image.width * 4
+    for y in range(height):
+        base = (y * step) * stride
+        target = y * width * 4
+        for x, source_x in enumerate(xmap):
+            index = base + source_x * 4
+            out[target + x * 4 : target + x * 4 + 4] = image.pixels[index : index + 4]
+    return Image(width, height, bytes(out))
+
+
 def resize(image: Image, size: int) -> Image:
     """Box-filter downscale so the longest edge fits ``size`` pixels."""
     if size < 1:
@@ -445,6 +461,12 @@ def resize(image: Image, size: int) -> Image:
     longest = max(image.width, image.height)
     if longest <= size:
         return image
+    if longest >= size * 2:
+        # Decimate first: the box filter is O(pixels) in pure Python.
+        image = _decimate(image, max(2, int(longest / (size * 2))))
+        longest = max(image.width, image.height)
+        if longest <= size:
+            return image
     factor = longest / size
     width = max(1, int(image.width / factor))
     height = max(1, int(image.height / factor))
@@ -476,9 +498,32 @@ def resize(image: Image, size: int) -> Image:
     return Image(width, height, bytes(out))
 
 
-def square(image: Image, size: int) -> Image:
+def scale_to(image: Image, size: int) -> Image:
+    """Scale so the longest edge is exactly ``size`` pixels (box filter down, nearest up)."""
+    longest = max(image.width, image.height)
+    if longest == size:
+        return image
+    if longest > size:
+        return resize(image, size)
+    width = max(1, round(image.width * size / longest))
+    height = max(1, round(image.height * size / longest))
+    xmap = [min(image.width - 1, x * image.width // width) for x in range(width)]
+    ymap = [min(image.height - 1, y * image.height // height) for y in range(height)]
+    rows = []
+    stride = image.width * 4
+    for source_y in ymap:
+        base = source_y * stride
+        row = bytearray(width * 4)
+        for x, source_x in enumerate(xmap):
+            index = base + source_x * 4
+            row[x * 4 : x * 4 + 4] = image.pixels[index : index + 4]
+        rows.append(bytes(row))
+    return Image(width, height, b"".join(rows))
+
+
+def square(image: Image, size: int, enlarge: bool = False) -> Image:
     """Fit into a transparent square canvas, preserving aspect ratio."""
-    scaled = resize(image, size)
+    scaled = scale_to(image, size) if enlarge else resize(image, size)
     if scaled.width == size and scaled.height == size:
         return scaled
     canvas = bytearray(size * size * 4)

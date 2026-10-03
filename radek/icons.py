@@ -414,7 +414,9 @@ def launcher(result: IconResult, size: int = LAUNCHER_SIZE) -> bytes | None:
         image = pngcodec.decode(result.image)
     except pngcodec.PngError:
         return None
-    return pngcodec.encode(pngcodec.square(image, size))
+    # Enlarge small icons: a 48px icon centred in a large transparent canvas is not
+    # a usable launcher icon, so the artwork is scaled to the requested size first.
+    return pngcodec.encode(pngcodec.square(image, size, enlarge=True))
 
 
 def display(result: IconResult, size: int = DISPLAY_SIZE) -> bytes | None:

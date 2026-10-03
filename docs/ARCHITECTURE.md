@@ -7,6 +7,7 @@
 - `radek/analysis.py`: native analyzer invocation, generic dependency graph and fail-closed backend eligibility.
 - `radek/ir.py`: explicit register/width/flag-aware instruction records and basic blocks, decoding, proof and ARM64 lowering. Unsupported instruction classes raise `Unsupported`.
 - `radek/resources.py`: PNG normalization, resource inventory, source code/signature exclusion.
+- `radek/dex.py`: bounded DEX integrity and class-identity inspection; no Dalvik interpreter.
 - `radek/apk.py`: independent host SDK/NDK tool invocation, ELF/DEX/Android packaging, development signing and validation.
 - `radek/pipeline.py`: guarded states, durable JSON report/JSONL logs, isolated temporary job cleanup. Only validated artifacts are published to the result directory.
 - `tests/`, `app/src/test/`, `native/tests/`: synthetic fixtures, negative/security tests, native portable runtime tests, Robolectric importer tests, SDK-required end-to-end APK tests.

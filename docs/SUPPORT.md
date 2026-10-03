@@ -9,7 +9,7 @@ Statuses describe implemented behavior, not planned compatibility.
 | Info.plist | SUPPORTED | XML and binary, required bundle fields, nested icon dictionaries; bounded parsing |
 | Icons | PARTIAL | Loose PNGs; host normalizes non-interlaced RGBA8 CgBI. Android standard decoder only. No Assets.car decoder |
 | Mach-O thin/FAT/FAT64 | SUPPORTED | CPU/subtype, endian headers, bounded load command/section/symbol parsing |
-| Mach-O loader metadata | PARTIAL | Relocations, dynamic table fields, bind symbols, export trie, chained import records, dependencies, LC_MAIN, signature blob metadata. No signature trust validation or chained pointer graph rewriting |
+| Mach-O loader metadata | PARTIAL | Relocations, dynamic table fields, bind symbols/offsets/addends, export trie, chained import/page-start records, dependencies, LC_MAIN, signature blob metadata. No signature trust validation or chained pointer graph rewriting |
 | ObjC/Swift/unwind/init metadata | PARTIAL | Section identification/ranges only, not full Apple metadata graph reconstruction |
 | ARM64 reconstruction | PARTIAL | Verified closed integer leaf subset; original safe instruction bytes retained in Android ELF |
 | ARM64e | BLOCKED | PAC/ABI adaptation not proven |
@@ -24,7 +24,7 @@ Statuses describe implemented behavior, not planned compatibility.
 | Touch / keyboard / gamepad / sensors / iOS lifecycle | BLOCKED | Android entry activity exists, not iOS input/lifecycle mapping |
 | Resources | PARTIAL | Relative paths, localization, plist/JSON/audio/texture files preserved as opaque assets. No compiled asset catalog, shader, texture/audio codec or lookup ABI conversion |
 | APK packaging/signing | SUPPORTED | Real SDK/NDK, JNI ARM64 ELF, compiled manifest/resources/DEX/assets, reusable dev key |
-| APK static validation | SUPPORTED | ZIP/manifest/package/entry/DEX/signature/ELF architecture/dependencies/resources/icon/alignment/provenance checks |
+| APK static validation | SUPPORTED | ZIP/manifest/package/entry/DEX/signature/ELF architecture/dependencies/resources/icon/alignment/provenance checks, DEX checksum/launcher definition and native JNI entry/code hash |
 | Android runtime/device validation | BLOCKED | No device test is currently supplied; report says NOT_TESTED |
 
 ## Closed integer entry contract v1

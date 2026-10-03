@@ -16,6 +16,7 @@ The host packager currently supports Linux x86_64 toolchains. The generated APKs
 ```sh
 python3 tools/build_native.py
 python3 -m unittest discover -v
+bash tools/test_sanitized.sh
 RADEK_REQUIRE_ANDROID=1 python3 -m unittest tests.test_apk -v
 ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
@@ -60,3 +61,7 @@ The host creates `.local/signing/debug.keystore` on first use and reuses it. A c
 ## CI
 
 `.github/workflows/build.yml` runs the entire SDK-enabled suite with `RADEK_REQUIRE_ANDROID=1`; absent SDKs cannot turn required integration tests into skips. It uploads importer and converted-program artifacts separately. Tests do not execute iOS binaries. No device/emulator runtime smoke test is currently part of CI.
+
+## Optional source formatting
+
+C++ uses `.clang-format` (LLVM style, four spaces, 110 columns). Python uses Black with `pyproject.toml` (110 columns); formatters are developer-only, not build/runtime dependencies. All business logic is separated from UI and SDK tool invocation for editing/testing.

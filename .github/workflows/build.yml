@@ -28,16 +28,18 @@ jobs:
         with:
           python-version: '3.12'
       - name: Android SDK and licenses
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           cmdline-tools-version: '11076708'
           packages: platform-tools
       - name: Install pinned platform, build tools, NDK and CMake
         run: python3 tools/ci_run.py sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
       - name: Configure Gradle and validate wrapper
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
       - name: Build native analyzer and run C++ runtime tests
         run: python3 tools/build_native.py
+      - name: AddressSanitizer and UndefinedBehaviorSanitizer tests
+        run: python3 tools/ci_run.py bash tools/test_sanitized.sh
       - name: Host tests and real signed synthetic IPA conversions
         env:
           RADEK_REQUIRE_ANDROID: '1'

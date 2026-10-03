@@ -30,6 +30,7 @@ class Library(private val context: Context) {
     }
 
     fun recoverInterrupted() {
+        root.listFiles().orEmpty().filter { it.isDirectory && !File(it, "report.json").isFile }.forEach { it.deleteRecursively() }
         entries().forEach { (dir, report) ->
             if (report.optString("state") in listOf("IMPORTED", "ANALYZING", "CONVERTING", "PACKAGING", "VALIDATING")) {
                 report.put("state", "FAILED").put("error", "Process ended before work completed; reimport to retry")

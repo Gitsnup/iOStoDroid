@@ -384,6 +384,54 @@ object Converter {
     }
 
     /**
+     * Structural check of the APK Signature Scheme v2 block: magic, matching size
+     * fields, the v2 pair id and the ZIP layout (entries, block, central
+     * directory, EOCD last) exactly as the platform verifier locates it.
+     */
+    fun verifySigningBlock(data: ByteArray, cdOffset: Int, cdSize: Int, eocdOffset: Int) {
+        if (eocdOffset != cdOffset + cdSize) {
+            throw ConversionFailure("central directory must be followed by EOCD")
+        }
+        if (cdOffset < 32) throw ConversionFailure("no room for the APK signing block")
+        val magic = "APK Sig Block 42".toByteArray(Charsets.US_ASCII)
+        for (index in magic.indices) {
+            if (data[cdOffset - magic.size + index] != magic[index]) {
+                throw ConversionFailure("APK signing block magic missing")
+            }
+        }
+        val size = readU64(data, cdOffset - 24)
+        if (size < 24 || size > (cdOffset - 8).toLong()) {
+            throw ConversionFailure("implausible APK signing block size")
+        }
+        val blockStart = (cdOffset - size - 8).toInt()
+        if (blockStart < 0 || readU64(data, blockStart) != size) {
+            throw ConversionFailure("APK signing block size fields disagree")
+        }
+        var found = false
+        var at = blockStart + 8
+        val pairsEnd = cdOffset - 24
+        while (at + 8 <= pairsEnd) {
+            val length = readU64(data, at)
+            if (length < 4 || at + 8 + length > pairsEnd) {
+                throw ConversionFailure("malformed APK signing block pair")
+            }
+            val id = (data[at + 8].toInt() and 255) or ((data[at + 9].toInt() and 255) shl 8) or
+                ((data[at + 10].toInt() and 255) shl 16) or ((data[at + 11].toInt() and 255) shl 24)
+            if (id == 0x7109871A) found = true
+            at += 8 + length.toInt()
+        }
+        if (!found) throw ConversionFailure("no APK Signature Scheme v2 block")
+    }
+
+    private fun readU64(data: ByteArray, at: Int): Long {
+        var value = 0L
+        for (shift in 0..56 step 8) {
+            value = value or ((data[at + shift / 8].toLong() and 255L) shl shift)
+        }
+        return value
+    }
+
+    /**
      * Independent verification of the freshly built APK. Uses Android's own
      * package parser plus a structural check of the ELF and the v1 digests, so a
      * malformed artifact is rejected before it is offered for installation.
@@ -471,16 +519,19 @@ object Converter {
 object ElfExports {
     class Result(val names: List<String>, val size: Long, val sha256: String, val needed: List<String>)
 
-    private fun u16(data: ByteArray, at: Int) =
+    private fun u16(data: ByteArray, at: Int): Int =
         (data[at].toInt() and 255) or ((data[at + 1].toInt() and 255) shl 8)
 
-    private fun u32(data: ByteArray, at: Int): Long =
-        (data[at].toInt() and 255L) or ((data[at + 1].toInt() and 255L) shl 8) or
-            ((data[at + 2].toInt() and 255L) shl 16) or ((data[at + 3].toInt() and 255L) shl 24)
+    private fun u32(data: ByteArray, at: Int): Long {
+        val bytes = (0 until 4).map { (data[at + it].toInt() and 255).toLong() }
+        return bytes[0] or (bytes[1] shl 8) or (bytes[2] shl 16) or (bytes[3] shl 24)
+    }
 
     private fun u64(data: ByteArray, at: Int): Long {
         var value = 0L
-        for (shift in 0..56 step 8) value = value or ((data[at + shift / 8].toLong() and 255) shl shift)
+        for (shift in 0..56 step 8) {
+            value = value or ((data[at + shift / 8].toLong() and 255L) shl shift)
+        }
         return value
     }
 

@@ -101,7 +101,7 @@ object Ir {
                     }
                 )
             }
-            Op.RETURN -> words.add(0xD65F03C0)
+            Op.RETURN -> words.add(0xD65F03C0.toInt())
         }
         val out = ByteArray(words.size * 4)
         words.forEachIndexed { index, value -> word(value).copyInto(out, index * 4) }

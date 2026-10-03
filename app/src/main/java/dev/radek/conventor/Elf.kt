@@ -49,6 +49,8 @@ object Elf {
     private const val SHT_NOTE = 7L
     private const val SHT_DYNSYM = 11L
     private const val SHT_STRTAB = 3L
+    private const val STT_FUNC = 2
+    private const val STB_GLOBAL = 1
     private const val SHF_WRITE = 1L
     private const val SHF_ALLOC = 2L
     private const val SHF_EXECINSTR = 4L

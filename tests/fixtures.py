@@ -143,7 +143,7 @@ def fat(slices, wide=False, little=False):
     return bytes(out)
 
 
-def ipa(path: Path, executable=None, binary=True, extra=None):
+def ipa(path: Path, executable=None, binary=True, extra=None, icon=True):
     info = {
         "CFBundleExecutable": "Fixture",
         "CFBundleIdentifier": "org.example.synthetic",
@@ -159,7 +159,8 @@ def ipa(path: Path, executable=None, binary=True, extra=None):
             plistlib.dumps(info, fmt=plistlib.FMT_BINARY if binary else plistlib.FMT_XML),
         )
         z.writestr("Payload/Fixture.app/Fixture", executable or macho())
-        z.writestr("Payload/Fixture.app/AppIcon@2x.png", fallback_icon())
+        if icon:
+            z.writestr("Payload/Fixture.app/AppIcon@2x.png", fallback_icon())
         z.writestr("Payload/Fixture.app/en.lproj/Localizable.strings", '"hello" = "Hello";')
         z.writestr("Payload/Fixture.app/config.json", '{"fixture":true}')
         for name, content in (extra or {}).items():

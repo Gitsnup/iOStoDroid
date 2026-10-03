@@ -109,10 +109,11 @@ class MainActivity : Activity() {
         entries.forEach { (dir, report) ->
             val item = card(); val app = report.optJSONObject("application") ?: JSONObject()
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }; item.addView(row)
+            val iconPath = File(dir, "icon.png")
             val icon = ImageView(this).apply {
-                val path = File(dir, "icon.png")
-                if (path.isFile) setImageURI(Uri.fromFile(path)) else setImageResource(dev.radek.conventor.R.drawable.ic_launcher)
-                contentDescription = "Application icon"
+                if (iconPath.isFile) setImageURI(Uri.fromFile(iconPath)) else setImageResource(dev.radek.conventor.R.drawable.ic_launcher)
+                contentDescription = if (iconPath.isFile) "Application icon"
+                else report.optJSONObject("icon")?.optString("reason")?.takeIf { it.isNotBlank() } ?: "Icon unavailable"
             }
             row.addView(icon, LinearLayout.LayoutParams(dp(56), dp(56)).apply { rightMargin = dp(14) })
             val labels = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }; row.addView(labels, LinearLayout.LayoutParams(0, -2, 1f))

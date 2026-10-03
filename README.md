@@ -4,6 +4,25 @@ An **offline native-reconstruction workbench**, not an iOS emulator. Kotlin Andr
 
 > **Important: this is NOT a general IPA/game converter.** Current native conversion is restricted to self-contained, straight-line integer-returning programs with no imports, framework calls, memory access, relocations or runtime metadata. UIKit, Foundation ABI, Swift, general Objective-C, graphics/audio/input and ordinary commercial apps are **BLOCKED**. An importer APK is not proof those apps can be converted.
 
+## Offline reconstruction before conversion
+
+Every import is analyzed before any conversion decision is made:
+
+- Mach-O images (executable, embedded dylibs/frameworks): headers, load commands,
+  segments/sections, symbols, relocations, exports/imports, dependencies and fixups.
+- Disassembly and function discovery with basic-block CFGs (ARM64/ARM64e, ARMv7/Thumb/Thumb-2),
+  register/constant/reference tracking and pseudocode listings.
+- Objective-C classes, categories, protocols, ivars, properties, selectors, message-send
+  targets; Swift type/field metadata and demangling.
+- Reachability: which imported symbols are actually called, by which reconstructed functions,
+  which linked frameworks are weak/optional, and which APIs are natively implementable on
+  Android, need compatibility code, or are genuinely unsupported.
+
+Results are written as `reconstruction.json` and `reconstruction.md` beside `report.json`.
+A dependency that is merely linked is **never** reported as blocked: only reachable APIs are.
+The reconstruction is an engineering artifact and is never claimed to be original source;
+reconstructed code is never executed.
+
 ## Two distinct APKs
 
 1. **Converter/importer app:** the Actions artifact `RadekiOSConventor-debug.apk` contains the Android library/import UI and native analyzer. The UI does not include an on-device SDK/NDK or compile IPAs on the phone.
@@ -34,6 +53,10 @@ python3 -m radek convert .local/fixture.ipa --authorized --output workspace/fixt
 ```
 
 `--arch armv7`, `armv7s`, `thumb`, and `thumb2` exercise **offline ARM32 → ARM64 lowering**. The fixtures are generated synthetic Mach-O programs, not installable signed iOS apps. The resulting native routine returns 42.
+
+Icons are recovered through a generic fallback chain (Info.plist names, `@2x`/`@3x`/`~ipad`
+variants, compiled `Assets.car` renditions, then other bundle images) with every attempt
+recorded; the recovered icon becomes the generated APK's launcher icon.
 
 For authorized real IPAs, `analyze` reads actual metadata/dependencies without attempting to decrypt or execute the input:
 

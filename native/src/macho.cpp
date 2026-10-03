@@ -1,5 +1,6 @@
 #include "macho.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -11,7 +12,7 @@ struct Reader {
     const std::vector<uint8_t> &b;
     size_t base, size;
     bool be = false;
-    std::shared_ptr<size_t> budget = std::make_shared<size_t>(8000000);
+    std::shared_ptr<size_t> budget = std::make_shared<size_t>(40000000);
     void consume(size_t n) const {
         if (n > *budget)
             throw std::runtime_error("Mach-O analysis complexity limit");
@@ -171,6 +172,8 @@ Json thin(Reader r) {
     size_t symoff = 0, nsyms = 0, stroff = 0, strsize = 0;
     bool symSeen = false;
     size_t exportOff = 0, exportSize = 0;
+    uint64_t textVmAddress = 0;
+    bool textSeen = false;
     struct Bind {
         size_t off, size;
         std::string kind;
@@ -199,6 +202,10 @@ Json thin(Reader r) {
             Json s = object();
             s["name"] = r.fixed(p + 8, 16);
             s["vmAddress"] = r.u(p + 24, s64 ? 8 : 4);
+            if (!textSeen && s["name"].value == "__TEXT") {
+                textSeen = true;
+                textVmAddress = r.u(p + 24, s64 ? 8 : 4);
+            }
             s["vmSize"] = r.u(p + (s64 ? 32 : 28), s64 ? 8 : 4);
             auto fo = r.u(p + (s64 ? 40 : 32), s64 ? 8 : 4), fs = r.u(p + (s64 ? 48 : 36), s64 ? 8 : 4);
             r.check(fo, fs);
@@ -232,6 +239,8 @@ Json thin(Reader r) {
                 sec["offset"] = off;
                 sec["alignment"] = r.u(q + (s64 ? 52 : 44), 4);
                 sec["flags"] = flags;
+                sec["reserved1"] = r.u(q + (s64 ? 68 : 60), 4);
+                sec["reserved2"] = r.u(q + (s64 ? 72 : 64), 4);
                 sec["relocations"] = relocations(r, r.u(q + (s64 ? 56 : 48), 4), r.u(q + (s64 ? 60 : 52), 4));
                 s["sections"].push(sec);
                 if (name.find("objc") != std::string::npos || name.find("swift") != std::string::npos ||
@@ -259,6 +268,13 @@ Json thin(Reader r) {
                 throw std::runtime_error("symbol limit");
             r.check(symoff, nsyms * (wide ? 16 : 12));
             r.check(stroff, strsize);
+            Json table = object();
+            table["offset"] = uint64_t(symoff);
+            table["count"] = uint64_t(nsyms);
+            table["entrySize"] = uint64_t(wide ? 16 : 12);
+            table["stringOffset"] = uint64_t(stroff);
+            table["stringSize"] = uint64_t(strsize);
+            j["symbolTable"] = table;
         } else if (cmd == 0xb) {
             need(80);
             Json d = object();
@@ -285,6 +301,17 @@ Json thin(Reader r) {
             r.check(r.u(p + 56, 4), r.u(p + 60, 4) * 4);
             d["externalRelocations"] = relocations(r, r.u(p + 64, 4), r.u(p + 68, 4));
             d["localRelocations"] = relocations(r, r.u(p + 72, 4), r.u(p + 76, 4));
+            // The indirect symbol table maps __la_symbol_ptr/__nl_symbol_ptr/__got slots to
+            // symtab entries. Exporting it lets the host recovery layer resolve stub targets.
+            auto indirectOffset = r.u(p + 56, 4), indirectCount = r.u(p + 60, 4);
+            if (indirectCount > 200000)
+                throw std::runtime_error("indirect symbol limit");
+            r.check(indirectOffset, indirectCount * 4);
+            r.consume(indirectCount);
+            Json indirect = array();
+            for (size_t x = 0; x < indirectCount; x++)
+                indirect.push(r.u(indirectOffset + x * 4, 4));
+            d["indirectSymbols"] = indirect;
             j["dynamicSymbols"] = d;
         } else if (cmd == 0xc || cmd == 0x18 || cmd == 0x80000018 || cmd == 0x8000001f || cmd == 0x80000023 ||
                    cmd == 0x20 || cmd == 0xd) {
@@ -326,6 +353,25 @@ Json thin(Reader r) {
             r.check(off, 1);
             j["entryOffset"] = off;
             j["stackSize"] = r.u(p + 16, 8);
+        } else if (cmd == 0x1b) {
+            need(24);
+            char hex[33] = {0};
+            for (size_t x = 0; x < 16; x++)
+                std::snprintf(hex + x * 2, 3, "%02x", uint8_t(r.u(p + 8 + x, 1)));
+            j["uuid"] = std::string(hex);
+        } else if (cmd == 0x32) {
+            need(24);
+            j["buildVersion"] = Json::object();
+            j["buildVersion"]["platform"] = r.u(p + 8, 4);
+            j["buildVersion"]["minOS"] = r.u(p + 12, 4);
+            j["buildVersion"]["sdk"] = r.u(p + 16, 4);
+            j["buildVersion"]["toolCount"] = r.u(p + 20, 4);
+        } else if (cmd == 0x24 || cmd == 0x25 || cmd == 0x2f || cmd == 0x30) {
+            need(16);
+            j["minVersion"] = Json::object();
+            j["minVersion"]["command"] = cmd;
+            j["minVersion"]["version"] = r.u(p + 8, 4);
+            j["minVersion"]["sdk"] = r.u(p + 12, 4);
         } else if (cmd == 4 || cmd == 5) {
             need(16);
             Json t = object();
@@ -439,6 +485,27 @@ Json thin(Reader r) {
                     f["segments"].push(segment);
                 }
                 j["chainedFixups"] = f;
+            }
+            if (cmd == 0x26 && n) {
+                // LC_FUNCTION_STARTS: ULEB128 deltas relative to the __TEXT segment address.
+                size_t at = off, stop = off + n;
+                uint64_t address = textVmAddress;
+                Json starts = array();
+                size_t count = 0;
+                while (at < stop) {
+                    uint64_t delta = r.leb(at, stop);
+                    if (delta > std::numeric_limits<uint64_t>::max() - address)
+                        throw std::runtime_error("function start overflow");
+                    address += delta;
+                    if (++count > 300000)
+                        throw std::runtime_error("function start limit");
+                    starts.push(address);
+                }
+                Json fs = object();
+                fs["baseAddress"] = uint64_t(textVmAddress);
+                fs["count"] = uint64_t(count);
+                fs["addresses"] = starts;
+                j["functionStarts"] = fs;
             }
             if (cmd == 0x1d && n) {
                 Reader cr = r;

@@ -54,6 +54,55 @@ class PipelineTests(unittest.TestCase):
     def test_relocation_blocked(self):
         self.assertEqual(self.run_fixture(macho(reloc=True), analyze_only=True)["state"], "BLOCKED")
 
+    def test_reconstruction_report_is_written(self):
+        result = self.run_fixture(
+            macho(
+                imports=["_UIApplicationMain"],
+                dependencies=["/System/Library/Frameworks/UIKit.framework/UIKit"],
+            ),
+            analyze_only=True,
+        )
+        job = self.root / "job"
+        self.assertTrue((job / "reconstruction.json").is_file())
+        self.assertTrue((job / "reconstruction.md").is_file())
+        self.assertEqual(result["reconstruction"]["status"], "ok")
+        summary = result["reconstruction"]["summary"]
+        self.assertEqual(summary["architectures"], ["arm64"])
+        self.assertGreaterEqual(summary["functionCount"], 1)
+        self.assertGreater(summary["coverage"], 0)
+        markdown_text = (job / "reconstruction.md").read_text()
+        self.assertIn("IPA reconstruction report", markdown_text)
+        self.assertIn("Reconstructed coverage", markdown_text)
+
+    def test_linked_but_unused_framework_is_not_reported_blocked(self):
+        result = self.run_fixture(
+            macho(
+                imports=["_UIApplicationMain"],
+                dependencies=["/System/Library/Frameworks/UIKit.framework/UIKit"],
+            ),
+            analyze_only=True,
+        )
+        states = {c["component"]: c["status"] for c in result["capabilities"]}
+        # The import is linked but nothing in the reconstructed code reaches it.
+        self.assertEqual(states["UIKit/CoreGraphics"], "SUPPORTED")
+        self.assertEqual(states["Metal"], "SUPPORTED")
+        self.assertIn("no reachable API use", " ".join(c["detail"] for c in result["capabilities"]))
+        self.assertTrue(any("Reachable APIs" in blocker for blocker in result["blockers"]))
+
+    def test_icon_is_recovered_from_assets_car(self):
+        from .test_icons import catalog_bytes
+
+        source = ipa(
+            self.root / "input.ipa",
+            icon=False,
+            extra={"Payload/Fixture.app/Assets.car": catalog_bytes()},
+        )
+        result = Pipeline(self.root / "job").run(source, True, analyze_only=True)
+        self.assertEqual(result["icon"]["status"], "SUPPORTED")
+        self.assertEqual(result["icon"]["kind"], "assets.car")
+        self.assertEqual(result["icon"]["decoder"], "assetcatalog+pngcodec")
+        self.assertTrue((self.root / "job/icon.png").is_file())
+
     def test_authorization_required(self):
         result = Pipeline(self.root / "job").run(ipa(self.root / "input.ipa"), False)
         self.assertEqual(result["state"], "FAILED")

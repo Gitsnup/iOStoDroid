@@ -119,9 +119,11 @@ public final class Compat {
                 .setSampleRate(sampleRate)
                 .setChannelMask(channelConfig)
                 .build();
+        // The (AudioAttributes, AudioFormat, bufferSizeInBytes, mode, sessionId)
+        // constructor is the current one; the older positional overload is deprecated.
         AudioTrack track = new AudioTrack(attributes, format,
                 Math.max(minBuffer, samples.length * 2), AudioTrack.MODE_STATIC,
-                AudioManager.AUDIO_SESSION_ID_GENERATE, 0);
+                AudioManager.AUDIO_SESSION_ID_GENERATE);
         try {
             int written = track.write(samples, 0, samples.length);
             if (written < 0) {

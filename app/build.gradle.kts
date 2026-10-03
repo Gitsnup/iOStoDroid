@@ -42,7 +42,10 @@ tasks.register("bundleRuntimeDex") {
     // The classes directory does not exist until javac has run, so it is declared
     // as an optional file collection (Gradle rejects a missing inputs.dir).
     inputs.files(fileTree(classesDir) { include("dev/radek/generated/**") }).optional(true)
-    outputs.dir(assetsDir)
+    // Deliberately no outputs.dir: the generated directory is a *source* of the
+    // main asset set, and declaring a producer would make every asset/lint task
+    // demand an implicit dependency on this one. Ordering is wired explicitly
+    // below for the merge tasks that actually build the APK.
     doLast {
         val output = assetsDir.get().asFile
         try {

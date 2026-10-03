@@ -24,9 +24,10 @@ import java.util.zip.ZipFile
 @Config(sdk = [28], manifest = Config.NONE)
 class ConverterTest {
 
-    private fun u32(data: ByteArray, at: Int): Long =
-        (data[at].toInt() and 255L) or ((data[at + 1].toInt() and 255L) shl 8) or
-            ((data[at + 2].toInt() and 255L) shl 16) or ((data[at + 3].toInt() and 255L) shl 24)
+    private fun u32(data: ByteArray, at: Int): Long {
+        val bytes = (0 until 4).map { (data[at + it].toInt() and 255).toLong() }
+        return bytes[0] or (bytes[1] shl 8) or (bytes[2] shl 16) or (bytes[3] shl 24)
+    }
 
     private fun u16(data: ByteArray, at: Int): Int =
         (data[at].toInt() and 255) or ((data[at + 1].toInt() and 255) shl 8)

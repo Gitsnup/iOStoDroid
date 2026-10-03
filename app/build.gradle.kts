@@ -39,7 +39,9 @@ tasks.register("bundleRuntimeDex") {
     dependsOn("compileDebugJavaWithJavac")
     val assetsDir = layout.buildDirectory.dir("generated/runtimeAssets/assets")
     val classesDir = layout.buildDirectory.dir("intermediates/javac/debug/classes")
-    inputs.dir(classesDir)
+    // The classes directory does not exist until javac has run, so it is declared
+    // as an optional file collection (Gradle rejects a missing inputs.dir).
+    inputs.files(fileTree(classesDir) { include("dev/radek/generated/**") }).optional(true)
     outputs.dir(assetsDir)
     doLast {
         val output = assetsDir.get().asFile

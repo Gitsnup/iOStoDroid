@@ -135,14 +135,18 @@ object Converter {
             val failures = JSONArray()
             for (slice in candidates) {
                 val architecture = slice.optString("architecture")
-                val code = entryCode(image, slice) ?: run {
-                    failures.put(JSONObject().put("architecture", architecture).put("reason", "entry offset is not inside the image"))
+                val code = entryCode(image, slice)
+                if (code == null) {
+                    failures.put(
+                        JSONObject().put("architecture", architecture)
+                            .put("reason", "entry offset is not inside the image")
+                    )
                     continue
                 }
                 // Real Mach-O thumb entries are marked with N_ARM_THUMB_DEF (0x20);
                 // both interpretations are attempted and only a *proved* one is used.
                 val thumbHint = entryIsThumb(slice)
-                val attempts = if (thumbHint) listOf(true, false) else listOf(false, true)
+                val attempts: List<Boolean> = if (thumbHint) listOf(true, false) else listOf(false, true)
                 var lifted: Ir.Program? = null
                 var reason = "unproven"
                 for (thumb in attempts) {
@@ -300,8 +304,8 @@ object Converter {
      * `backend=neutral-runtime-entry` so nothing pretends this is the guest code.
      */
     private fun neutralEntry(): ByteArray = byteArrayOf(
-        0x40, 0x05, 0x80, 0x52,                             // movz w0, #42
-        0xC0, 0x03, 0x5F, 0xD6                              // ret
+        0x40, 0x05, 0x80.toByte(), 0x52,          // movz w0, #42
+        0xC0.toByte(), 0x03, 0x5F, 0xD6.toByte()  // ret
     )
 
     private fun entryIsThumb(slice: JSONObject): Boolean {

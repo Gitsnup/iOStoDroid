@@ -40,14 +40,14 @@ class ConverterTest {
 
     // ------------------------------------------------------------------- IR
     @Test fun preservesArm64LeafBytes() {
-        val code = byteArrayOf(0x00, 0x05, 0x80, 0x52, 0x00, 0x08, 0x00, 0x11, 0xC0, 0x03, 0x5F, 0xD6)
+        val code = byteArrayOf(0x00, 0x05, 0x80.toByte(), 0x52, 0x00, 0x08, 0x00, 0x11, 0xC0.toByte(), 0x03, 0x5F, 0xD6.toByte())
         val program = Ir.lift(code, "arm64", false)
         assertArrayEquals(code, program.machineCode)
         assertEquals(listOf(Ir.Op.CONST, Ir.Op.ADD, Ir.Op.RETURN), program.instructions.map { it.op })
     }
 
     @Test fun lowersArmv6ArmAndThumbLeaves() {
-        val arm = Ir.lift(byteArrayOf(0x2A, 0x00, 0xA0, 0xE3, 0x1E, 0xFF, 0x2F, 0xE1), "armv6", false)
+        val arm = Ir.lift(byteArrayOf(0x2A, 0x00, 0xA0.toByte(), 0xE3.toByte(), 0x1E, 0xFF.toByte(), 0x2F, 0xE1.toByte()), "armv6", false)
         assertEquals(listOf(0x52800540L, 0xD65F03C0L), words(arm.machineCode))
 
         val thumb = Ir.lift(byteArrayOf(0x2A, 0x20, 0x70, 0x47), "armv6", true)
@@ -55,7 +55,7 @@ class ConverterTest {
     }
 
     @Test fun lowersEveryArm32FlavourThisRepositoryNames() {
-        val code = byteArrayOf(0x2A, 0x00, 0xA0, 0xE3, 0x1E, 0xFF, 0x2F, 0xE1)
+        val code = byteArrayOf(0x2A, 0x00, 0xA0.toByte(), 0xE3.toByte(), 0x1E, 0xFF.toByte(), 0x2F, 0xE1.toByte())
         for (architecture in listOf("armv4t", "armv5tej", "armv6", "armv7", "armv7s", "armv8-32", "arm32-unknown")) {
             assertEquals(8, Ir.lift(code, architecture, false).machineCode.size)
         }
@@ -73,15 +73,15 @@ class ConverterTest {
         )
         for ((instruction, expected) in cases) {
             val bytes = ByteArrayOutputStream()
-            bytes.write(byteArrayOf(0x07, 0x10, 0xA0, 0xE3))     // MOV R1, #7
-            bytes.write(byteArrayOf(0x06, 0x20, 0xA0, 0xE3))     // MOV R2, #6
+            bytes.write(byteArrayOf(0x07, 0x10, 0xA0.toByte(), 0xE3.toByte()))     // MOV R1, #7
+            bytes.write(byteArrayOf(0x06, 0x20, 0xA0.toByte(), 0xE3.toByte()))     // MOV R2, #6
             bytes.write(byteArrayOf(
                 (instruction and 0xFF).toInt().toByte(),
                 ((instruction shr 8) and 0xFF).toInt().toByte(),
                 ((instruction shr 16) and 0xFF).toInt().toByte(),
                 ((instruction shr 24) and 0xFF).toInt().toByte()
             ))
-            bytes.write(byteArrayOf(0x1E, 0xFF, 0x2F, 0xE1))     // BX LR
+            bytes.write(byteArrayOf(0x1E, 0xFF.toByte(), 0x2F, 0xE1.toByte()))     // BX LR
             val program = Ir.lift(bytes.toByteArray(), "armv6", false)
             assertEquals("0x${instruction.toString(16)}", expected, words(program.machineCode)[2])
         }
@@ -98,17 +98,17 @@ class ConverterTest {
 
     @Test fun rejectsEverythingOutsideTheProvedSubset() {
         val arm = listOf(
-            byteArrayOf(0x00, 0x00, 0x51, 0xE3, 0x1E, 0xFF, 0x2F, 0xE1),        // CMP
-            byteArrayOf(0x04, 0xD0, 0x4D, 0xE2, 0x1E, 0xFF, 0x2F, 0xE1),        // SUB SP (stack)
-            byteArrayOf(0x00, 0x00, 0xA0, 0x11, 0x1E, 0xFF, 0x2F, 0xE1),        // conditional MOVNE
-            byteArrayOf(0x91, 0x00, 0x0D, 0xE0, 0x1E, 0xFF, 0x2F, 0xE1)         // MUL SP, R1, R0
+            byteArrayOf(0x00, 0x00, 0x51, 0xE3.toByte(), 0x1E, 0xFF.toByte(), 0x2F, 0xE1.toByte()),        // CMP
+            byteArrayOf(0x04, 0xD0.toByte(), 0x4D, 0xE2.toByte(), 0x1E, 0xFF.toByte(), 0x2F, 0xE1.toByte()),        // SUB SP (stack)
+            byteArrayOf(0x00, 0x00, 0xA0.toByte(), 0x11, 0x1E, 0xFF.toByte(), 0x2F, 0xE1.toByte()),        // conditional MOVNE
+            byteArrayOf(0x91.toByte(), 0x00, 0x0D, 0xE0.toByte(), 0x1E, 0xFF.toByte(), 0x2F, 0xE1.toByte())         // MUL SP, R1, R0
         )
         for (code in arm) {
             assertThrows(Ir.Unsupported::class.java) { Ir.lift(code, "armv6", false) }
         }
         val thumb = listOf(
             byteArrayOf(0x07, 0x20, 0x40, 0x41, 0x70, 0x47),                    // ADCS
-            byteArrayOf(0x07, 0x20, 0xC0, 0x40, 0x70, 0x47),                    // LSRS register
+            byteArrayOf(0x07, 0x20, 0xC0.toByte(), 0x40, 0x70, 0x47),                    // LSRS register
             byteArrayOf(0x07, 0x20, 0x00, 0x48, 0x70, 0x47)                     // LDR [PC] (memory)
         )
         for (code in thumb) {
@@ -116,11 +116,11 @@ class ConverterTest {
         }
         // An ARM64 leaf that never returns is not closed.
         assertThrows(Ir.Unsupported::class.java) {
-            Ir.lift(byteArrayOf(0x40, 0x05, 0x80, 0x52), "arm64", false)
+            Ir.lift(byteArrayOf(0x40, 0x05, 0x80.toByte(), 0x52), "arm64", false)
         }
         // ARM64e is analysed and reconstructed but has no conversion backend.
         assertThrows(Ir.Unsupported::class.java) {
-            Ir.lift(byteArrayOf(0x40, 0x05, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6), "arm64e", false)
+            Ir.lift(byteArrayOf(0x40, 0x05, 0x80.toByte(), 0x52, 0xC0.toByte(), 0x03, 0x5F, 0xD6.toByte()), "arm64e", false)
         }
     }
 
@@ -131,7 +131,7 @@ class ConverterTest {
 
     // ------------------------------------------------------------------ ELF
     @Test fun elfExportsExactlyTheJniEntry() {
-        val code = byteArrayOf(0x40, 0x05, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6)
+        val code = byteArrayOf(0x40, 0x05, 0x80.toByte(), 0x52, 0xC0.toByte(), 0x03, 0x5F, 0xD6.toByte())
         val buildId = MessageDigest.getInstance("SHA-1").digest(code)
         val image = Elf.build(code, buildId)
         val parsed = ElfExports.parse(image)
@@ -150,7 +150,7 @@ class ConverterTest {
         assertThrows(IllegalArgumentException::class.java) { Elf.build(ByteArray(0), ByteArray(20)) }
         assertThrows(IllegalArgumentException::class.java) { Elf.build(ByteArray(6), ByteArray(20)) }
         assertThrows(IllegalArgumentException::class.java) {
-            Elf.build(byteArrayOf(0, 0, 0x80, 0x52), ByteArray(19))
+            Elf.build(byteArrayOf(0, 0, 0x80.toByte(), 0x52), ByteArray(19))
         }
     }
 
@@ -218,9 +218,10 @@ class ConverterTest {
         val root = Files.createTempDirectory("radek-sign").toFile()
         try {
             val identity = ApkSign.identity(File(root, "keys"))
-            assertEquals(identity.certificate, ApkSign.identity(File(root, "keys")).certificate)
+            // The identity is persisted, so a second load returns the same key/certificate.
+            assertArrayEquals(identity.certificate, ApkSign.identity(File(root, "keys")).certificate)
 
-            val code = byteArrayOf(0x40, 0x05, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6)
+            val code = byteArrayOf(0x40, 0x05, 0x80.toByte(), 0x52, 0xC0.toByte(), 0x03, 0x5F, 0xD6.toByte())
             val library = Elf.build(code, MessageDigest.getInstance("SHA-1").digest(code))
             val report = JSONObject().put("outputBytes", code.size)
                 .put("machineCodeSha256", hex(sha256(code)))
@@ -510,7 +511,7 @@ class ConverterTest {
     }
 
     @Test fun neutralEntryReturnsFortyTwoWhenForced() {
-        val program = Ir.lift(byteArrayOf(0x40, 0x05, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6), "arm64", false)
+        val program = Ir.lift(byteArrayOf(0x40, 0x05, 0x80.toByte(), 0x52, 0xC0.toByte(), 0x03, 0x5F, 0xD6.toByte()), "arm64", false)
         assertEquals(2, program.instructions.size)
         assertEquals(Ir.Op.RETURN, program.instructions[1].op)
     }

@@ -220,7 +220,7 @@ object ApkSign {
     private fun entryBlock(name: String, digest: String): ByteArray =
         concat(wrap("Name: $name"), wrap("SHA-256-Digest: $digest"), byteArrayOf(0x0D, 0x0A))
 
-    fun manifestMf(entries: List<Pair<String, ByteArray>>): ByteArray {
+    fun manifestMf(entries: List<Pair<String, String>>): ByteArray {
         val out = ByteArrayOutputStream()
         out.write("Manifest-Version: 1.0\r\nBuilt-By: Generated-by-Radek\r\nCreated-By: 1.0 (Radek)\r\n\r\n"
             .toByteArray(Charsets.UTF_8))
@@ -323,7 +323,7 @@ object ApkSign {
         var end = -1
         for (i in data.size - 22 downTo 0) {
             if (data[i] == 0x50.toByte() && data[i + 1] == 0x4B.toByte() &&
-                data[i + 2] == 0x05 && data[i + 3] == 0x06
+                data[i + 2] == 0x05.toByte() && data[i + 3] == 0x06.toByte()
             ) {
                 end = i
                 break

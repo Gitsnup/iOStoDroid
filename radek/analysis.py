@@ -84,7 +84,9 @@ def dependency_graph(app: Path, main: Path, report: dict) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
-def prove_leaf(executable: Path, report: dict, graph: dict) -> tuple[dict, Program]:
+def prove_leaf(
+    executable: Path, report: dict, graph: dict, reconstruction: dict | None = None
+) -> tuple[dict, Program]:
     if any(s["encrypted"] for n in graph["nodes"] for s in n["analysis"]["slices"]):
         raise Unsupported(
             "encrypted/FairPlay Mach-O: conversion is prohibited; obtain an unprotected authorized build"
@@ -173,11 +175,162 @@ def prove_leaf(executable: Path, report: dict, graph: dict) -> tuple[dict, Progr
             return sl, program
         except Unsupported as exc:
             failures.append(sl["architecture"] + ": " + str(exc))
+    if reconstruction:
+        from .recon.report import blockers as recon_blockers
+
+        # Only reachable APIs are blockers; a linked-but-unused framework is not.
+        failures.extend(recon_blockers(reconstruction))
     raise Unsupported("; ".join(failures))
 
 
-def capabilities() -> list[dict]:
-    return [
+# Static components that describe a framework/runtime dependency. Their status is
+# decided by reconstructed API reachability, never by the mere fact of a link.
+FRAMEWORK_COMPONENTS = (
+    "Foundation/CoreFoundation",
+    "UIKit/CoreGraphics",
+    "EAGL/OpenGL ES",
+    "AudioToolbox/AVFoundation/OpenAL",
+    "Swift",
+    "Metal",
+    "Darwin C/C++ exceptions/TLS/pthreads",
+    "iOS lifecycle/input/sensors",
+)
+
+# Which static capability component each reconstructed API area belongs to.
+COMPONENT_OF_AREA = {
+    "graphics": "UIKit/CoreGraphics",
+    "ui": "UIKit/CoreGraphics",
+    "audio": "AudioToolbox/AVFoundation/OpenAL",
+    "audio/video": "AudioToolbox/AVFoundation/OpenAL",
+    "video": "AudioToolbox/AVFoundation/OpenAL",
+    "foundation": "Foundation/CoreFoundation",
+    "libc": "Foundation/CoreFoundation",
+    "objc": "Objective-C",
+    "language": "Swift",
+    "input": "iOS lifecycle/input/sensors",
+    "input/social": "iOS lifecycle/input/sensors",
+    "sensors": "iOS lifecycle/input/sensors",
+    "concurrency": "Darwin C/C++ exceptions/TLS/pthreads",
+}
+
+# Framework dependency that maps to each static component.
+COMPONENT_OF_FRAMEWORK = {
+    "Foundation": "Foundation/CoreFoundation",
+    "CoreFoundation": "Foundation/CoreFoundation",
+    "UIKit": "UIKit/CoreGraphics",
+    "CoreGraphics": "UIKit/CoreGraphics",
+    "QuartzCore": "UIKit/CoreGraphics",
+    "OpenGLES": "EAGL/OpenGL ES",
+    "EAGL": "EAGL/OpenGL ES",
+    "Metal": "Metal",
+    "AVFoundation": "AudioToolbox/AVFoundation/OpenAL",
+    "AudioToolbox": "AudioToolbox/AVFoundation/OpenAL",
+    "OpenAL": "AudioToolbox/AVFoundation/OpenAL",
+    "Swift": "Swift",
+    "libobjc": "Objective-C",
+    "GameKit": "iOS lifecycle/input/sensors",
+    "CoreMotion": "iOS lifecycle/input/sensors",
+}
+
+
+def _blank_entry() -> dict:
+    return {
+        "count": 0,
+        "native": 0,
+        "compatibility": 0,
+        "blocked": 0,
+        "symbols": [],
+        "frameworks": [],
+        "linked": {},
+        "metadata": [],
+    }
+
+
+def _reconstructed_usage(reconstruction: dict) -> dict[str, dict]:
+    """Aggregate reachable API usage per static capability component."""
+    usage: dict[str, dict] = {}
+    for image in reconstruction.get("images", []) or []:
+        for slice_data in image.get("slices", []) or []:
+            apis = slice_data.get("apis") or {}
+            runtime = slice_data.get("objectiveC") or {}
+            if runtime.get("classCount") or runtime.get("messageSelectorCount"):
+                entry = usage.setdefault("Objective-C", _blank_entry())
+                entry["metadata"].append(
+                    f"{runtime.get('classCount', 0)} class(es), "
+                    f"{runtime.get('selectorCount', 0)} selector(s), "
+                    f"{runtime.get('messageSelectorCount', 0)} message send(s)"
+                )
+            swift_runtime = slice_data.get("swift") or {}
+            if swift_runtime.get("typeCount") or swift_runtime.get("symbolCount"):
+                entry = usage.setdefault("Swift", _blank_entry())
+                entry["metadata"].append(
+                    f"{swift_runtime.get('typeCount', 0)} type(s), {swift_runtime.get('symbolCount', 0)} symbol(s)"
+                )
+            for item in apis.get("used", []) or []:
+                component = COMPONENT_OF_AREA.get(item.get("area")) or COMPONENT_OF_FRAMEWORK.get(
+                    item.get("framework")
+                )
+                if component is None:
+                    continue
+                entry = usage.setdefault(component, _blank_entry())
+                entry["count"] += 1
+                feasibility = item.get("feasibility", "compatibility")
+                entry[feasibility if feasibility in entry else "compatibility"] += 1
+                if len(entry["symbols"]) < 8:
+                    entry["symbols"].append(item.get("name"))
+                framework = item.get("framework")
+                if framework and framework not in entry["frameworks"]:
+                    entry["frameworks"].append(framework)
+            for name, entry in (apis.get("linkedFrameworks") or {}).items():
+                component = COMPONENT_OF_FRAMEWORK.get(name)
+                if component is None:
+                    continue
+                usage.setdefault(component, _blank_entry())["linked"][name] = entry
+    return usage
+
+
+def _usage_detail(component: str, usage: dict) -> dict | None:
+    entry = usage.get(component)
+    if entry is None:
+        return None
+    linked = entry.get("linked") or {}
+    if not entry["count"]:
+        names = ", ".join(sorted(linked)[:4])
+        if entry["metadata"]:
+            return {
+                "component": component,
+                "status": "BLOCKED",
+                "detail": (
+                    "metadata present ("
+                    + "; ".join(entry["metadata"][:2])
+                    + "); the runtime ABI is not implemented"
+                ),
+            }
+        return {
+            "component": component,
+            "status": "SUPPORTED",
+            "detail": (
+                f"linked ({names or 'no framework'}) but no reachable API use was found in the "
+                "reconstructed code; nothing to emulate for this import"
+            ),
+        }
+    parts = [
+        f"{entry['count']} reachable API(s): {entry['native']} natively implementable, "
+        f"{entry['compatibility']} needing a compatibility layer, {entry['blocked']} unsupported"
+    ]
+    if entry["symbols"]:
+        parts.append("e.g. " + ", ".join(entry["symbols"][:4]))
+    if entry["frameworks"]:
+        parts.append("frameworks: " + ", ".join(entry["frameworks"][:4]))
+    status = "BLOCKED" if entry["blocked"] else "PARTIAL"
+    return {"component": component, "status": status, "detail": "; ".join(parts)}
+
+
+def capabilities(reconstruction: dict | None = None) -> list[dict]:
+    """Capability matrix. When a reconstruction is supplied, linked-but-unused
+    dependencies are no longer reported as blockers: only reachable APIs decide."""
+    usage = _reconstructed_usage(reconstruction) if reconstruction else {}
+    entries = [
         {
             "component": "ARM64 closed integer leaf code",
             "status": "PARTIAL",
@@ -199,21 +352,15 @@ def capabilities() -> list[dict]:
                 "status": "BLOCKED",
                 "detail": "no verified conversion provider; dependency blocks conversion",
             }
-            for name in (
-                "Foundation/CoreFoundation",
-                "UIKit/CoreGraphics",
-                "EAGL/OpenGL ES",
-                "AudioToolbox/AVFoundation/OpenAL",
-                "Swift",
-                "Metal",
-                "Darwin C/C++ exceptions/TLS/pthreads",
-                "iOS lifecycle/input/sensors",
-            )
+            for name in FRAMEWORK_COMPONENTS
         ],
         {
             "component": "resources",
             "status": "PARTIAL",
-            "detail": "bundle paths retained, normal PNG and RGBA8 CgBI icons normalized; asset catalogs and shader translation unsupported",
+            "detail": (
+                "bundle paths retained; PNG (including Apple CgBI) and compiled Assets.car icons are "
+                "decoded; shader/asset translation unsupported"
+            ),
         },
         {
             "component": "APK packaging",
@@ -221,3 +368,25 @@ def capabilities() -> list[dict]:
             "detail": "host SDK/NDK: ARM64 JNI ELF, aapt2, D8, zipalign, apksigner; no on-device compiler",
         },
     ]
+    if not usage:
+        return entries
+    known = set(COMPONENT_OF_AREA.values()) | set(COMPONENT_OF_FRAMEWORK.values())
+    for index, entry in enumerate(entries):
+        if entry["component"] not in known and entry["component"] not in FRAMEWORK_COMPONENTS:
+            continue
+        detail = _usage_detail(entry["component"], usage)
+        if detail:
+            entries[index] = {**entry, "status": detail["status"], "detail": detail["detail"]}
+        elif entry["component"] in FRAMEWORK_COMPONENTS:
+            entries[index] = {
+                **entry,
+                "status": "SUPPORTED",
+                "detail": "not linked by this binary; no reachable API use was reconstructed",
+            }
+    for component in sorted(usage):
+        if component in known:
+            continue
+        detail = _usage_detail(component, usage)
+        if detail:
+            entries.append({**detail, "component": f"{component} (reconstructed usage)"})
+    return entries

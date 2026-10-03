@@ -4,10 +4,13 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
-from .archive import extract_ipa, discover_app, read_plist, metadata, icon_candidates
+from .archive import extract_ipa, discover_app, read_plist, metadata
 from .analysis import analyze, dependency_graph, prove_leaf, capabilities
+from .icons import extract as extract_icon, launcher as launcher_icon
 from .ir import Unsupported
-from .resources import normalize_png, copy_resources
+from .recon import reconstruct
+from .recon.report import blockers as recon_blockers, markdown as recon_markdown, summary as recon_summary
+from .resources import copy_resources
 from .apk import ARTIFACT, Toolchain, build_apk, validate_apk
 
 STATES = {
@@ -79,24 +82,16 @@ class Pipeline:
                 app = discover_app(work / "extracted")
                 info = read_plist(app / "Info.plist")
                 self.report["application"] = metadata(info, ipa)
-                icon = None
-                for candidate in icon_candidates(info, app):
-                    try:
-                        icon = normalize_png(candidate.read_bytes())
-                        (self.output / "icon.png").write_bytes(icon)
-                        self.report["icon"] = {
-                            "status": "SUPPORTED",
-                            "source": candidate.relative_to(app).as_posix(),
-                            "path": "icon.png",
-                        }
-                        break
-                    except ValueError as exc:
-                        self.log("icon", f"{candidate.name}: {exc}")
-                if icon is None:
-                    self.report["icon"] = {
-                        "status": "PARTIAL",
-                        "reason": "No decodable loose PNG icon; Assets.car decoding is not implemented",
-                    }
+                icon_result = extract_icon(app, info, log=self.log)
+                icon_report = icon_result.report()
+                icon = launcher_icon(icon_result)
+                if icon:
+                    (self.output / "icon.png").write_bytes(icon)
+                    icon_report["path"] = "icon.png"
+                elif icon_result.image:
+                    (self.output / "icon.png").write_bytes(icon_result.image)
+                    icon_report["path"] = "icon.png"
+                self.report["icon"] = icon_report
                 executable = app / info["CFBundleExecutable"]
                 mach = analyze(executable)
                 graph = dependency_graph(app, executable, mach)
@@ -106,10 +101,42 @@ class Pipeline:
                     "ANALYZING",
                     f'Analyzed {len(mach["slices"])} architecture slice(s), {len(graph["nodes"])} Mach-O image(s), {len(graph["edges"])} dependency edge(s)',
                 )
+                # Offline reconstruction: disassembly, CFG, IR, ObjC/Swift metadata and
+                # reachable-API attribution. Nothing here executes the imported code.
+                reconstruction = reconstruct(
+                    app, {node["path"]: node["analysis"] for node in graph["nodes"]}, log=self.log
+                )
+                self.report["reconstruction"] = reconstruction
+                self.report["reconstructionSummary"] = recon_summary(reconstruction)
+                self.report["capabilities"] = capabilities(reconstruction)
+                (self.output / "reconstruction.json").write_text(
+                    json.dumps(reconstruction, indent=2, ensure_ascii=True)
+                )
+                (self.output / "reconstruction.md").write_text(
+                    recon_markdown(reconstruction, self.report["application"])
+                )
+                self.save()
+                self.log(
+                    "ANALYZING",
+                    f'Reconstructed {reconstruction["imageCount"]} image(s): '
+                    + ", ".join(
+                        f'{key}={value}'
+                        for key, value in self.report["reconstructionSummary"].items()
+                        if key in ("functionCount", "objectiveCClasses", "swiftTypes", "usedApis")
+                    ),
+                )
                 try:
-                    selected, program = prove_leaf(executable, mach, graph)
+                    selected, program = prove_leaf(executable, mach, graph, reconstruction)
                 except Unsupported as exc:
-                    self.report["blockers"] = [str(exc)]
+                    self.report["blockers"] = [line for line in str(exc).split("; ") if line]
+                    summary = self.report.get("reconstructionSummary") or {}
+                    if summary:
+                        self.report["blockers"].append(
+                            "Reachable APIs in reconstructed code: "
+                            f'{summary.get("usedApis", 0)} used, {summary.get("nativeApis", 0)} natively '
+                            f'implementable, {summary.get("blockedApis", 0)} without any Android mapping '
+                            f'(see reconstruction.md)'
+                        )
                     self.transition("BLOCKED", str(exc))
                     return self.report
                 self.report["selectedArchitecture"] = selected["architecture"]

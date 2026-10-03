@@ -72,14 +72,16 @@ class IconDecoderTest {
     }
 
     @Test fun declaredBrokenIconFallsBackToAnotherBundleImage() {
-        val root = createTempDir(prefix = "radek-icon-test")
+        val root = java.nio.file.Files.createTempDirectory("radek-icon-test").toFile()
         try {
             val app = File(root, "Fixture.app").apply { mkdirs() }
             File(app, "DeclaredIcon.png").writeBytes(byteArrayOf(1, 2, 3, 4))
             File(app, "GameLogo.png").writeBytes(platformPng(Color.MAGENTA))
             val output = File(root, "result").apply { mkdirs() }
 
-            val result = extractIcon(app, listOf("DeclaredIcon"), output)
+            // The bundle icon pipeline: declared names first, then ranked loose
+            // images, then Assets.car payloads, then a generated icon.
+            val result = Icons.recover(app, listOf("DeclaredIcon"), output, "Fixture", org.json.JSONArray())
 
             assertEquals("SUPPORTED", result.getString("status"))
             assertTrue("unexpected icon source: ${result.getString("source")}", result.getString("source").endsWith("GameLogo.png"))

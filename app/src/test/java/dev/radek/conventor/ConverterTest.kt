@@ -13,7 +13,6 @@ import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.zip.CRC32
 import java.util.zip.Deflater
-import java.util.zip.Deflater.Level
 import java.util.zip.ZipFile
 
 /**
@@ -455,7 +454,7 @@ class ConverterTest {
 
     /** CgBI IDAT streams are raw DEFLATE; standard PNGs use zlib. */
     private fun rawDeflate(data: ByteArray): ByteArray {
-        val deflater = Deflater(Level.BEST_COMPRESSION, true)
+        val deflater = Deflater(9, true)
         try {
             deflater.setInput(data)
             deflater.finish()

@@ -53,7 +53,12 @@ object Icons {
         if (data.isEmpty() || data.size > MAX_IMAGE_BYTES) return null
         val options = BitmapFactory.Options()
         options.inSampleSize = maxOf(1, sample)
-        BitmapFactory.decodeByteArray(data, 0, data.size, options)?.let { return it }
+        try {
+            BitmapFactory.decodeByteArray(data, 0, data.size, options)?.let { return it }
+        } catch (_: Exception) {
+            // Robolectric's BitmapFactory throws where the platform returns null;
+            // either way this candidate simply did not decode.
+        }
         return try {
             IconDecoder.decodeCgbi(data, TARGET)
         } catch (_: Exception) {
@@ -240,7 +245,12 @@ object Icons {
             }
             val bounds = BitmapFactory.Options()
             bounds.inJustDecodeBounds = true
-            BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+            try {
+                BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+            } catch (_: Exception) {
+                // Not a bitmap the platform decoder understands; the CgBI decoder
+                // below and the caller's fallback chain still get their turn.
+            }
             if (bounds.outWidth in 1..8192 && bounds.outHeight in 1..8192 || isCgbi(data)) {
                 val sample = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / TARGET)
                 val bitmap = decode(data, sample)

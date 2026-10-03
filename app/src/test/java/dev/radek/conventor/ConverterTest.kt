@@ -409,21 +409,47 @@ class ConverterTest {
         assertEquals(32, android.graphics.Color.blue(pixel))
         bitmap.recycle()
         // A standard PNG is decoded by BitmapFactory and is not reported as CgBI.
-        val standard = png(1, 1, scanlines, cgbi = false)
-        assertFalse(Icons.isCgbi(standard))
-        assertNotNull(Icons.decode(standard))
+        assertFalse(Icons.isCgbi(png(1, 1, scanlines, cgbi = false)))
+        // Corrupt payloads are rejected instead of throwing into the caller.
         assertNull(Icons.decode(byteArrayOf(1, 2, 3)))
+        assertNull(Icons.decode(ByteArray(0)))
+        assertFalse(Icons.isCgbi(byteArrayOf(1, 2, 3)))
     }
 
-    @Test fun generatedIconsAreVisibleAndDeterministic() {
-        val first = Icons.generate("My Game")
-        val second = Icons.generate("My Game")
-        assertTrue(Icons.isOpaque(first))
-        assertEquals(first.getPixel(20, 20), second.getPixel(20, 20))
-        assertFalse(Icons.isOpaque(android.graphics.Bitmap.createBitmap(
-            16, 16, android.graphics.Bitmap.Config.ARGB_8888)))
+    @Test fun opaqueDetectionAndGeneration() {
+        val transparent = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888)
+        assertFalse(Icons.isOpaque(transparent))
+        transparent.recycle()
+        val visible = android.graphics.Bitmap.createBitmap(
+            IntArray(64) { android.graphics.Color.RED }, 8, 8, android.graphics.Bitmap.Config.ARGB_8888
+        )
+        assertTrue(Icons.isOpaque(visible))
+        visible.recycle()
+        // The generated fallback is deterministic and honours the requested size.
+        val first = Icons.generate("My Game", 64)
+        val second = Icons.generate("My Game", 64)
+        assertEquals(64, first.width)
+        assertEquals(64, first.height)
+        assertEquals(first.getPixel(32, 32), second.getPixel(32, 32))
         first.recycle()
         second.recycle()
+    }
+
+    @Test fun bundleWithoutAnyDecodableImageStillProducesAnIcon() {
+        val root = Files.createTempDirectory("radek-icon").toFile()
+        try {
+            val app = File(root, "Fixture.app").apply { mkdirs() }
+            File(app, "Icon.png").writeBytes(byteArrayOf(1, 2, 3, 4))     // declared but corrupt
+            val output = File(root, "result").apply { mkdirs() }
+            val result = Icons.recover(app, listOf("Icon"), output, "My Game", JSONArray())
+            assertEquals("GENERATED", result.getString("status"))
+            assertTrue(result.getString("reason").isNotEmpty())
+            assertTrue(result.getJSONArray("attempts").length() >= 1)
+            assertTrue(File(output, "icon.png").isFile)
+            assertNotNull(android.graphics.BitmapFactory.decodeFile(File(output, "icon.png").path))
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test fun extractsPngPayloadsFromACompiledAssetCatalog() {

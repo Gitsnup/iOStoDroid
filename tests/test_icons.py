@@ -1,13 +1,15 @@
 """Icon recovery tests: explicit plist icons, variants, catalogs and fallbacks."""
 
+import plistlib
 import struct
 import tempfile
 import unittest
-import zlib
+import zipfile
 from pathlib import Path
 
 from radek import icons
-from radek.pngcodec import Image, decode, encode, png_chunk
+from radek.archive import discover_app, extract_ipa, read_plist
+from radek.pngcodec import Image, decode, encode
 
 from .carbuild import Builder, car_header, csi, facet, key, key_format
 from .test_pngcodec import build as png_build
@@ -237,6 +239,106 @@ class IconTests(unittest.TestCase):
         self.assertEqual(result.status, "SUPPORTED")
         self.assertEqual(result.source, "Icon.png")
         self.assertTrue(any(not a.ok and a.kind == "assets.car" for a in result.attempts))
+
+
+BASE_PLIST = {
+    "CFBundleExecutable": "Fixture",
+    "CFBundleIdentifier": "org.example.fixture",
+    "CFBundleName": "Fixture",
+    "CFBundleDisplayName": "Fixture",
+    "CFBundleVersion": "1",
+    "CFBundleShortVersionString": "1.0",
+}
+
+
+def build_ipa(path: Path, files: dict[str, bytes], info: dict | None = None) -> Path:
+    """Write a real IPA (zipped Payload/*.app) for end-to-end icon recovery."""
+    merged = {**BASE_PLIST, **(info or {})}
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("Payload/Fixture.app/Info.plist", plistlib.dumps(merged))
+        archive.writestr("Payload/Fixture.app/Fixture", b"\xcf\xfa\xed\xfe" + bytes(64))
+        for name, data in files.items():
+            archive.writestr(f"Payload/Fixture.app/{name}", data)
+    return path
+
+
+class IpaFixtureIconTests(unittest.TestCase):
+    """Icon recovery through the real IPA import path (unzip -> .app -> plist)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def recover(self, files: dict[str, bytes], info: dict | None = None):
+        source = build_ipa(self.root / "input.ipa", files, info)
+        work = self.root / "extracted"
+        extract_ipa(source, work)
+        app = discover_app(work)
+        return icons.extract(app, read_plist(app / "Info.plist"))
+
+    def test_ordinary_png_icon(self):
+        result = self.recover({"Icon.png": png(57, 57)}, {"CFBundleIconFile": "Icon.png"})
+        self.assertEqual(result.status, "SUPPORTED")
+        self.assertEqual(result.source, "Icon.png")
+        self.assertEqual((result.width, result.height), (57, 57))
+
+    def test_retina_variants(self):
+        result = self.recover(
+            {"AppIcon.png": png(60, 60), "AppIcon@2x.png": png(120, 120), "AppIcon@3x.png": png(180, 180)},
+            {"CFBundleIconFiles": ["AppIcon"]},
+        )
+        self.assertEqual(result.source, "AppIcon@3x.png")
+        self.assertEqual(result.scale, 3.0)
+
+    def test_cfbundleicons_and_cfbundleiconfiles(self):
+        info = {
+            "CFBundleIcons": {"CFBundlePrimaryIcon": {"CFBundleIconFiles": ["Primary"], "CFBundleIconName": "Catalog"}},
+            "CFBundleIcons~ipad": {"CFBundlePrimaryIcon": {"CFBundleIconFiles": ["Primary-iPad"]}},
+            "CFBundleIconFiles": ["Legacy"],
+        }
+        result = self.recover({"Primary@2x.png": png(120, 120)}, info)
+        self.assertEqual(result.source, "Primary@2x.png")
+        self.assertEqual(icons.catalog_icon_name(info), "Catalog")
+
+    def test_device_variants(self):
+        result = self.recover(
+            {"AppIcon~ipad.png": png(76, 76, value=40), "AppIcon~iphone.png": png(60, 60, value=90)},
+            {"CFBundleIconFiles": ["AppIcon"]},
+        )
+        self.assertEqual(result.status, "SUPPORTED")
+        self.assertIn(result.source, {"AppIcon~ipad.png", "AppIcon~iphone.png"})
+
+    def test_assets_car_icon(self):
+        result = self.recover(
+            {"Assets.car": catalog_bytes()},
+            {"CFBundleIcons": {"CFBundlePrimaryIcon": {"CFBundleIconName": "AppIcon"}}},
+        )
+        self.assertEqual(result.status, "SUPPORTED")
+        self.assertEqual(result.kind, "assets.car")
+        self.assertEqual(decode(result.image).width, 180)
+
+    def test_malformed_candidate_with_valid_fallback(self):
+        result = self.recover(
+            {"Icon@3x.png": png(180, 180)[:80], "Icon@2x.png": png(120, 120), "Icon.png": b"garbage"},
+            {"CFBundleIconFile": "Icon"},
+        )
+        self.assertEqual(result.status, "SUPPORTED")
+        self.assertEqual(result.source, "Icon@2x.png")
+        self.assertTrue(any(not a.ok for a in result.attempts))
+
+    def test_missing_icon_is_unavailable(self):
+        result = self.recover({"config.json": b"{}"}, {"CFBundleIconFile": "Missing"})
+        self.assertEqual(result.status, "UNAVAILABLE")
+        self.assertIsNone(result.image)
+        self.assertIn("No decodable icon", result.reason)
+
+    def test_launcher_icon_is_written_for_packaging(self):
+        result = self.recover({"Icon.png": png(64, 64, alpha=0)}, {"CFBundleIconFile": "Icon.png"})
+        launcher = icons.launcher(result)
+        image = decode(launcher)
+        self.assertEqual((image.width, image.height), (512, 512))
+        self.assertEqual(image.pixels[3], 0)
 
 
 if __name__ == "__main__":

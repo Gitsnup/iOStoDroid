@@ -17,6 +17,17 @@ from .objc import ObjCRuntime
 
 WIDTHS = {8: "uint64_t", 4: "uint32_t", 2: "uint16_t", 1: "uint8_t"}
 
+REPORT_LISTING_LINES = 120
+
+
+def _trim(listing: list[str]) -> list[str]:
+    """Keep the machine-readable report small; the markdown report shows more."""
+    if len(listing) <= REPORT_LISTING_LINES:
+        return list(listing)
+    return list(listing[:REPORT_LISTING_LINES]) + [
+        f"/* … {len(listing) - REPORT_LISTING_LINES} further reconstructed statements */"
+    ]
+
 
 @dataclass
 class ReconstructedFunction:
@@ -46,7 +57,7 @@ class ReconstructedFunction:
             "selectors": self.selectors[:32],
             "strings": self.strings[:16],
             "confidence": self.confidence,
-            "listing": self.listing[:400],
+            "listing": _trim(self.listing),
         }
 
 

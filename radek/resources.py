@@ -101,6 +101,12 @@ def fallback_icon() -> bytes:
     )
 
 
+# Only icon-like images are normalized: decoding every PNG in a bundle is pure
+# Python work that dominates the conversion time for large asset-heavy apps.
+ICON_HINTS = ("icon", "artwork", "logo")
+MAX_NORMALIZE_BYTES = 4 * 1024 * 1024
+
+
 def copy_resources(app: Path, target: Path, executable: str) -> list[dict]:
     """Preserve relative resource names; never ship Apple binaries or signatures."""
     target.mkdir(parents=True, exist_ok=True)
@@ -115,25 +121,49 @@ def copy_resources(app: Path, target: Path, executable: str) -> list[dict]:
             or source.name == "embedded.mobileprovision"
         ):
             continue
-        with source.open("rb") as f:
-            if f.read(4) in MACH_MAGICS:
-                continue
+        try:
+            size = source.stat().st_size
+            with source.open("rb") as f:
+                if f.read(4) in MACH_MAGICS:
+                    continue
+        except OSError:
+            continue
         dest = target / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         transformed = False
-        if source.suffix.lower() == ".png":
+        icon_like = source.suffix.lower() == ".png" and any(
+            hint in source.name.lower() for hint in ICON_HINTS
+        )
+        if icon_like and size <= MAX_NORMALIZE_BYTES:
             data = source.read_bytes()
-            normalized = normalize_png(data)
+            try:
+                normalized = normalize_png(data)
+            except InputError:
+                normalized = data
             dest.write_bytes(normalized)
             transformed = data != normalized
+            digest = hashlib.sha256(normalized).hexdigest()
         else:
-            shutil.copyfile(source, dest)
+            digest = _copy_and_hash(source, dest)
         inventory.append(
             {
                 "path": rel.as_posix(),
-                "bytes": dest.stat().st_size,
-                "sha256": hashlib.sha256(dest.read_bytes()).hexdigest(),
+                "bytes": dest.stat().st_size if dest.exists() else size,
+                "sha256": digest,
                 "normalized": transformed,
             }
         )
     return inventory
+
+
+def _copy_and_hash(source: Path, dest: Path) -> str:
+    """Copy a file and hash it in a single pass (no second read)."""
+    digest = hashlib.sha256()
+    with source.open("rb") as reader, dest.open("wb") as writer:
+        while True:
+            chunk = reader.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            writer.write(chunk)
+    return digest.hexdigest()

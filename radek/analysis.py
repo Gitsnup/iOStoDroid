@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from .archive import InputError
 from .resources import MACH_MAGICS
@@ -34,14 +35,28 @@ def analyze(path: Path) -> dict:
 
 
 def dependency_graph(app: Path, main: Path, report: dict) -> dict:
+    """Analyze the executable plus every embedded Mach-O image in the bundle.
+
+    Embedded images are analyzed concurrently: each one is a separate native
+    analyzer process, so a bundle with many frameworks no longer pays the
+    process latency serially.
+    """
     nodes = [{"path": main.relative_to(app).as_posix(), "analysis": report}]
+    embedded: list[Path] = []
     for path in sorted(app.rglob("*")):
         if not path.is_file() or path == main:
             continue
         with path.open("rb") as f:
             magic = f.read(4)
         if magic in MACH_MAGICS:
-            nodes.append({"path": path.relative_to(app).as_posix(), "analysis": analyze(path)})
+            embedded.append(path)
+    if len(embedded) > 1:
+        with ThreadPoolExecutor(max_workers=min(8, len(embedded))) as pool:
+            analyses = list(pool.map(analyze, embedded))
+    else:
+        analyses = [analyze(path) for path in embedded]
+    for path, analysis in zip(embedded, analyses):
+        nodes.append({"path": path.relative_to(app).as_posix(), "analysis": analysis})
     edges = []
     by_path = {n["path"] for n in nodes}
     for node in nodes:

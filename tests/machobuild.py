@@ -147,10 +147,13 @@ class Builder:
     TEXT_FILE = 0x0
     DATA_FILE = 0x4000
 
-    def __init__(self):
+    def __init__(self, text_size: int = 0x4000, data_size: int = 0x2000):
+        self.text_size = text_size
+        self.data_size = data_size
+        self.file_size = max(self.TEXT_FILE + text_size, self.DATA_FILE + data_size) + 0x2000
         self.segments = {
-            "__TEXT": {"vm": self.TEXT_BASE, "file": self.TEXT_FILE, "size": 0x4000, "prot": 5},
-            "__DATA": {"vm": self.DATA_BASE, "file": self.DATA_FILE, "size": 0x2000, "prot": 3},
+            "__TEXT": {"vm": self.TEXT_BASE, "file": self.TEXT_FILE, "size": text_size, "prot": 5},
+            "__DATA": {"vm": self.DATA_BASE, "file": self.DATA_FILE, "size": data_size, "prot": 3},
         }
         self.sections = []
         self.symbols = []
@@ -219,16 +222,16 @@ class Builder:
             item.address = self._address(segment, item.offset)
             cursor[segment] += len(item.data)
         for item in self.sections:
-            limit = 0x4000 if item.segment == "__TEXT" else 0x6000
+            limit = self.text_size if item.segment == "__TEXT" else self.DATA_FILE + self.data_size
             assert item.offset + len(item.data) <= limit, f"{item.name} overflows {item.segment}"
 
-        file_size = 0x8000
+        file_size = self.file_size
         blob = bytearray(file_size)
         for item in self.sections:
             blob[item.offset : item.offset + len(item.data)] = item.data
 
         # symbol table after the segments
-        symoff = 0x6000
+        symoff = max(self.TEXT_FILE + self.text_size, self.DATA_FILE + self.data_size)
         strings = bytearray(b"\x00")
         table = bytearray()
         for item in self.symbols:

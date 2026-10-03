@@ -80,27 +80,13 @@ class Library(private val context: Context) {
             for (key in listOf("CFBundleIcons", "CFBundleIcons~ipad")) {
                 val icons = plist[key] as? Map<*, *>
                 val primary = icons?.get("CFBundlePrimaryIcon") as? Map<*, *>
+                (primary?.get("CFBundleIconName") as? String)?.let { names.add(it) }
                 names.addAll((primary?.get("CFBundleIconFiles") as? List<*>)?.filterIsInstance<String>().orEmpty())
             }
             names.addAll((plist["CFBundleIconFiles"] as? List<*>)?.filterIsInstance<String>().orEmpty())
             (plist["CFBundleIconFile"] as? String)?.let { names.add(it) }
-            val candidates = names.flatMap { name ->
-                SafeZip.validateName(name)
-                listOf("", ".png", "@3x.png", "@2x.png", "~ipad.png", "@2x~ipad.png").map { File(app, name + it) }
-            }.filter { it.isFile }.ifEmpty { app.listFiles().orEmpty().filter { it.name.contains("Icon") && it.extension == "png" } }.sortedByDescending { it.length() }
-            var iconFound = false
-            for (icon in candidates) {
-                if (icon.length() > 16 * 1024 * 1024) continue
-                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeFile(icon.path, options)
-                if (options.outWidth !in 1..4096 || options.outHeight !in 1..4096) continue
-                val decodeOptions = BitmapFactory.Options().apply { inSampleSize = maxOf(1, maxOf(options.outWidth, options.outHeight) / 512) }
-                val bitmap = BitmapFactory.decodeFile(icon.path, decodeOptions) ?: continue
-                File(dir, "icon.png").outputStream().use { require(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
-                bitmap.recycle(); iconFound = true; break
-            }
-            report.put("icon", JSONObject().put("status", if (iconFound) "SUPPORTED" else "PARTIAL")
-                .put("reason", if (iconFound) "Decoded bundle icon" else "No decodable loose icon. Host tool supports additional CgBI PNGs; Assets.car is unsupported."))
+            val iconReport = extractIcon(app, names, dir)
+            report.put("icon", iconReport)
             val binary = File(app, executable)
             require(binary.isFile && binary.length() <= 64 * 1024 * 1024) { "Missing executable or exceeds the on-device 64 MiB analysis limit; use the host analyzer for larger files" }
             log(ConversionState.ANALYZING, "Parsing Mach-O load commands, symbols, fixups and dependencies")
@@ -152,4 +138,89 @@ class Library(private val context: Context) {
         }
         return dir to report
     }
+}
+
+/** Icon suffixes, highest scale first: the best available representation wins. */
+private val ICON_SUFFIXES = listOf(
+    "@3x.png", "@2x.png", ".png", "@3x~ipad.png", "@2x~ipad.png", "~ipad.png",
+    "@3x~iphone.png", "@2x~iphone.png", "~iphone.png", "", "@3x.jpg", "@2x.jpg", ".jpg"
+)
+private const val ICON_MAX_BYTES = 16L * 1024 * 1024
+private const val ICON_TARGET = 512
+
+/**
+ * Resolve the best icon in a bundle and record every attempt.
+ * Order: Info.plist names -> scale/device variants -> icon-like bundle images ->
+ * any other image. Nothing is invented: when nothing decodes the status is
+ * UNAVAILABLE and the library shows that state.
+ */
+private fun extractIcon(app: File, names: List<String>, dir: File): JSONObject {
+    val attempts = JSONArray()
+    fun attempt(source: String, ok: Boolean, detail: String, width: Int = 0, height: Int = 0) {
+        attempts.put(JSONObject().put("source", source).put("ok", ok).put("detail", detail)
+            .put("width", width).put("height", height))
+    }
+    val declared = mutableListOf<File>()
+    for (name in names) {
+        SafeZip.validateName(name) // fail closed on traversal or absolute names
+        for (suffix in ICON_SUFFIXES) {
+            val file = File(app, name + suffix)
+            if (file.isFile && file !in declared) declared.add(file)
+        }
+    }
+    if (declared.isEmpty()) {
+        val images = app.walkTopDown().filter { it.isFile && it.extension.lowercase() in setOf("png", "jpg", "jpeg") }.toList()
+        val named = images.filter { f ->
+            val lower = f.name.lowercase()
+            "icon" in lower || "artwork" in lower || "logo" in lower
+        }.sortedByDescending { it.length() }
+        declared += named
+        if (declared.isEmpty()) declared += images.filter { it.length() in 1..(4L * 1024 * 1024) }.sortedByDescending { it.length() }
+    }
+    var best: Pair<File, android.graphics.Bitmap>? = null
+    var bestPixels = 0
+    var bestScale = 0
+    for (candidate in declared.take(12)) {
+        val relative = candidate.relativeTo(app).path
+        if (candidate.length() > ICON_MAX_BYTES) { attempt(relative, false, "image exceeds size limit"); continue }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(candidate.path, bounds)
+        if (bounds.outWidth !in 1..8192 || bounds.outHeight !in 1..8192) { attempt(relative, false, "unsupported image dimensions"); continue }
+        val sample = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / ICON_TARGET)
+        val bitmap = BitmapFactory.decodeFile(candidate.path, BitmapFactory.Options().apply { inSampleSize = sample })
+        if (bitmap == null) { attempt(relative, false, "BitmapFactory could not decode this image"); continue }
+        val pixels = bitmap.width * bitmap.height
+        val scale = when { "@3x" in candidate.name -> 3; "@2x" in candidate.name -> 2; else -> 1 }
+        attempt(relative, true, "decoded", bitmap.width, bitmap.height)
+        if (pixels > bestPixels || (pixels == bestPixels && scale > bestScale)) {
+            best?.second?.recycle()
+            best = candidate to bitmap
+            bestPixels = pixels
+            bestScale = scale
+        } else bitmap.recycle()
+    }
+    val chosen = best
+    if (chosen == null) {
+        return JSONObject().put("status", "UNAVAILABLE")
+            .put("reason", "Icon unavailable: no decodable icon image was found in this bundle")
+            .put("decoder", "android.graphics.BitmapFactory")
+            .put("attempts", attempts)
+    }
+    val (file, bitmap) = chosen
+    val width = bitmap.width
+    val height = bitmap.height
+    File(dir, "icon.png").outputStream().use { require(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+    val scale = when { "@3x" in file.name -> 3.0; "@2x" in file.name -> 2.0; else -> 1.0 }
+    val detail = "Decoded bundle icon (${file.relativeTo(app).path}, ${width}x${height})"
+    bitmap.recycle()
+    return JSONObject().put("status", "SUPPORTED")
+        .put("source", file.relativeTo(app).path)
+        .put("path", "icon.png")
+        .put("kind", "file")
+        .put("format", file.extension.lowercase())
+        .put("decoder", "android.graphics.BitmapFactory")
+        .put("width", width).put("height", height)
+        .put("scale", scale)
+        .put("reason", detail)
+        .put("attempts", attempts)
 }

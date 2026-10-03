@@ -3,6 +3,7 @@ import datetime
 import json
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from .archive import extract_ipa, discover_app, read_plist, metadata
 from .analysis import analyze, dependency_graph, prove_leaf, capabilities
@@ -39,11 +40,18 @@ class Pipeline:
         self.output = output.resolve()
         self.output.mkdir(parents=True, exist_ok=False, mode=0o700)
         self.report = {"schemaVersion": 1, "state": None, "events": [], "capabilities": capabilities()}
+        self._last_save = None
 
-    def save(self):
+    def save(self, force: bool = False):
+        # Progress can arrive faster than the report needs to be rewritten; every
+        # event is already durable in conversion.jsonl.
+        now = time.monotonic()
+        if not force and self._last_save is not None and now - self._last_save < 0.2:
+            return
         tmp = self.output / "report.json.tmp"
         tmp.write_text(json.dumps(self.report, indent=2, ensure_ascii=True))
         tmp.replace(self.output / "report.json")
+        self._last_save = now
 
     def log(self, stage: str, message: str):
         event = {
@@ -61,6 +69,7 @@ class Pipeline:
             raise RuntimeError(f'invalid transition {self.report["state"]} -> {state}')
         self.report["state"] = state
         self.log(state, message)
+        self.save(force=True)
 
     def run(self, ipa: Path, authorized: bool, analyze_only=False, key: Path | None = None):
         try:
@@ -106,7 +115,16 @@ class Pipeline:
                 reconstruction = reconstruct(
                     app, {node["path"]: node["analysis"] for node in graph["nodes"]}, log=self.log
                 )
-                self.report["reconstruction"] = reconstruction
+                # The full reconstruction can be megabytes; it lives in its own file
+                # so every progress event does not rewrite it into report.json.
+                self.report["reconstruction"] = {
+                    "schemaVersion": reconstruction["schemaVersion"],
+                    "status": reconstruction["status"],
+                    "imageCount": reconstruction["imageCount"],
+                    "summary": recon_summary(reconstruction),
+                    "jsonPath": "reconstruction.json",
+                    "markdownPath": "reconstruction.md",
+                }
                 self.report["reconstructionSummary"] = recon_summary(reconstruction)
                 self.report["capabilities"] = capabilities(reconstruction)
                 (self.output / "reconstruction.json").write_text(
@@ -192,5 +210,6 @@ class Pipeline:
             if self.report["state"] not in ("READY", "PARTIAL", "BLOCKED", "FAILED"):
                 self.transition("FAILED", str(exc))
             else:
-                self.save()
+                self.save(force=True)
+        self.save(force=True)
         return self.report

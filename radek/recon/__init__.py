@@ -21,7 +21,11 @@ from .image import load
 
 MAX_IMAGES = 8
 MAX_SLICES_PER_IMAGE = 4
-MAX_FUNCTIONS_IN_REPORT = 200
+MAX_FUNCTIONS_IN_REPORT = 150
+# Reconstruction is bounded work: the budget below is shared by every image so a
+# large IPA cannot turn analysis into an unbounded decode.
+DEFAULT_INSTRUCTION_BUDGET = 400000
+MIN_SLICE_BUDGET = 20000
 ARCH_PRIORITY = {"arm64": 0, "arm64e": 1, "armv7s": 2, "armv7": 3, "arm32-unknown": 4}
 
 
@@ -70,7 +74,7 @@ def _ordered_slices(info: dict) -> list[dict]:
     return ordered[:MAX_SLICES_PER_IMAGE]
 
 
-def reconstruct_slice(path: Path, slice_info: dict, max_instructions: int) -> SliceReconstruction:
+def reconstruct_slice(path: Path, slice_info: dict, budget: "Budget") -> SliceReconstruction:
     item = SliceReconstruction(architecture=slice_info.get("architecture", "?"))
     try:
         image = load(path, slice_info)
@@ -78,7 +82,7 @@ def reconstruct_slice(path: Path, slice_info: dict, max_instructions: int) -> Sl
         runtime = objc.recover(image)
         item.objective_c = runtime
         item.swift_runtime = swift.recover(image)
-        functions, stats = disassemble(image, budget=max_instructions)
+        functions, stats = disassemble(image, budget=budget.take())
         item.stats = stats
         item.functions = functions
         helper = source.Reconstructor(image, runtime)
@@ -92,11 +96,25 @@ def reconstruct_slice(path: Path, slice_info: dict, max_instructions: int) -> Sl
     return item
 
 
-def reconstruct_image(path: Path, info: dict, max_instructions: int = 400000) -> ImageReconstruction:
+def reconstruct_image(path: Path, info: dict, budget: "Budget") -> ImageReconstruction:
     result = ImageReconstruction(path=path.name)
     for slice_info in _ordered_slices(info):
-        result.slices.append(reconstruct_slice(path, slice_info, max_instructions))
+        result.slices.append(reconstruct_slice(path, slice_info, budget))
     return result
+
+
+class Budget:
+    """Instruction budget shared by every image so analysis stays bounded."""
+
+    def __init__(self, total: int, slices: int):
+        self.remaining = max(int(total), 0)
+        self.slices = max(int(slices), 1)
+
+    def take(self) -> int:
+        share = max(self.remaining // self.slices, MIN_SLICE_BUDGET)
+        self.slices = max(self.slices - 1, 1)
+        self.remaining = max(self.remaining - share, 0)
+        return share
 
 
 def reconstruct(
@@ -108,13 +126,16 @@ def reconstruct(
 ) -> dict:
     """Reconstruct every Mach-O image in the bundle that has analyzer output."""
     images: list[ImageReconstruction] = []
-    for relative, info in list(analyses.items())[:max_images]:
+    selected = list(analyses.items())[:max_images]
+    slices = sum(min(len(info.get("slices", [])), MAX_SLICES_PER_IMAGE) for _r, info in selected) or 1
+    budget = Budget(max_instructions, slices)
+    for relative, info in selected:
         path = app / relative
         if not path.is_file():
             continue
         if log:
             log("reconstruct", f"{relative}: {len(info.get('slices', []))} slice(s)")
-        images.append(reconstruct_image(path, info, max_instructions))
+        images.append(reconstruct_image(path, info, budget))
     return {
         "schemaVersion": 1,
         "imageCount": len(images),

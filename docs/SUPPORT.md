@@ -7,25 +7,43 @@ Statuses describe implemented behavior, not planned compatibility.
 | Android library/import/details | PARTIAL | Persistent metadata, real logs and bounded ZIP import; host-only compilation |
 | ZIP extraction | SUPPORTED | Traversal, symlinks/special files, collisions, encryption, limits, CRC; Android rejects ZIP64 explicitly |
 | Info.plist | SUPPORTED | XML and binary, required bundle fields, nested icon dictionaries; bounded parsing |
-| Icons | PARTIAL | Loose PNGs; host normalizes non-interlaced RGBA8 CgBI. Android standard decoder only. No Assets.car decoder |
+| Icons (host converter) | PARTIAL | Generic fallback chain: Info.plist names -> `@2x`/`@3x`/`~ipad`/`~iphone` variants -> compiled `Assets.car` renditions -> icon-like bundle images -> any remaining image. Decodes ordinary PNG (colour types, bit depths, interlace, palettes, `tRNS`) and Apple `CgBI`; records source, format, resolution, scale and every fallback attempt; emits a square transparent Android launcher icon. HEIF/HEIC renditions are reported as undecodable instead of faked |
+| Icons (on-device import) | PARTIAL | Same name/variant chain with the Android bitmap decoder; cannot decode `Assets.car`, which is reported honestly |
 | Mach-O thin/FAT/FAT64 | SUPPORTED | CPU/subtype, endian headers, bounded load command/section/symbol parsing |
 | Mach-O loader metadata | PARTIAL | Relocations, dynamic table fields, bind symbols/offsets/addends, export trie, chained import/page-start records, dependencies, LC_MAIN, signature blob metadata. No signature trust validation or chained pointer graph rewriting |
-| ObjC/Swift/unwind/init metadata | PARTIAL | Section identification/ranges only, not full Apple metadata graph reconstruction |
+| ObjC/Swift/unwind/init metadata | PARTIAL | Host reconstruction recovers ObjC classes/categories/protocols, ivars, properties, selectors (big and relative-small method lists), message-send selectors, class/super references and Swift type/field descriptors plus demangling. Section identification on device |
 | ARM64 reconstruction | PARTIAL | Verified closed integer leaf subset; original safe instruction bytes retained in Android ELF |
 | ARM64e | BLOCKED | PAC/ABI adaptation not proven |
 | ARMv7/v7s/Thumb/Thumb-2 | PARTIAL | Explicit decoder → single basic-block IR → ARM64 emitter; limited immediate arithmetic and return |
+| Offline source reconstruction | PARTIAL | Function discovery, basic-block CFGs, ARM64/ARMv7/Thumb disassembly, register/constant/reference tracking and pseudocode listings with explicit `?` markers for anything unproven. Engineering artifact only, never presented as original source; reconstructed code is never executed |
 | Branching CFG / loads / calls / atomics | BLOCKED | IR vocabulary exists; no verified general lowering; rejected rather than stubbed |
 | Objective-C binary ABI | BLOCKED | Portable host runtime is experimental, not an Apple runtime provider |
-| Foundation/CoreFoundation / UIKit / CoreGraphics | BLOCKED | No converted-app API providers |
+| Framework dependency classification | SUPPORTED | Reachability analysis: linked-but-unreferenced frameworks are no longer reported as blockers; the report splits reachable APIs into natively implementable, compatibility-required and genuinely unsupported, with the reconstructed functions that call them |
+| Foundation/CoreFoundation / UIKit / CoreGraphics | BLOCKED | No converted-app API providers; only reachable APIs are listed as blockers |
 | Darwin C/C++ ABI / exceptions / TLS | BLOCKED | Host tests verify portable C++ mechanics only, not Darwin-to-Bionic adaptation |
 | Swift | BLOCKED | Metadata/dependencies are detected, not silently dropped |
 | EAGL/OpenGL ES, Metal/Vulkan | BLOCKED | No compatibility renderer implemented |
 | AudioToolbox/AVFoundation/OpenAL | BLOCKED | No audio API mapping implemented |
 | Touch / keyboard / gamepad / sensors / iOS lifecycle | BLOCKED | Android entry activity exists, not iOS input/lifecycle mapping |
-| Resources | PARTIAL | Relative paths, localization, plist/JSON/audio/texture files preserved as opaque assets. No compiled asset catalog, shader, texture/audio codec or lookup ABI conversion |
+| Resources | PARTIAL | Relative paths, localization, plist/JSON/audio/texture files preserved as opaque assets; icon-like PNGs normalized. Compiled asset catalogs are decoded for icon recovery only. No shader, texture/audio codec or lookup ABI conversion |
 | APK packaging/signing | SUPPORTED | Real SDK/NDK, JNI ARM64 ELF, compiled manifest/resources/DEX/assets, reusable dev key |
 | APK static validation | SUPPORTED | ZIP/manifest/package/entry/DEX/signature/ELF architecture/dependencies/resources/icon/alignment/provenance checks, DEX checksum/launcher definition and native JNI entry/code hash |
 | Android runtime/device validation | BLOCKED | No device test is currently supplied; report says NOT_TESTED |
+
+## Reconstruction report
+
+`python3 -m radek convert app.ipa --authorized --output workspace/result` writes, next to
+`report.json`:
+
+- `reconstruction.json` — machine-readable: architectures, entry points, per-image and
+  per-slice metrics, recovered functions with listings, call graph, Objective-C
+  classes/selectors/message sends, Swift types and symbols, imported symbols, linked
+  frameworks, reachable API attribution and capability areas.
+- `reconstruction.md` — the same evidence in readable form, including the reconstructed
+  function listings and the blockers derived from reachable APIs.
+
+Nothing in the reconstruction is executed, and no listing is a claim about the original
+source: unproven instructions, types and control flow are marked explicitly.
 
 ## Closed integer entry contract v1
 

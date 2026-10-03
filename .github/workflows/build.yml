@@ -51,6 +51,20 @@ jobs:
           mkdir -p artifacts
           cp app/build/outputs/apk/debug/app-debug.apk artifacts/RadekiOSConventor-debug.apk
           python3 -m radek validate artifacts/RadekiOSConventor-debug.apk --package dev.radek.conventor --entry dev.radek.conventor.MainActivity --converter-app > artifacts/validation.json
+      - name: Verify the bundled converted-app runtime DEX
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          apk = zipfile.ZipFile("artifacts/RadekiOSConventor-debug.apk")
+          names = apk.namelist()
+          assert "assets/runtime.dex" in names, "assets/runtime.dex was not bundled into the app"
+          info = apk.getinfo("assets/runtime.dex")
+          data = apk.read("assets/runtime.dex")
+          assert info.file_size > 512, f"runtime.dex is too small ({info.file_size} bytes)"
+          assert data[:4] == b"dex\n", "runtime.dex is not a DEX file"
+          assert data[4:7] == b"035", f"unexpected DEX version {data[4:7]!r}"
+          print("runtime.dex:", info.file_size, "bytes, version", data[4:7].decode())
+          PY
       - name: Build and validate standalone native fixture artifact
         run: |
           python3 tools/make_fixture.py --output .local/fixture.ipa

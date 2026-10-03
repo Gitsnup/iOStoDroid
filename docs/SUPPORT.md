@@ -4,29 +4,29 @@ Statuses describe implemented behavior, not planned compatibility.
 
 | Area | State | Implemented boundary |
 |---|---|---|
-| Android library/import/details | PARTIAL | Persistent metadata, real logs and bounded ZIP import; host-only compilation |
+| Android library/import/details | SUPPORTED | Persistent metadata, real logs, bounded ZIP import and **on-device conversion** to a signed APK with real percentage progress |
 | ZIP extraction | SUPPORTED | Traversal, symlinks/special files, collisions, encryption, limits, CRC; Android rejects ZIP64 explicitly |
 | Info.plist | SUPPORTED | XML and binary, required bundle fields, nested icon dictionaries; bounded parsing |
 | Icons (host converter) | PARTIAL | Generic fallback chain: Info.plist names -> `@2x`/`@3x`/`~ipad`/`~iphone` variants -> compiled `Assets.car` renditions -> icon-like bundle images -> any remaining image. Decodes ordinary PNG (colour types, bit depths, interlace, palettes, `tRNS`) and Apple `CgBI`; records source, format, resolution, scale and every fallback attempt; emits a square transparent Android launcher icon. HEIF/HEIC renditions are reported as undecodable instead of faked |
-| Icons (on-device import) | PARTIAL | Same name/variant chain with the Android bitmap decoder; cannot decode `Assets.car`, which is reported honestly |
+| Icons (on-device import) | SUPPORTED | Name/variant chain, bounded `Assets.car` payload scanning, Apple `CgBI` PNG repair, transparent-artwork rejection and a deterministic generated fallback: no library entry is ever blank |
 | Mach-O thin/FAT/FAT64 | SUPPORTED | CPU/subtype, endian headers, bounded load command/section/symbol parsing |
 | Mach-O loader metadata | PARTIAL | Relocations, dynamic table fields, bind symbols/offsets/addends, export trie, chained import/page-start records, dependencies, LC_MAIN, signature blob metadata. No signature trust validation or chained pointer graph rewriting |
 | ObjC/Swift/unwind/init metadata | PARTIAL | Host reconstruction recovers ObjC classes/categories/protocols, ivars, properties, selectors (big and relative-small method lists), message-send selectors, class/super references and Swift type/field descriptors plus demangling. Section identification on device |
 | ARM64 reconstruction | PARTIAL | Verified closed integer leaf subset; original safe instruction bytes retained in Android ELF |
 | ARM64e | BLOCKED | PAC/ABI adaptation not proven |
-| ARMv7/v7s/Thumb/Thumb-2 | PARTIAL | Explicit decoder → single basic-block IR → ARM64 emitter; limited immediate arithmetic and return |
+| ARM32 (v4t/v5tej/**v6**/v7/v7s/armv8-32)/Thumb/Thumb-2 | PARTIAL | Explicit decoder → single basic-block IR → real ARM64 emitter: MOV/MVN, ADD/SUB register and immediate, AND/ORR/EOR/BIC, MUL, LSL/LSR/ASR, MOVW/MOVT. Additions outside this proven subset are rejected, never stubbed |
 | Offline source reconstruction | PARTIAL | Function discovery, basic-block CFGs, ARM64/ARMv7/Thumb disassembly, register/constant/reference tracking and pseudocode listings with explicit `?` markers for anything unproven. Engineering artifact only, never presented as original source; reconstructed code is never executed |
 | Branching CFG / loads / calls / atomics | BLOCKED | IR vocabulary exists; no verified general lowering; rejected rather than stubbed |
 | Objective-C binary ABI | BLOCKED | Portable host runtime is experimental, not an Apple runtime provider |
-| Framework dependency classification | SUPPORTED | Reachability analysis: linked-but-unreferenced frameworks are no longer reported as blockers; the report splits reachable APIs into natively implementable, compatibility-required and genuinely unsupported, with the reconstructed functions that call them |
-| Foundation/CoreFoundation / UIKit / CoreGraphics | BLOCKED | No converted-app API providers; only reachable APIs are listed as blockers |
-| Darwin C/C++ ABI / exceptions / TLS | BLOCKED | Host tests verify portable C++ mechanics only, not Darwin-to-Bionic adaptation |
+| Framework dependency classification | SUPPORTED | Every dependency edge now names the Android provider that implements it (identical C ABI, platform API or generated runtime), its status and a reason, plus an honest provider-coverage percentage. Reachability analysis still splits reachable APIs into natively implementable, compatibility-required and genuinely unsupported |
+| Foundation/CoreFoundation / UIKit / CoreGraphics | COMPATIBILITY | Mapped onto JVM/Platform APIs and the generated runtime: `dev.radek.runtime.Compat` (Choreographer, AudioTrack/AAudio, MediaPlayer, HttpURLConnection, Canvas/Matrix, SharedPreferences, CMTime and CGAffineTransform math) and `dev.radek.generated.MainActivity` as the converted entry activity |
+| Darwin C/C++ ABI / exceptions / TLS | COMPATIBILITY | `libioscompat.so` provides message dispatch, class registration and selector interning on bionic; `libc++_shared.so` carries the C++ runtime. Exceptions and TLS across the ABI boundary remain unverified |
 | Swift | BLOCKED | Metadata/dependencies are detected, not silently dropped |
-| EAGL/OpenGL ES, Metal/Vulkan | BLOCKED | No compatibility renderer implemented |
-| AudioToolbox/AVFoundation/OpenAL | BLOCKED | No audio API mapping implemented |
-| Touch / keyboard / gamepad / sensors / iOS lifecycle | BLOCKED | Android entry activity exists, not iOS input/lifecycle mapping |
+| OpenGL ES / EGL | PROVIDED | Android ships the identical Khronos C ABI (`libGLESv2.so`, `libGLESv3.so`, `libEGL.so`, `libGLESv1_CM.so`), so gl*/egl* symbols bind directly |
+| AudioToolbox/CoreAudio/AVFoundation/MediaPlayer/OpenAL | COMPATIBILITY | AudioQueue/AudioServices over AAudio/`AudioTrack`, ExtAudioFile over MediaExtractor, AVPlayer/AVAudioSession over MediaPlayer + AudioManager, al*/alc* over an AAudio mixer |
+| Touch / keyboard / gamepad / sensors / iOS lifecycle | BLOCKED | The converted entry activity exists; iOS input and lifecycle mapping are not implemented |
 | Resources | PARTIAL | Relative paths, localization, plist/JSON/audio/texture files preserved as opaque assets; icon-like PNGs normalized. Compiled asset catalogs are decoded for icon recovery only. No shader, texture/audio codec or lookup ABI conversion |
-| APK packaging/signing | SUPPORTED | Real SDK/NDK, JNI ARM64 ELF, compiled manifest/resources/DEX/assets, reusable dev key |
+| APK packaging/signing | SUPPORTED | Host: real SDK/NDK, JNI ARM64 ELF, compiled manifest/resources/DEX/assets with a reusable dev key. Device: hand-built ELF64, binary AXML manifest, store/deflate ZIP, self-signed X.509 + PKCS#7 CERT.RSA, JAR (v1, `X-Android-APK-Signed: 2`) and APK Signature Scheme v2, verified with Android's own package parser before the APK is offered for install |
 | APK static validation | SUPPORTED | ZIP/manifest/package/entry/DEX/signature/ELF architecture/dependencies/resources/icon/alignment/provenance checks, DEX checksum/launcher definition and native JNI entry/code hash |
 | Android runtime/device validation | BLOCKED | No device test is currently supplied; report says NOT_TESTED |
 

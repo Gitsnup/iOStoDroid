@@ -24,8 +24,10 @@ private object Jobs {
     private val main = Handler(Looper.getMainLooper())
     @Volatile var busy = false
     @Volatile var message = ""
+    @Volatile var percent = -1
     var listener: (() -> Unit)? = null
-    fun update(text: String) { message = text; main.post { listener?.invoke() } }
+    fun update(text: String) { message = text; percent = -1; main.post { listener?.invoke() } }
+    fun update(text: String, value: Int) { message = text; percent = value; main.post { listener?.invoke() } }
     @Synchronized fun run(block: () -> Unit) {
         check(!busy) { "A job is already running" }; busy = true
         executor.execute { try { block() } catch (e: Exception) { update("Failed: ${e.message}") } finally { busy = false; main.post { listener?.invoke() } } }
@@ -79,6 +81,19 @@ class MainActivity : Activity() {
         parent.addView(this, LinearLayout.LayoutParams(-1, dp(54)).apply { topMargin = dp(12); bottomMargin = dp(4) })
         setOnClickListener { action() }
     }
+    private val danger = Color.rgb(214, 69, 65)
+    /** The forced-conversion action is deliberately red: it is a deliberate override. */
+    private fun dangerButton(label: String, parent: LinearLayout = body, action: () -> Unit): Button = Button(this).apply {
+        text = label; isAllCaps = false; textSize = 15f; setTypeface(typeface, Typeface.BOLD)
+        setTextColor(Color.WHITE); background = rounded(danger)
+        parent.addView(this, LinearLayout.LayoutParams(-1, dp(54)).apply { topMargin = dp(12); bottomMargin = dp(4) })
+        setOnClickListener { action() }
+    }
+    private fun progressBar(percent: Int, parent: LinearLayout = body): ProgressBar =
+        ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100; progress = percent.coerceIn(0, 100)
+            parent.addView(this, LinearLayout.LayoutParams(-1, dp(10)).apply { topMargin = dp(10) })
+        }
     private fun card(parent: LinearLayout = body): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL; background = rounded(panel); setPadding(dp(18), dp(14), dp(18), dp(16))
         parent.addView(this, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
@@ -97,7 +112,10 @@ class MainActivity : Activity() {
         if (Jobs.busy) {
             wasBusy = true
             body.addView(ProgressBar(this), LinearLayout.LayoutParams(dp(28), dp(28)).apply { topMargin = dp(18) })
-            progressLabel = text(Jobs.message, 14f, accent)
+            if (Jobs.percent in 0..100) {
+                progressBar(Jobs.percent)
+                text("${Jobs.percent}% · ${Jobs.message}", 14f, accent, true)
+            } else progressLabel = text(Jobs.message, 14f, accent)
         } else if (Jobs.message.startsWith("Failed:")) text(Jobs.message, 14f, statusColor("FAILED"))
         text("Game Library", 23f, Color.WHITE, true)
         val entries = library.entries()
@@ -121,7 +139,11 @@ class MainActivity : Activity() {
             text(app.optString("name", "Import failed"), 19f, Color.WHITE, true, labels)
             text(app.optString("bundleId", "No metadata available"), 12f, muted, parent = labels)
             val state = report.optString("state", "FAILED")
-            text(state, 11f, statusColor(state), true, item)
+            val apk = report.optJSONObject("apk")
+            val headline = if (apk != null) {
+                "$state · ${apk.optInt("supportPercent")}% Android provider coverage · converted on device"
+            } else state
+            text(headline, 11f, statusColor(state), true, item)
             text("v${app.optString("version", "—")}  ·  ${architectures(report)}  ·  ${formatBytes(app.optLong("fileSize"))}", 12f, muted, parent = item)
             item.isClickable = true; item.setOnClickListener { detail(dir) }; item.contentDescription = "View ${app.optString("name")} details"
         }
@@ -154,16 +176,83 @@ class MainActivity : Activity() {
         if (report.has("error")) text(report.getString("error"), 15f, statusColor("FAILED"))
         text("Icon: ${report.optJSONObject("icon")?.optString("reason") ?: "not extracted"}", 13f, muted)
         val edges = report.optJSONObject("dependencies")?.optJSONArray("edges")
-        if (edges != null) for (i in 0 until edges.length()) {
-            val dep = edges.getJSONObject(i)
-            val classification = dep.optString("classification", "unverified").uppercase()
-            text("$classification · ${dep.getString("installName")}", 13f, muted)
-            text(dep.optString("reason"), 11f, muted)
+        if (edges != null && edges.length() > 0) {
+            text("iOS dependency → Android provider", 15f, Color.WHITE, true)
+            for (i in 0 until edges.length()) {
+                val dep = edges.getJSONObject(i)
+                val status = dep.optString("status", "")
+                if (status.isEmpty()) {
+                    // No Android provider mapping (embedded image or unknown dylib):
+                    // report the analyser's own classification verbatim.
+                    val classification = dep.optString("classification", "unverified").uppercase()
+                    text("$classification · ${dep.optString("installName")}", 13f, muted)
+                    val reason = dep.optString("reason")
+                    if (reason.isNotEmpty()) text(reason, 11f, muted)
+                    continue
+                }
+                val color = when (status) {
+                    Providers.STATUS_PROVIDED -> accent
+                    Providers.STATUS_COMPATIBILITY -> Color.rgb(245, 203, 116)
+                    else -> statusColor("BLOCKED")
+                }
+                val marker = when (status) {
+                    Providers.STATUS_PROVIDED -> "PROVIDED"
+                    Providers.STATUS_COMPATIBILITY -> "COMPAT"
+                    else -> "BLOCKED"
+                }
+                val provider = dep.optString("provider").ifBlank { "no Android provider" }
+                text("$marker · ${dep.optString("framework", dep.optString("installName"))} → $provider", 13f, color)
+                val reason = dep.optString("reason")
+                if (reason.isNotEmpty()) text(reason, 11f, muted)
+            }
         }
         button("View full machine-readable report") { showText("Conversion report", report.toString(2)) }
         button("View real conversion logs") { showText("Logs", File(dir, "conversion.jsonl").takeIf { it.isFile }?.readText() ?: "No logs") }
-        text("Native build result", 22f, Color.WHITE, true)
-        text("Use the repository's host converter to build the verified leaf subset. The Android app does not contain an SDK/NDK toolchain. UIKit, Swift, graphics, audio and general game conversion are not implemented.", 14f, muted)
+        text("On-device conversion", 22f, Color.WHITE, true)
+        val apk = report.optJSONObject("apk")
+        if (apk != null) {
+            val complete = apk.optBoolean("complete")
+            text(
+                "${apk.optString("package")} · ${formatBytes(apk.optLong("bytes"))} · signed v1+v2 · " +
+                    "${apk.optInt("supportPercent")}% Android provider coverage",
+                13f, if (complete) accent else Color.rgb(245, 203, 116)
+            )
+            if (complete) {
+                text("100%: every dependency and imported symbol of the converted slice has a real Android provider.", 12f, muted)
+            } else {
+                val missing = apk.optJSONArray("missing")
+                val list = if (missing == null) "" else (0 until missing.length()).joinToString(", ") { missing.getString(it) }
+                text("Not covered by an Android provider: $list", 12f, statusColor("BLOCKED"))
+            }
+            val conversion = apk.optJSONObject("conversion")
+            if (conversion != null) {
+                text(
+                    "native backend ${conversion.optString("backend")} · ${conversion.optInt("outputBytes")} bytes of ARM64 · " +
+                        "${conversion.optString("machineCodeSha256")?.take(16)}…",
+                    12f, muted
+                )
+            }
+            if (apk.optBoolean("forced")) {
+                text("Forced build: the entry leaf was not inside the proved closed-integer subset.", 12f, statusColor("BLOCKED"))
+            }
+        } else {
+            text("Proves the entry leaf, re-emits it as Android ARM64, maps every iOS framework to its Android provider, then builds and signs the APK here — no host required.", 14f, muted)
+        }
+        if (Jobs.busy) {
+            wasBusy = true
+            if (Jobs.percent in 0..100) {
+                text("${Jobs.percent}% converted", 26f, accent, true)
+                progressBar(Jobs.percent)
+            }
+            progressLabel = text(Jobs.message, 13f, accent)
+        }
+        val convertible = app.has("sha256") && File(dir, "binary.macho").isFile
+        if (convertible && !Jobs.busy) {
+            button("Convert to .apk", true) { startConversion(dir, false) }
+            dangerButton("Force convert to .apk") { confirmForce(dir) }
+        } else if (!convertible) {
+            text("No retained Mach-O image for this entry; re-import the IPA to convert it.", 12f, statusColor("FAILED"))
+        }
         button("Copy host build command") {
             (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("Host build command", "python3 -m radek convert input.ipa --authorized --output workspace/result"))
             Toast.makeText(this, "Command copied", Toast.LENGTH_SHORT).show()
@@ -172,7 +261,12 @@ class MainActivity : Activity() {
             if (!Jobs.busy) startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "application/vnd.android.package-archive"; addCategory(Intent.CATEGORY_OPENABLE) }, pickerApk)
         }
         if (File(dir, "RadekiOSConventor-debug.apk").isFile) {
-            text("Host result attached. Package identity and provenance matched. This is not a replacement for host signature validation; Android verifies the APK during installation.", 13f, accent)
+            val built = report.has("apk")
+            text(
+                if (built) "APK generated on this device. Android's own package parser accepted it during verification."
+                else "Host result attached. Package identity and provenance matched. This is not a replacement for host signature validation; Android verifies the APK during installation.",
+                13f, accent
+            )
             button("Install APK", true) { install(dir) }
             button("Open installed app") {
                 val pkg = "dev.radek.converted.p" + app.getString("sha256").take(20)
@@ -185,6 +279,35 @@ class MainActivity : Activity() {
                 .setNegativeButton("Cancel", null).setPositiveButton("Delete") { _, _ -> dir.deleteRecursively(); home() }.show()
         }
     }
+    private fun startConversion(dir: File, force: Boolean) {
+        if (Jobs.busy) return
+        val context = applicationContext
+        val libraryRef = library
+        Jobs.percent = 0
+        Jobs.run {
+            try {
+                libraryRef.convert(dir, force) { percent, message -> Jobs.update(message, percent) }
+                Jobs.update(if (force) "Forced conversion finished" else "Conversion finished at 100%", 100)
+            } catch (error: Exception) {
+                Jobs.update("Failed: ${error.message}")
+            }
+        }
+        wasBusy = true
+        detail(dir)
+    }
+
+    private fun confirmForce(dir: File) {
+        AlertDialog.Builder(this).setTitle("Force convert to .apk")
+            .setMessage(
+                "Builds the APK even when part of the app has no Android provider or the entry leaf is " +
+                    "outside the proved subset. The result installs and runs, but it is not a faithful port of " +
+                    "the original game. FairPlay-encrypted binaries are never forced."
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Force convert") { _, _ -> startConversion(dir, true) }
+            .show()
+    }
+
     private fun showText(title: String, value: String) {
         val view = TextView(this).apply { text = value; setTextIsSelectable(true); textSize = 12f; typeface = Typeface.MONOSPACE; setPadding(dp(16), dp(16), dp(16), dp(16)) }
         AlertDialog.Builder(this).setTitle(title).setView(ScrollView(this).apply { addView(view) }).setPositiveButton("Close", null).show()

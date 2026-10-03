@@ -23,6 +23,13 @@ internal object IconDecoder {
     private val signature = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
     private val cgbiType = byteArrayOf(0x43, 0x67, 0x42, 0x49)
 
+    /** True when the payload is an Apple CgBI PNG (used by catalog payload scanning). */
+    fun isCgbiBytes(data: ByteArray): Boolean {
+        if (data.size !in 33..MAX_FILE_BYTES) return false
+        if (!data.copyOfRange(0, signature.size).contentEquals(signature)) return false
+        return indexOf(data, minOf(data.size, 512), cgbiType) >= 0
+    }
+
     fun isCgbi(file: File): Boolean {
         if (!file.isFile || file.length() !in 1..MAX_FILE_BYTES.toLong()) return false
         return file.inputStream().use { input ->

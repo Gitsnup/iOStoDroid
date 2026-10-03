@@ -2,7 +2,18 @@
 
 An **offline native-reconstruction workbench**, not an iOS emulator. Kotlin Android importer + C++ Mach-O analyzer + Python host conversion/SDK packaging pipeline.
 
-> **Important: this is NOT a general IPA/game converter.** Current native conversion is restricted to self-contained, straight-line integer-returning entry code with no reachable imports/framework calls, memory access, address references or unsupported runtime semantics. Linked-but-unused dylib/import records can be omitted only after that entry is proven; no no-op framework stubs are generated. UIKit, Foundation ABI, Swift, general Objective-C, graphics/audio/input and ordinary commercial apps are **BLOCKED** when required. An importer APK is not proof those apps can be converted.
+> **Important: this is NOT a general IPA/game converter.** Native conversion re-emits a
+> *proved* closed integer entry leaf as Android ARM64 machine code: straight-line entry code
+> with no reachable imports or framework calls, memory access, address references or
+> unsupported runtime semantics. Linked-but-unused dylib and import records can be omitted
+> only after that entry is proven; **no no-op framework stubs are ever generated**. Anything
+> outside the proven subset is reported honestly, and ARM64e (PAC) has no backend.
+> Dependency lines are no longer simply "BLOCKED": every iOS framework and imported symbol is
+> mapped to the real Android implementation that provides it (identical C ABIs such as
+> OpenGL ES/EGL/iconv/SQLite, or platform APIs such as AAudio, MediaPlayer, Choreographer,
+> `android.view`, Canvas, sockets), and the app reports the resulting provider coverage.
+> APIs with no Android contract (StoreKit, GameKit, AdSupport, MapKit, CoreLocation ...) stay
+> blocked and say why. An importer APK is not proof those apps can be converted.
 
 ## Offline reconstruction before conversion
 
@@ -25,10 +36,29 @@ reconstructed code is never executed.
 
 ## Two distinct APKs
 
-1. **Converter/importer app:** the Actions artifact `RadekiOSConventor-debug.apk` contains the Android library/import UI and native analyzer. The UI does not include an on-device SDK/NDK or compile IPAs on the phone.
-2. **Standalone converted program:** `python3 -m radek convert ...` produces a separate `RadekiOSConventor-debug.apk` containing reconstructed **ARM64 Android ELF code**, DEX launcher, icon and bundle resources. It does not ship the IPA, Mach-O executable, an emulator, interpreter, runtime translator or converter. The currently supported entry contract returns an integer; the Android launcher displays that result. It does **not** recreate an iOS application's UI.
+1. **Converter/importer app:** the Actions artifact `RadekiOSConventor-debug.apk` contains the
+   Android library/import UI, the native analyzer **and the on-device converter**. It converts
+   an imported IPA to a signed, installable APK without any host toolchain:
+   `Ir.kt` proves the entry leaf and emits Android ARM64, `Elf.kt` builds a loadable ELF64
+   image, `Axml.kt` writes a binary manifest, and `ApkBuilder`/`ApkSign` produce a ZIP signed
+   with both JAR (v1) and APK Signature Scheme v2 using a key generated and kept on the device.
+   A red **Force convert to .apk** button builds the APK even when coverage is incomplete or
+   the entry leaf is unproven, and records `forced=true` in the report.
+2. **Standalone converted program:** `python3 -m radek convert ...` produces a separate
+   `RadekiOSConventor-debug.apk` with the same layout from the host CLI. Neither variant ships
+   the IPA, the Mach-O executable, an emulator, an interpreter, a runtime translator or the
+   converter. The supported entry contract returns an integer; the Android entry activity
+   shows that result plus the conversion provenance. It does **not** recreate an iOS UI.
 
 CI uploads the second APK separately as `standalone-native-fixture` to avoid confusing the products.
+
+## Conversion percentage
+
+The library and detail screens show the real build progress (each pipeline stage reports its
+own percentage, 100% = the signed APK is written and verified). Support is reported separately
+as **Android provider coverage**: the share of the slice's dependencies and imported symbols
+with a real Android provider. The APK is built either way; 100% coverage means nothing in the
+converted slice needs an unmapped Darwin API.
 
 ## Build, test, edit
 
@@ -52,11 +82,21 @@ python3 -m radek convert .local/fixture.ipa --authorized --output workspace/fixt
 # workspace/fixture/RadekiOSConventor-debug.apk
 ```
 
-`--arch armv6`, `armv7`, `armv7s`, `thumb`, and `thumb2` exercise **offline ARM32 → ARM64 lowering** for the proven closed integer leaf subset. This does not make general ARMv6 games (which commonly depend on UIKit, graphics, audio, input and runtime services) compatible. The fixtures are generated synthetic Mach-O programs, not installable signed iOS apps. The resulting native routine returns 42.
+`--arch armv6`, `armv6thumb`, `armv4t`, `armv7`, `armv7s`, `thumb`, and `thumb2` exercise
+**offline ARM32 → ARM64 lowering**, including the Thumb-1-only code layout of iPhone OS 2-5
+games. The fixtures are generated synthetic Mach-O programs, not installable signed iOS apps.
+The resulting native routine returns 42. The 32-bit subset covers register moves, ADD/SUB
+(register and immediate), AND/ORR/EOR/BIC, MUL and LSL/LSR/ASR immediates, plus the matching
+Thumb-1 forms; everything else is rejected rather than mistranslated. This does not make
+general ARMv6 games compatible - those commonly depend on UIKit, graphics, audio, input and
+runtime services listed below.
 
 Icons are recovered through a generic fallback chain (Info.plist names, `@2x`/`@3x`/`~ipad`
 variants, compiled `Assets.car` renditions, then other bundle images) with every attempt
-recorded; the recovered icon becomes the generated APK's launcher icon.
+recorded; the recovered icon becomes the generated APK's launcher icon. On device the same
+chain runs on top of `BitmapFactory`, adds Apple `CgBI` PNG repair, rejects fully transparent
+artwork, and finally generates a deterministic icon from the app name — so every library entry
+shows a visible icon instead of a blank tile.
 
 For authorized real IPAs, `analyze` reads actual metadata/dependencies without attempting to decrypt or execute the input:
 

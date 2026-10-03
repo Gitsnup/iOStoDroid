@@ -11,6 +11,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
+from . import providers
 from .archive import InputError, safe_name
 from .resources import fallback_icon
 from .dex import classes as dex_classes
@@ -416,16 +417,8 @@ def validate_apk(
             if name.endswith(".so")
         ):
             raise InputError("unexpected native architecture")
-        android_system = {
-            "libc.so",
-            "libm.so",
-            "libdl.so",
-            "liblog.so",
-            "libandroid.so",
-            "libGLESv2.so",
-            "libEGL.so",
-            "libz.so",
-        }
+        # Every library a provider legitimately binds against (see radek/providers.py).
+        android_system = set(providers.NATIVE_LIBRARIES)
         for name, info in libraries.items():
             unresolved = set(info["needed"]) - libraries.keys() - android_system
             if unresolved:

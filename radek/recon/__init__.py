@@ -26,7 +26,23 @@ MAX_FUNCTIONS_IN_REPORT = 150
 # large IPA cannot turn analysis into an unbounded decode.
 DEFAULT_INSTRUCTION_BUDGET = 400000
 MIN_SLICE_BUDGET = 20000
-ARCH_PRIORITY = {"arm64": 0, "arm64e": 1, "armv7s": 2, "armv7": 3, "armv6": 4, "arm32-unknown": 5}
+# arm64e is analysed/reconstructed but not convertible, so it sorts last.
+ARCH_PRIORITY = {
+    "arm64": 0,
+    "armv7s": 1,
+    "armv7": 2,
+    "armv7f": 3,
+    "armv7k": 4,
+    "armv8-32": 5,
+    "armv6": 6,
+    "armv5tej": 7,
+    "armv4t": 8,
+    "armv6m": 9,
+    "armv7m": 10,
+    "armv7em": 11,
+    "arm32-unknown": 12,
+    "arm64e": 13,
+}
 
 
 @dataclass

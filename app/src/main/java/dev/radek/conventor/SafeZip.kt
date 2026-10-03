@@ -9,12 +9,38 @@ object SafeZip {
     const val MAX_ARCHIVE = 512L * 1024 * 1024
     private const val MAX_FILE = 256L * 1024 * 1024
     private const val MAX_TOTAL = 1024L * 1024 * 1024
+    /** Strict form: used for names that must already be canonical. */
     fun validateName(name: String): String {
         require(name.isNotEmpty() && !name.startsWith('/') && '\\' !in name && ':' !in name && '\u0000' !in name) { "unsafe ZIP path" }
         val parts = name.trimEnd('/').split('/')
         require(parts.size <= 32 && name.toByteArray().size <= 1024 && parts.none { it == ".." || it == "." || it.isEmpty() }) { "unsafe ZIP path" }
         return parts.joinToString("/")
     }
+
+    /**
+     * Lenient form for real archives. Shipped IPAs contain names that are odd but
+     * harmless (backslash separators, Windows drive prefixes, `//`, `./`), and
+     * failing the whole import over one of them is worse than normalising it.
+     *
+     * Traversal, NUL bytes, absolute paths that survive normalisation, over-deep
+     * and over-long names still throw, and every result is written under the
+     * destination directory only.
+     */
+    fun memberName(name: String): String {
+        require(name.isNotEmpty() && '\u0000' !in name) { "unsafe ZIP path" }
+        var candidate = name.replace('\\', '/').replace(':', '_')
+        while (candidate.startsWith("/")) candidate = candidate.substring(1)
+        val parts = candidate.split('/').map { it.trim() }.filter { it.isNotEmpty() && it != "." }
+        require(parts.isNotEmpty() && parts.none { it == ".." }) { "unsafe ZIP path" }
+        require(parts.size <= 32) { "unsafe ZIP path" }
+        val joined = parts.joinToString("/")
+        require(joined.toByteArray().size <= 1024) { "unsafe ZIP path" }
+        return joined
+    }
+
+    /** True when the two names differ only by case (ZIP is case-insensitive on iOS). */
+    fun collides(existing: Set<String>, name: String): Boolean =
+        existing.contains(name.lowercase(java.util.Locale.ROOT))
     private fun centralDirectory(file: File) {
         RandomAccessFile(file, "r").use { f ->
             val length = f.length()
@@ -59,7 +85,7 @@ object SafeZip {
                 val names = mutableSetOf<String>()
                 var total = 0L
                 entries.forEachIndexed { index, entry ->
-                    val name = validateName(entry.name)
+                    val name = memberName(entry.name)
                     require(names.add(name.lowercase(java.util.Locale.ROOT))) { "duplicate/case-colliding ZIP path" }
                     require(entry.size in 0..MAX_FILE && entry.compressedSize >= 0 && entry.size <= maxOf(1L, entry.compressedSize) * 250) { "ZIP expansion limit" }
                     total += entry.size; require(total <= MAX_TOTAL) { "ZIP expanded size limit" }

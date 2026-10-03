@@ -29,6 +29,36 @@ class Library(private val context: Context) {
         require(temporary.renameTo(File(dir, "report.json"))) { "cannot persist report" }
     }
 
+    /** Run the on-device conversion for one library entry. */
+    fun convert(dir: File, force: Boolean, progress: (Int, String) -> Unit): JSONObject {
+        val report = JSONObject(File(dir, "report.json").readText())
+        report.put("state", ConversionState.CONVERTING.name)
+        save(dir, report)
+        return try {
+            val result = Converter.convert(context, dir, report, force) { percent, message ->
+                report.put("percent", percent)
+                progress(percent, message)
+            }
+            report.put("apk", result)
+            report.put("percent", 100)
+            report.put("state", if (result.optBoolean("complete")) ConversionState.READY.name else ConversionState.PARTIAL.name)
+            report.put("blockers", JSONArray().apply {
+                if (!result.optBoolean("complete")) {
+                    put("Android provider coverage is ${result.optInt("supportPercent")}%; " +
+                        (result.optJSONArray("missing")?.let { m -> (0 until m.length()).joinToString(", ") { m.getString(it) } } ?: ""))
+                }
+                if (result.optBoolean("forced")) put("Forced conversion: the entry leaf is not inside the proved closed-integer subset")
+            })
+            save(dir, report)
+            report
+        } catch (error: Exception) {
+            report.put("state", ConversionState.FAILED.name)
+            report.put("error", "${error.javaClass.simpleName}: ${error.message}")
+            save(dir, report)
+            throw error
+        }
+    }
+
     fun recoverInterrupted() {
         root.listFiles().orEmpty().filter { it.isDirectory && !File(it, "report.json").isFile }.forEach { it.deleteRecursively() }
         entries().forEach { (dir, report) ->
@@ -70,7 +100,7 @@ class Library(private val context: Context) {
             val plistFile = File(app, "Info.plist"); require(plistFile.length() <= 8 * 1024 * 1024)
             val plist = Plist.read(plistFile.readBytes())
             val executable = plist["CFBundleExecutable"] as? String ?: error("CFBundleExecutable missing")
-            require(SafeZip.validateName(executable) == executable && '/' !in executable)
+            require(SafeZip.memberName(executable) == executable && '/' !in executable) { "unsafe executable name" }
             val bundle = plist["CFBundleIdentifier"] as? String ?: error("CFBundleIdentifier missing")
             require(bundle.isNotBlank())
             report.put("application", JSONObject().put("name", plist["CFBundleDisplayName"] ?: plist["CFBundleName"] ?: executable)
@@ -85,10 +115,15 @@ class Library(private val context: Context) {
             }
             names.addAll((plist["CFBundleIconFiles"] as? List<*>)?.filterIsInstance<String>().orEmpty())
             (plist["CFBundleIconFile"] as? String)?.let { names.add(it) }
-            val iconReport = extractIcon(app, names, dir)
+            val iconReport = Icons.recover(app, names, dir,
+                (report.optJSONObject("application")?.optString("name") ?: executable), JSONArray())
             report.put("icon", iconReport)
             val binary = File(app, executable)
             require(binary.isFile && binary.length() <= 64 * 1024 * 1024) { "Missing executable or exceeds the on-device 64 MiB analysis limit; use the host analyzer for larger files" }
+            // The IPA and the extracted tree are discarded after import, but the
+            // Mach-O image itself is retained: on-device conversion needs the real
+            // entry-point bytes and nothing else from the archive.
+            binary.copyTo(File(dir, "binary.macho"), overwrite = true)
             log(ConversionState.ANALYZING, "Parsing Mach-O load commands, symbols, fixups and dependencies")
             val macho = JSONObject(NativeBridge.analyze(binary.readBytes()))
             report.put("machO", macho)
@@ -102,11 +137,13 @@ class Library(private val context: Context) {
                     val slice = slices.getJSONObject(index)
                     encrypted = encrypted || slice.getBoolean("encrypted")
                     val arch = slice.getString("architecture")
-                    if (file == binary && arch in listOf("arm64", "armv7", "armv7s")) hasCandidate = true
+                    if (file == binary && (arch == "arm64" || arch in Ir.ARM32)) hasCandidate = true
                     val deps = slice.getJSONArray("dependencies")
-                    for (d in 0 until deps.length()) graph.put(JSONObject().put("from", file.relativeTo(app).path)
-                        .put("installName", deps.getJSONObject(d).getString("path")).put("classification", "unsupported")
-                        .put("reason", "No verified Darwin framework/ABI provider"))
+                    for (d in 0 until deps.length()) {
+                        val edge = Providers.classify(deps.getJSONObject(d).getString("path"))
+                        edge.put("from", file.relativeTo(app).path)
+                        graph.put(edge)
+                    }
                     incompatible = incompatible || deps.length() > 0 || slice.getJSONArray("imports").length() > 0 || slice.getJSONArray("metadata").length() > 0 || slice.has("chainedFixups")
                 }
             }
@@ -125,8 +162,8 @@ class Library(private val context: Context) {
             val reason = when {
                 encrypted -> "Protected/encrypted Mach-O. Conversion prohibited; no DRM or FairPlay bypass."
                 !hasCandidate -> "No supported ARM64/ARMv7 slice. ARM64e PAC reconstruction is blocked."
-                incompatible -> "Frameworks, imports, metadata or embedded code require unsupported compatibility/linker implementations."
-                else -> "Analysis completed. A host SDK/NDK is required to prove the restricted leaf subset, reconstruct native code and package an APK. On-device compilation is not implemented."
+                incompatible -> "Dependencies, imports, metadata or embedded code need the compatibility runtime; conversion continues on device and reports real provider coverage."
+                else -> "Analysis completed. The entry leaf can be proved and converted to Android ARM64 on this device."
             }
             report.put("blockers", JSONArray().put(reason)).put("hostCommand", "python3 -m radek convert input.ipa --authorized --output workspace/result")
             log(if (encrypted || incompatible || !hasCandidate) ConversionState.BLOCKED else ConversionState.PARTIAL, reason)
@@ -138,89 +175,4 @@ class Library(private val context: Context) {
         }
         return dir to report
     }
-}
-
-/** Icon suffixes, highest scale first: the best available representation wins. */
-private val ICON_SUFFIXES = listOf(
-    "@3x.png", "@2x.png", ".png", "@3x~ipad.png", "@2x~ipad.png", "~ipad.png",
-    "@3x~iphone.png", "@2x~iphone.png", "~iphone.png", "", "@3x.jpg", "@2x.jpg", ".jpg"
-)
-private const val ICON_MAX_BYTES = 16L * 1024 * 1024
-private const val ICON_TARGET = 512
-
-/**
- * Resolve the best icon in a bundle and record every attempt.
- * Order: Info.plist names -> scale/device variants -> icon-like bundle images ->
- * any other image. Nothing is invented: when nothing decodes the status is
- * UNAVAILABLE and the library shows that state.
- */
-private fun extractIcon(app: File, names: List<String>, dir: File): JSONObject {
-    val attempts = JSONArray()
-    fun attempt(source: String, ok: Boolean, detail: String, width: Int = 0, height: Int = 0) {
-        attempts.put(JSONObject().put("source", source).put("ok", ok).put("detail", detail)
-            .put("width", width).put("height", height))
-    }
-    val declared = mutableListOf<File>()
-    for (name in names) {
-        SafeZip.validateName(name) // fail closed on traversal or absolute names
-        for (suffix in ICON_SUFFIXES) {
-            val file = File(app, name + suffix)
-            if (file.isFile && file !in declared) declared.add(file)
-        }
-    }
-    if (declared.isEmpty()) {
-        val images = app.walkTopDown().filter { it.isFile && it.extension.lowercase() in setOf("png", "jpg", "jpeg") }.toList()
-        val named = images.filter { f ->
-            val lower = f.name.lowercase()
-            "icon" in lower || "artwork" in lower || "logo" in lower
-        }.sortedByDescending { it.length() }
-        declared += named
-        if (declared.isEmpty()) declared += images.filter { it.length() in 1..(4L * 1024 * 1024) }.sortedByDescending { it.length() }
-    }
-    var best: Pair<File, android.graphics.Bitmap>? = null
-    var bestPixels = 0
-    var bestScale = 0
-    for (candidate in declared.take(12)) {
-        val relative = candidate.relativeTo(app).path
-        if (candidate.length() > ICON_MAX_BYTES) { attempt(relative, false, "image exceeds size limit"); continue }
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(candidate.path, bounds)
-        if (bounds.outWidth !in 1..8192 || bounds.outHeight !in 1..8192) { attempt(relative, false, "unsupported image dimensions"); continue }
-        val sample = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / ICON_TARGET)
-        val bitmap = BitmapFactory.decodeFile(candidate.path, BitmapFactory.Options().apply { inSampleSize = sample })
-        if (bitmap == null) { attempt(relative, false, "BitmapFactory could not decode this image"); continue }
-        val pixels = bitmap.width * bitmap.height
-        val scale = when { "@3x" in candidate.name -> 3; "@2x" in candidate.name -> 2; else -> 1 }
-        attempt(relative, true, "decoded", bitmap.width, bitmap.height)
-        if (pixels > bestPixels || (pixels == bestPixels && scale > bestScale)) {
-            best?.second?.recycle()
-            best = candidate to bitmap
-            bestPixels = pixels
-            bestScale = scale
-        } else bitmap.recycle()
-    }
-    val chosen = best
-    if (chosen == null) {
-        return JSONObject().put("status", "UNAVAILABLE")
-            .put("reason", "Icon unavailable: no decodable icon image was found in this bundle")
-            .put("decoder", "android.graphics.BitmapFactory")
-            .put("attempts", attempts)
-    }
-    val (file, bitmap) = chosen
-    val width = bitmap.width
-    val height = bitmap.height
-    File(dir, "icon.png").outputStream().use { require(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
-    val scale = when { "@3x" in file.name -> 3.0; "@2x" in file.name -> 2.0; else -> 1.0 }
-    val detail = "Decoded bundle icon (${file.relativeTo(app).path}, ${width}x${height})"
-    bitmap.recycle()
-    return JSONObject().put("status", "SUPPORTED")
-        .put("source", file.relativeTo(app).path)
-        .put("path", "icon.png")
-        .put("kind", "file")
-        .put("format", file.extension.lowercase())
-        .put("decoder", "android.graphics.BitmapFactory")
-        .put("width", width).put("height", height)
-        .put("scale", scale)
-        .put("reason", detail)
-        .put("attempts", attempts)
 }

@@ -100,8 +100,14 @@ def dependency_graph(app: Path, main: Path, report: dict) -> dict:
 
 
 def prove_leaf(
-    executable: Path, report: dict, graph: dict, reconstruction: dict | None = None
+    executable: Path,
+    report: dict,
+    graph: dict,
+    reconstruction: dict | None = None,
+    target_abi: str = "auto",
 ) -> tuple[dict, Program]:
+    if target_abi not in ("auto", "arm64-v8a", "armeabi-v7a"):
+        raise Unsupported("unsupported Android target ABI: " + target_abi)
     if any(s["encrypted"] for n in graph["nodes"] for s in n["analysis"]["slices"]):
         raise Unsupported(
             "encrypted/FairPlay Mach-O: conversion is prohibited; obtain an unprotected authorized build"
@@ -110,10 +116,17 @@ def prove_leaf(
         raise Unsupported(
             "embedded frameworks/plugins require a native linker backend that is not implemented"
         )
-    candidates = sorted(
-        report["slices"],
-        key=lambda s: {"arm64": 0, "armv7s": 1, "armv7": 2, "armv6": 3}.get(s["architecture"], 99),
+    candidates = list(report["slices"])
+    if target_abi == "armeabi-v7a":
+        candidates = [s for s in candidates if s["architecture"] in ("armv7s", "armv7", "armv6")]
+        if not candidates:
+            raise Unsupported("the selected 32-bit Android ABI requires an ARMv6/ARMv7 IPA slice")
+    order = (
+        {"armv7s": 0, "armv7": 1, "armv6": 2}
+        if target_abi == "armeabi-v7a"
+        else {"arm64": 0, "armv7s": 1, "armv7": 2, "armv6": 3}
     )
+    candidates.sort(key=lambda s: order.get(s["architecture"], 99))
     failures = []
     data = executable.read_bytes()
     for sl in candidates:
@@ -192,7 +205,10 @@ def prove_leaf(
             address = section["address"] + entry - section["offset"]
             thumb = any(sym["value"] == address and sym["description"] & 8 for sym in sl["symbols"])
             code = data[sl["offset"] + entry : sl["offset"] + section["offset"] + section["size"]]
-            program = lift(code, sl["architecture"], thumb)
+            output_abi = target_abi
+            if output_abi == "auto":
+                output_abi = "arm64-v8a" if sl["architecture"] == "arm64" else "armeabi-v7a"
+            program = lift(code, sl["architecture"], thumb, output_abi)
             code_start = entry - section["offset"]
             code_end = code_start + program.source_size
             for relocation in section["relocations"]:

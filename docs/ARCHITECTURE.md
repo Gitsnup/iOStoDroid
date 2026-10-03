@@ -1,6 +1,6 @@
 # Modules and extension points
 
-- `app/`: Kotlin framework-only Android UI. `Library` owns persistent reports/import lifecycle; `SafeZip` handles untrusted archive extraction; `Plist` handles XML/binary parsing; `NativeBridge` calls C++ through JNI; `ResultProvider` is a read-only URI-granted APK provider.
+- `app/`: Kotlin framework-only Android UI. `Library` owns persistent reports/import lifecycle and architecture-independent bundle icon recovery; `AssetCatalogIcon` reads bounded raster renditions from compiled `Assets.car`; `AndroidApiMapper` reports conservative Bionic symbol-name candidates without claiming a relink; `GameStubBuilder` substitutes the recovered IPA icon into a small signed Android app stub, adds bounded allowlisted non-executable bundle data, and excludes the IPA/code payload; `SafeZip` handles untrusted archive extraction; `Plist` handles XML/binary parsing; `NativeBridge` calls C++ through JNI; `ResultProvider` is a read-only URI-granted provider.
 - `native/src/macho.cpp`: host/Android shared C++ analyzer. No host subprocess execution of the input. JSON describes source structure, not conversion success.
 - `native/include/runtime.hpp`: experimental portable runtime and storage primitives with real host tests. Intentionally isolated from the conversion dependency resolver until a tested Apple ABI adapter exists.
 - `radek/archive.py`: authorized input staging, bounded archive/plist import and metadata.
@@ -16,7 +16,7 @@
 
 `IMPORTED → ANALYZING → CONVERTING → PACKAGING → VALIDATING → READY`
 
-Analysis-only ends in `PARTIAL`. Missing conversion providers/unsafe source code end in `BLOCKED`. Malformed inputs, tooling and validation failures end in `FAILED`. Terminal states cannot silently transition to READY. The Android app currently ends in PARTIAL/BLOCKED/FAILED because it has no compiler toolchain.
+Analysis-only ends in `PARTIAL`. Missing conversion providers/unsafe source code end in `BLOCKED`. Malformed inputs, tooling and validation failures end in `FAILED`. Terminal states cannot silently transition to READY. The Android app still ends in PARTIAL/BLOCKED/FAILED because it has no native game-conversion compiler. Its automatic/forced icon-stub APK build is a separate packaging state and never changes that conversion state to READY. The stub replaces the template launcher icon with the recovered bundle icon, includes bounded non-executable resource data, and remains nonplayable. The UI's workflow percentage tracks completed import/packaging stages; code-emission progress stays separately at 0%.
 
 ## Adding real support
 

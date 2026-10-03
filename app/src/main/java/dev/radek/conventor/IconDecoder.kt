@@ -34,27 +34,34 @@ internal object IconDecoder {
 
     fun decode(file: File, targetSize: Int): Bitmap? {
         if (!file.isFile || file.length() !in 1..MAX_FILE_BYTES.toLong() || targetSize < 1) return null
-        if (isCgbi(file)) {
+        return try { decode(file.readBytes(), targetSize) } catch (_: Exception) { null }
+    }
+
+    /** Decode a bounded PNG/JPEG byte array, including Apple CgBI PNGs. */
+    internal fun decode(data: ByteArray, targetSize: Int): Bitmap? {
+        if (data.size !in 1..MAX_FILE_BYTES || targetSize < 1) return null
+        if (isCgbi(data)) {
             return try {
-                decodeCgbi(file.readBytes(), targetSize)
+                decodeCgbi(data, targetSize)
             } catch (_: Exception) {
                 // An unsupported/corrupt CgBI candidate is handled by the caller's fallback chain.
                 null
             }
         }
-        val head = file.inputStream().use { input -> ByteArray(8).also { input.read(it) } }
-        val isPng = head.contentEquals(signature)
-        val isJpeg = head.size >= 3 && head[0] == 0xff.toByte() && head[1] == 0xd8.toByte() && head[2] == 0xff.toByte()
+        val isPng = data.size >= signature.size && data.copyOfRange(0, signature.size).contentEquals(signature)
+        val isJpeg = data.size >= 3 && data[0] == 0xff.toByte() && data[1] == 0xd8.toByte() && data[2] == 0xff.toByte()
         if (!isPng && !isJpeg) return null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.path, bounds)
+        BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
         if (bounds.outWidth !in 1..MAX_DIMENSION || bounds.outHeight !in 1..MAX_DIMENSION) return null
         val sample = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / targetSize)
-        return BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply {
+        return BitmapFactory.decodeByteArray(data, 0, data.size, BitmapFactory.Options().apply {
             inSampleSize = sample
             inPreferredConfig = Bitmap.Config.ARGB_8888
         })
     }
+
+    private fun isCgbi(data: ByteArray): Boolean = indexOf(data, minOf(data.size, 512), cgbiType) >= 0
 
     /** Decode supported 8-bit, non-interlaced CgBI RGB/RGBA PNG into sampled pixels. */
     internal fun decodeCgbi(data: ByteArray, targetSize: Int): Bitmap {

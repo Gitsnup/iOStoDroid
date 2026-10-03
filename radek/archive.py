@@ -158,6 +158,12 @@ def metadata(info: dict, source: Path) -> dict:
         "version": info.get("CFBundleShortVersionString", ""),
         "build": info.get("CFBundleVersion", ""),
         "executable": info["CFBundleExecutable"],
+        "originalName": source.name,
+        "minimumIOSVersion": (
+            info.get("MinimumOSVersion", "")
+            if isinstance(info.get("MinimumOSVersion", ""), str)
+            else ""
+        ),
         "fileSize": source.stat().st_size,
         "sha256": sha256(source),
     }

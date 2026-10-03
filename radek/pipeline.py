@@ -12,7 +12,7 @@ from .ir import Unsupported
 from .recon import reconstruct
 from .recon.report import blockers as recon_blockers, markdown as recon_markdown, summary as recon_summary
 from .resources import copy_resources
-from .apk import ARTIFACT, Toolchain, build_apk, validate_apk
+from .apk import Toolchain, artifact_filename, build_apk, validate_apk
 
 STATES = {
     "IMPORTED",
@@ -71,7 +71,14 @@ class Pipeline:
         self.log(state, message)
         self.save(force=True)
 
-    def run(self, ipa: Path, authorized: bool, analyze_only=False, key: Path | None = None):
+    def run(
+        self,
+        ipa: Path,
+        authorized: bool,
+        analyze_only=False,
+        key: Path | None = None,
+        target_abi: str = "auto",
+    ):
         try:
             if not authorized:
                 raise ValueError(
@@ -80,7 +87,9 @@ class Pipeline:
             ipa = ipa.resolve(strict=True)
             if ipa.suffix.lower() != ".ipa":
                 raise ValueError("input must have .ipa extension")
+            artifact = artifact_filename(ipa.name)
             self.report["authorizationConfirmed"] = True
+            self.report["source"] = {"originalName": ipa.name}
             with tempfile.TemporaryDirectory(prefix="job-", dir=self.output) as temporary:
                 work = Path(temporary)
                 self.transition(
@@ -144,7 +153,7 @@ class Pipeline:
                     ),
                 )
                 try:
-                    selected, program = prove_leaf(executable, mach, graph, reconstruction)
+                    selected, program = prove_leaf(executable, mach, graph, reconstruction, target_abi)
                 except Unsupported as exc:
                     self.report["blockers"] = [line for line in str(exc).split("; ") if line]
                     summary = self.report.get("reconstructionSummary") or {}
@@ -158,6 +167,7 @@ class Pipeline:
                     self.transition("BLOCKED", str(exc))
                     return self.report
                 self.report["selectedArchitecture"] = selected["architecture"]
+                self.report["targetAbi"] = program.target_abi
                 # The accepted leaf has no call, memory, or address operations. Any
                 # linked dependency in this single-image case is therefore unused by
                 # the emitted code; do not synthesize symbols or ship no-op stubs.
@@ -179,7 +189,7 @@ class Pipeline:
                 tools = Toolchain.discover()
                 self.transition(
                     "CONVERTING",
-                    f"Reconstructed {program.source_size} input bytes into {len(program.machine_code)} Android ARM64 instruction bytes",
+                    f"Reconstructed {program.source_size} input bytes into {len(program.machine_code)} bytes for {program.target_abi}",
                 )
                 assets = work / "assets"
                 self.report["resources"] = copy_resources(app, assets / "bundle", info["CFBundleExecutable"])
@@ -191,7 +201,7 @@ class Pipeline:
                     "PACKAGING",
                     "Compiling JNI ELF, Android entry point, resources and DEX; signing with development key",
                 )
-                pending = work / ARTIFACT
+                pending = work / artifact
                 identity = build_apk(
                     work / "package",
                     pending,
@@ -203,14 +213,21 @@ class Pipeline:
                     tools,
                     key or Path(__file__).resolve().parent.parent / ".local/signing/debug.keystore",
                     self.log,
+                    target_abi=program.target_abi,
+                    thumb=program.thumb,
                 )
-                self.report["output"] = {**identity, "apk": ARTIFACT}
+                self.report["output"] = {**identity, "apk": artifact}
                 self.transition("VALIDATING", "Independently validating signed APK and native dependencies")
                 validation = validate_apk(
-                    pending, tools, identity["package"], identity["entryPoint"], log=self.log
+                    pending,
+                    tools,
+                    identity["package"],
+                    identity["entryPoint"],
+                    log=self.log,
+                    expected_abi=program.target_abi,
                 )
                 self.report["validation"] = validation
-                shutil.move(str(pending), self.output / ARTIFACT)
+                shutil.move(str(pending), self.output / artifact)
                 self.transition(
                     "READY",
                     "Signed standalone native APK passed static validation; device execution is not claimed",

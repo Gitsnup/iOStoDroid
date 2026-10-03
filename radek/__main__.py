@@ -19,10 +19,17 @@ def main():
             "--authorized", action="store_true", help="confirm ownership/permission to convert this IPA"
         )
         p.add_argument("--debug-key", type=Path)
+        p.add_argument(
+            "--target-abi",
+            choices=("auto", "arm64-v8a", "armeabi-v7a"),
+            default="auto",
+            help="Android native ABI; auto preserves ARM64 input and emits ARM32 APKs for ARMv6/ARMv7-only IPAs",
+        )
     p = sub.add_parser("validate")
     p.add_argument("apk", type=Path)
     p.add_argument("--package", required=True)
     p.add_argument("--entry", required=True)
+    p.add_argument("--abi", choices=("arm64-v8a", "armeabi-v7a"), default="arm64-v8a")
     p.add_argument(
         "--converter-app",
         action="store_true",
@@ -32,12 +39,21 @@ def main():
     try:
         if args.command == "validate":
             result = validate_apk(
-                args.apk, Toolchain.discover(), args.package, args.entry, not args.converter_app
+                args.apk,
+                Toolchain.discover(),
+                args.package,
+                args.entry,
+                not args.converter_app,
+                expected_abi=args.abi,
             )
             print(json.dumps(result, indent=2))
             return 0
         result = Pipeline(args.output).run(
-            args.ipa, args.authorized, args.command == "analyze", args.debug_key
+            args.ipa,
+            args.authorized,
+            args.command == "analyze",
+            args.debug_key,
+            args.target_abi,
         )
         print(
             json.dumps(

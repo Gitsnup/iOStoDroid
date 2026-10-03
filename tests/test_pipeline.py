@@ -24,7 +24,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(report["conversion"]["backend"], "preserved-arm64")
         self.assertEqual(report["icon"]["status"], "SUPPORTED")
         self.assertFalse(list((self.root / "job").glob("job-*")))
-        self.assertFalse((self.root / "job/RadekiOSConventor-debug.apk").exists())
+        self.assertFalse((self.root / "job/input.apk").exists())
         self.assertEqual(json.loads((self.root / "job/report.json").read_text())["state"], "PARTIAL")
 
     def test_unused_framework_dependency_needs_no_stub(self):
@@ -126,7 +126,7 @@ class PipelineTests(unittest.TestCase):
         with patch("radek.pipeline.Toolchain.discover", side_effect=RuntimeError("no SDK")):
             result = self.run_fixture()
         self.assertEqual(result["state"], "FAILED")
-        self.assertFalse((self.root / "job/RadekiOSConventor-debug.apk").exists())
+        self.assertFalse((self.root / "job/input.apk").exists())
 
     def test_embedded_framework_graph(self):
         main = macho(dependencies=["@executable_path/Frameworks/Embedded.framework/Embedded"])
@@ -158,11 +158,12 @@ class PipelineTests(unittest.TestCase):
         result = self.run_fixture(fat([macho(cpu=12, subtype=9), macho()]), analyze_only=True)
         self.assertEqual(result["selectedArchitecture"], "arm64")
 
-    def test_armv6_and_thumb_plans_are_offline_arm64(self):
+    def test_armv6_and_thumb_plans_select_32bit_android_abi(self):
         arm_mode = self.run_fixture(macho(cpu=12, subtype=6), analyze_only=True)
         self.assertEqual(arm_mode["state"], "PARTIAL")
         self.assertEqual(arm_mode["selectedArchitecture"], "armv6")
-        self.assertEqual(arm_mode["conversion"]["backend"], "offline-arm32-to-arm64")
+        self.assertEqual(arm_mode["conversion"]["backend"], "offline-arm32-to-arm32")
+        self.assertEqual(arm_mode["targetAbi"], "armeabi-v7a")
 
         thumb_source = ipa(
             self.root / "thumb.ipa",
@@ -171,14 +172,15 @@ class PipelineTests(unittest.TestCase):
         thumb_mode = Pipeline(self.root / "job-thumb").run(thumb_source, True, analyze_only=True)
         self.assertEqual(thumb_mode["state"], "PARTIAL")
         self.assertEqual(thumb_mode["selectedArchitecture"], "armv6")
-        self.assertEqual(thumb_mode["conversion"]["outputBytes"], 8)
+        self.assertEqual(thumb_mode["conversion"]["outputBytes"], 4)
 
-    def test_thumb_plan_is_offline_arm64(self):
+    def test_thumb_plan_is_offline_arm32_abi(self):
         result = self.run_fixture(
             macho(struct.pack("<HH", 0x202A, 0x4770), cpu=12, subtype=9, thumb=True), analyze_only=True
         )
-        self.assertEqual(result["conversion"]["backend"], "offline-arm32-to-arm64")
-        self.assertEqual(result["conversion"]["outputBytes"], 8)
+        self.assertEqual(result["conversion"]["backend"], "offline-arm32-to-arm32")
+        self.assertEqual(result["targetAbi"], "armeabi-v7a")
+        self.assertEqual(result["conversion"]["outputBytes"], 4)
 
     def test_invalid_state_transition(self):
         p = Pipeline(self.root / "job")

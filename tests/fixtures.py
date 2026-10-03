@@ -151,6 +151,7 @@ def ipa(path: Path, executable=None, binary=True, extra=None, icon=True):
         "CFBundleDisplayName": "Native Fixture",
         "CFBundleVersion": "1",
         "CFBundleShortVersionString": "1.0",
+        "MinimumOSVersion": "8.0",
         "CFBundleIcons": {"CFBundlePrimaryIcon": {"CFBundleIconFiles": ["AppIcon"]}},
     }
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as z:

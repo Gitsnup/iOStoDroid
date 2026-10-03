@@ -15,9 +15,23 @@ from .archive import InputError, safe_name
 from .resources import fallback_icon
 from .dex import classes as dex_classes
 
-ARTIFACT = "RadekiOSConventor-debug.apk"
+# Kept as a fallback for callers without a source filename. Converted results
+# use artifact_filename(source) so the APK keeps the imported IPA's basename.
+ARTIFACT = "ConvertedIPA.apk"
 BUILD_TOOLS = "35.0.0"
 NDK_VERSION = "27.2.12479018"
+
+
+def artifact_filename(source_name: str | Path) -> str:
+    """Return a safe `<IPA stem>.apk` output name derived from the input filename."""
+    name = str(source_name).replace("\\", "/").rsplit("/", 1)[-1]
+    if name.lower().endswith(".ipa"):
+        stem = name[:-4]
+    else:
+        stem = name.rsplit(".", 1)[0] if "." in name else name
+    safe = "".join(ch if ch.isalnum() or ch in " ._-" else "_" for ch in stem)
+    safe = safe.strip(" ._-")[:80].strip(" ._-") or "ConvertedIPA"
+    return f"{safe}.apk"
 
 
 def run(args: list[str | Path], log=None, timeout=180) -> str:
@@ -40,6 +54,7 @@ class Toolchain:
     build: Path
     platform: Path
     clang: Path
+    arm32_clang: Path
 
     @classmethod
     def discover(cls):
@@ -49,16 +64,16 @@ class Toolchain:
         sdk = Path(home)
         build = sdk / "build-tools" / BUILD_TOOLS
         platform = sdk / "platforms/android-35/android.jar"
-        clang = (
-            sdk / f"ndk/{NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
-        )
-        for path in (platform, clang, *(build / name for name in ("aapt2", "d8", "zipalign", "apksigner"))):
+        prebuilt = sdk / f"ndk/{NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        clang = prebuilt / "aarch64-linux-android26-clang"
+        arm32_clang = prebuilt / "armv7a-linux-androideabi26-clang"
+        for path in (platform, clang, arm32_clang, *(build / name for name in ("aapt2", "d8", "zipalign", "apksigner"))):
             if not path.is_file():
                 raise RuntimeError("missing toolchain file: " + str(path))
         for tool in ("java", "javac", "keytool"):
             if not shutil.which(tool):
                 raise RuntimeError("Java 17 JDK tool missing: " + tool)
-        return cls(sdk, build, platform, clang)
+        return cls(sdk, build, platform, clang, arm32_clang)
 
     def tool(self, name):
         return self.build / name
@@ -109,6 +124,8 @@ def build_apk(
     tools: Toolchain,
     key: Path,
     log=None,
+    target_abi: str = "arm64-v8a",
+    thumb: bool = False,
 ) -> dict:
     work.mkdir(parents=True, exist_ok=False)
     package = "dev.radek.converted.p" + metadata["sha256"][:20]
@@ -149,17 +166,37 @@ public final class MainActivity extends Activity {
     res.mkdir(parents=True)
     (res / "app_icon.png").write_bytes(icon or fallback_icon())
     assembly = work / "converted.S"
-    words = struct.unpack("<" + "I" * (len(machine_code) // 4), machine_code)
-    assembly.write_text(
-        ".text\n.p2align 2\n.global Java_dev_radek_generated_MainActivity_runNative\n.type Java_dev_radek_generated_MainActivity_runNative, %function\n"
-        + "Java_dev_radek_generated_MainActivity_runNative:\n"
-        + "".join(f"  .inst 0x{w:08x}\n" for w in words)
-        + '.size Java_dev_radek_generated_MainActivity_runNative, .-Java_dev_radek_generated_MainActivity_runNative\n.section .note.GNU-stack,"",%progbits\n'
-    )
+    symbol = "Java_dev_radek_generated_MainActivity_runNative"
+    if target_abi == "arm64-v8a":
+        if len(machine_code) % 4:
+            raise InputError("ARM64 entry code is not word aligned")
+        words = struct.unpack("<" + "I" * (len(machine_code) // 4), machine_code)
+        assembly_text = (
+            ".text\n.p2align 2\n.global " + symbol + "\n.type " + symbol + ", %function\n"
+            + symbol + ":\n"
+            + "".join(f"  .inst 0x{word:08x}\n" for word in words)
+            + f'.size {symbol}, .-{symbol}\n.section .note.GNU-stack,"",%progbits\n'
+        )
+        native_clang = tools.clang
+    elif target_abi == "armeabi-v7a":
+        if len(machine_code) % (2 if thumb else 4):
+            raise InputError("ARM32 entry code is not instruction aligned")
+        mode = ".thumb\n.thumb_func\n" if thumb else ".arm\n"
+        alignment = ".p2align 1\n" if thumb else ".p2align 2\n"
+        octets = ",".join(f"0x{byte:02x}" for byte in machine_code)
+        assembly_text = (
+            ".syntax unified\n.text\n" + mode + alignment + ".global " + symbol
+            + "\n.type " + symbol + ", %function\n" + symbol + ":\n"
+            + "  .byte " + octets + f'\n.size {symbol}, .-{symbol}\n.section .note.GNU-stack,"",%progbits\n'
+        )
+        native_clang = tools.arm32_clang
+    else:
+        raise InputError("unsupported native APK ABI: " + target_abi)
+    assembly.write_text(assembly_text, encoding="utf-8")
     native = work / "libconverted.so"
     run(
         [
-            tools.clang,
+            native_clang,
             "-shared",
             "-fPIC",
             "-nostdlib",
@@ -198,6 +235,7 @@ public final class MainActivity extends Activity {
                 "package": package,
                 "source": metadata,
                 "conversion": report["conversion"],
+                "targetAbi": target_abi,
                 "resourceInventory": report["resources"],
                 "contract": "closed-integer-entry-v1",
             },
@@ -228,7 +266,7 @@ public final class MainActivity extends Activity {
     )
     with zipfile.ZipFile(unsigned, "a", compression=zipfile.ZIP_DEFLATED) as z:
         z.write(dex / "classes.dex", "classes.dex")
-        z.write(native, "lib/arm64-v8a/libconverted.so")
+        z.write(native, f"lib/{target_abi}/libconverted.so")
     run([tools.tool("zipalign"), "-f", "-P", "16", "4", unsigned, aligned], log)
     key = development_key(key, log)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -250,43 +288,74 @@ public final class MainActivity extends Activity {
         ],
         log,
     )
-    return {"package": package, "entryPoint": "dev.radek.generated.MainActivity", "apk": str(output)}
+    return {"package": package, "entryPoint": "dev.radek.generated.MainActivity", "apk": str(output), "abi": target_abi}
 
 
 def elf_info(data: bytes) -> dict:
-    if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01":
-        raise InputError("native library is not ELF64 little-endian")
-    etype, machine = struct.unpack_from("<HH", data, 16)
-    if etype != 3 or machine != 183:
-        raise InputError("native library is not Android ARM64 ET_DYN")
-    offset = struct.unpack_from("<Q", data, 32)[0]
-    stride, count = struct.unpack_from("<HH", data, 54)
-    if stride != 56 or not count or count > 1024 or offset + count * stride > len(data):
+    """Inspect the native ABI, dynamic dependencies, and exported JNI entry."""
+    if len(data) < 52 or data[:4] != b"\x7fELF" or data[5] != 1:
+        raise InputError("native library is not little-endian ELF")
+    elf_class = data[4]
+    if elf_class not in (1, 2):
+        raise InputError("unsupported ELF class")
+    is_64 = elf_class == 2
+    header_size = 64 if is_64 else 52
+    ph_stride_expected = 56 if is_64 else 32
+    sh_stride_expected = 64 if is_64 else 40
+    symbol_stride_expected = 24 if is_64 else 16
+    dynamic_stride = 16 if is_64 else 8
+    e_type, machine = struct.unpack_from("<HH", data, 16)
+    if is_64:
+        if len(data) < 64 or machine != 183:
+            raise InputError("native library is not Android ARM64")
+        phoff = struct.unpack_from("<Q", data, 32)[0]
+        shoff = struct.unpack_from("<Q", data, 40)[0]
+        ph_stride, ph_count = struct.unpack_from("<HH", data, 54)
+        sh_stride, sh_count = struct.unpack_from("<HH", data, 58)
+    else:
+        if machine != 40:
+            raise InputError("native library is not Android ARM32")
+        phoff = struct.unpack_from("<I", data, 28)[0]
+        shoff = struct.unpack_from("<I", data, 32)[0]
+        ph_stride, ph_count = struct.unpack_from("<HH", data, 42)
+        sh_stride, sh_count = struct.unpack_from("<HH", data, 46)
+    if e_type != 3:
+        raise InputError("native library is not ELF ET_DYN")
+    if (
+        ph_stride != ph_stride_expected
+        or not ph_count
+        or ph_count > 1024
+        or phoff + ph_count * ph_stride > len(data)
+    ):
         raise InputError("malformed ELF program headers")
+
     loads, dynamic = [], None
     executable = False
-    for i in range(count):
-        kind, flags, off, va, _, filesz, memsz, align = struct.unpack_from(
-            "<IIQQQQQQ", data, offset + i * stride
-        )
-        if off + filesz > len(data) or filesz > memsz:
+    for index in range(ph_count):
+        offset = phoff + index * ph_stride
+        if is_64:
+            kind, flags, file_offset, vaddr, _, filesz, memsz, _ = struct.unpack_from("<IIQQQQQQ", data, offset)
+        else:
+            kind, file_offset, vaddr, _, filesz, memsz, flags, _ = struct.unpack_from("<IIIIIIII", data, offset)
+        if file_offset + filesz > len(data) or filesz > memsz:
             raise InputError("ELF segment outside file")
         if kind == 1:
             if flags & 3 == 3:
                 raise InputError("writable executable ELF segment")
             executable |= bool(flags & 1)
-            loads.append((va, off, filesz))
+            loads.append((vaddr, file_offset, filesz))
         if kind == 2:
-            dynamic = (off, filesz)
+            dynamic = (file_offset, filesz)
         if kind == 0x6474E551 and flags & 1:
             raise InputError("executable native stack")
     if not executable or dynamic is None:
         raise InputError("ELF has no code or dynamic loader information")
+
     tags = {}
-    for off in range(dynamic[0], dynamic[0] + dynamic[1], 16):
-        if off + 16 > dynamic[0] + dynamic[1]:
+    for offset in range(dynamic[0], dynamic[0] + dynamic[1], dynamic_stride):
+        if offset + dynamic_stride > dynamic[0] + dynamic[1]:
             raise InputError("truncated ELF dynamic table")
-        tag, value = struct.unpack_from("<qQ", data, off)
+        tag, value = struct.unpack_from("<qQ" if is_64 else "<iI", data, offset)
         if tag == 0:
             break
         tags.setdefault(tag, []).append(value)
@@ -296,56 +365,61 @@ def elf_info(data: bytes) -> dict:
             raise InputError("ELF missing string table")
         address, size = tags[5][0], tags[10][0]
         mapping = next(
-            (
-                (base, off, length)
-                for base, off, length in loads
-                if base <= address and address + size <= base + length
-            ),
+            ((base, offset, length) for base, offset, length in loads
+             if base <= address and address + size <= base + length),
             None,
         )
         if mapping is None:
             raise InputError("ELF strings not mapped")
-        base, off, _ = mapping
-        table = data[off + address - base : off + address - base + size]
+        base, offset, _ = mapping
+        table = data[offset + address - base : offset + address - base + size]
         for index in tags[1]:
             end = table.find(b"\x00", index)
             if index >= size or end < 0:
                 raise InputError("invalid ELF dependency")
             needed.append(table[index:end].decode("ascii"))
-    # Independently inspect the dynamic symbol table, including the JNI entry.
-    section_offset = struct.unpack_from("<Q", data, 40)[0]
-    section_stride, section_count = struct.unpack_from("<HH", data, 58)
+
     if (
-        section_stride != 64
-        or not section_count
-        or section_count > 65535
-        or section_offset + section_count * 64 > len(data)
+        sh_stride != sh_stride_expected
+        or not sh_count
+        or sh_count > 65535
+        or shoff + sh_count * sh_stride > len(data)
     ):
         raise InputError("missing/malformed ELF section table")
-    sections = [
-        struct.unpack_from("<IIQQQQIIQQ", data, section_offset + i * 64) for i in range(section_count)
-    ]
+    sections = []
+    for index in range(sh_count):
+        offset = shoff + index * sh_stride
+        sections.append(
+            struct.unpack_from("<IIQQQQIIQQ" if is_64 else "<IIIIIIIIII", data, offset)
+        )
     exports, undefined = {}, []
     for section in sections:
-        _, kind, _, _, off, size, link, _, _, stride = section
+        _, kind, _, _, offset, size, link, _, _, stride = section
         if kind != 11:
             continue
         if (
-            stride != 24
-            or size % 24
-            or size // 24 > 200000
-            or off + size > len(data)
-            or link >= section_count
+            stride != symbol_stride_expected
+            or size % symbol_stride_expected
+            or size // symbol_stride_expected > 200000
+            or offset + size > len(data)
+            or link >= sh_count
         ):
             raise InputError("invalid ELF dynamic symbols")
         strings = sections[link]
         if strings[1] != 3 or strings[4] + strings[5] > len(data):
             raise InputError("invalid ELF dynamic strings")
         table = data[strings[4] : strings[4] + strings[5]]
-        for sym in range(off + 24, off + size, 24):
-            index, info, visibility, shndx, address, length = struct.unpack_from("<IBBHQQ", data, sym)
+        for symbol_offset in range(offset + symbol_stride_expected, offset + size, symbol_stride_expected):
+            if is_64:
+                index, info, visibility, shndx, address, length = struct.unpack_from(
+                    "<IBBHQQ", data, symbol_offset
+                )
+            else:
+                index, address, length, info, visibility, shndx = struct.unpack_from(
+                    "<IIIBBH", data, symbol_offset
+                )
             end = table.find(b"\x00", index)
-            if end < 0 or end - index > 4096:
+            if index >= len(table) or end < 0 or end - index > 4096:
                 raise InputError("invalid ELF symbol name")
             name = table[index:end].decode("utf-8", errors="strict")
             if info >> 4 not in (1, 2):
@@ -354,27 +428,34 @@ def elf_info(data: bytes) -> dict:
                 undefined.append(name)
             elif visibility & 3 in (0, 3):
                 item = {"address": address, "size": length, "type": info & 15}
+                code_address = address & ~1 if machine == 40 else address
                 mapping = next(
-                    (
-                        (base, start)
-                        for base, start, amount in loads
-                        if base <= address and address + length <= base + amount
-                    ),
+                    ((base, file_offset) for base, file_offset, amount in loads
+                     if base <= code_address and code_address + length <= base + amount),
                     None,
                 )
                 if mapping is not None and length:
                     import hashlib
-
-                    base, start = mapping
+                    base, file_offset = mapping
                     item["sha256"] = hashlib.sha256(
-                        data[start + address - base : start + address - base + length]
+                        data[file_offset + code_address - base : file_offset + code_address - base + length]
                     ).hexdigest()
                 exports[name] = item
-    return {"architecture": "arm64-v8a", "needed": needed, "exports": exports, "undefinedSymbols": undefined}
-
+    return {
+        "architecture": "arm64-v8a" if is_64 else "armeabi-v7a",
+        "needed": needed,
+        "exports": exports,
+        "undefinedSymbols": undefined,
+    }
 
 def validate_apk(
-    path: Path, tools: Toolchain, expected_package: str, expected_entry: str, converted: bool = True, log=None
+    path: Path,
+    tools: Toolchain,
+    expected_package: str,
+    expected_entry: str,
+    converted: bool = True,
+    log=None,
+    expected_abi: str = "arm64-v8a",
 ) -> dict:
     if not path.is_file() or not 0 < path.stat().st_size <= 512 * 1024 * 1024:
         raise InputError("APK is missing/empty")
@@ -403,18 +484,17 @@ def validate_apk(
             raise InputError("Android entry class is absent from DEX definitions")
         if z.read("AndroidManifest.xml")[:2] != b"\x03\x00":
             raise InputError("APK manifest is not compiled binary XML")
+        if expected_abi not in ("arm64-v8a", "armeabi-v7a"):
+            raise InputError("unsupported expected APK ABI: " + expected_abi)
+        native_names = [name for name in names if name.startswith("lib/") and name.endswith(".so")]
         libraries = {
             name.rsplit("/", 1)[-1]: elf_info(z.read(name))
-            for name in names
-            if name.startswith("lib/arm64-v8a/") and name.endswith(".so")
+            for name in native_names
+            if name.startswith(f"lib/{expected_abi}/")
         }
         if not libraries:
-            raise InputError("APK has no ARM64 native libraries")
-        if any(
-            name.startswith("lib/") and not name.startswith("lib/arm64-v8a/")
-            for name in names
-            if name.endswith(".so")
-        ):
+            raise InputError(f"APK has no {expected_abi} native libraries")
+        if any(not name.startswith(f"lib/{expected_abi}/") for name in native_names):
             raise InputError("unexpected native architecture")
         android_system = {
             "libc.so",
@@ -437,12 +517,15 @@ def validate_apk(
             if (
                 metadata.get("package") != expected_package
                 or metadata.get("contract") != "closed-integer-entry-v1"
+                or metadata.get("targetAbi") != expected_abi
             ):
-                raise InputError("conversion metadata/package mismatch")
+                raise InputError("conversion metadata/package/ABI mismatch")
             conversion = metadata.get("conversion", {})
             if not conversion.get("outputBytes"):
                 raise InputError("missing reconstruction provenance")
             native = libraries["libconverted.so"]
+            if native["architecture"] != expected_abi:
+                raise InputError("native ELF architecture does not match APK ABI path")
             entry = native["exports"].get("Java_dev_radek_generated_MainActivity_runNative")
             if (
                 entry is None
@@ -482,6 +565,7 @@ def validate_apk(
     run([tools.tool("zipalign"), "-c", "-P", "16", "4", path], log)
     return {
         "status": "PASSED",
+        "abi": expected_abi,
         "checks": [
             "structure",
             "binary-manifest",
@@ -489,7 +573,7 @@ def validate_apk(
             "launcher",
             "DEX-integrity-and-entry",
             "signing",
-            "ARM64-ELF",
+            "ARM64-ELF" if expected_abi == "arm64-v8a" else "ARM32-ELF",
             "dependencies",
             "resources",
             "icon",

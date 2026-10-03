@@ -23,12 +23,15 @@ A dependency that is merely linked is **never** reported as blocked: only reacha
 The reconstruction is an engineering artifact and is never claimed to be original source;
 reconstructed code is never executed.
 
-## Two distinct APKs
+## APK outputs
 
-1. **Converter/importer app:** the Actions artifact `RadekiOSConventor-debug.apk` contains the Android library/import UI and native analyzer. The UI does not include an on-device SDK/NDK or compile IPAs on the phone.
-2. **Standalone converted program:** `python3 -m radek convert ...` produces a separate `RadekiOSConventor-debug.apk` containing reconstructed **ARM64 Android ELF code**, DEX launcher, icon and bundle resources. It does not ship the IPA, Mach-O executable, an emulator, interpreter, runtime translator or converter. The currently supported entry contract returns an integer; the Android launcher displays that result. It does **not** recreate an iOS application's UI.
+1. **Converter/importer app:** the Actions artifact `RadekiOSConventor-debug.apk` contains the Android library/import UI and native analyzer. It has no on-device SDK/NDK or general game-conversion backend.
+2. **Standalone converted program (host-only, narrow subset):** `python3 -m radek convert <game.ipa> ...` produces `<game>.apk` with a DEX launcher and the selected native ABI. ARM64 inputs produce `arm64-v8a`; proven ARMv6/ARMv7 leaf inputs produce a 32-bit `armeabi-v7a` APK. It preserves the icon and bounded bundle resources, but does **not** recreate a game's UI or general gameplay.
+3. **On-device game-icon APK:** each imported IPA automatically attempts to produce a signed `<ipa-basename>.apk`. Its Android launcher icon is replaced with the recovered IPA icon. The stub includes metadata and bounded allowlisted non-executable bundle assets (up to 64 MiB), not the original IPA or native code. It can show basic metadata/resource previews, but it is not a playable game. Force rebuilds it and opens Android's installer.
 
-CI uploads the second APK separately as `standalone-native-fixture` to avoid confusing the products.
+CI uploads the importer APK and restricted standalone fixture separately to avoid confusing the products.
+
+The Android library reports conservative Bionic symbol-name candidates separately from executable game code. Import automatically analyzes the IPA and shows step-based workflow progress plus **playable Android code emitted: 0%**. API-name candidates and APK packaging progress are not conversion/playability scores. When enabled in Settings, import also attempts to build a signed, IPA-named **icon-branded APK** with bounded non-executable assets; it omits the IPA and executable code. The red **Force convert to .apk** action explains the limitation, displays live packaging progress, and opens Android's installer. This app-side output remains a nonplayable stub. The Linux host converter can emit a 32-bit `armeabi-v7a` APK for a proven ARM32 integer-leaf subset; ordinary ARMv6/ARMv7 games with framework calls, branches, memory access or runtime needs remain blocked. Broad iOS API/runtime translation and arbitrary game conversion remain unimplemented.
 
 ## Build, test, edit
 
@@ -49,14 +52,16 @@ With the documented Linux Android toolchain installed:
 ```sh
 python3 tools/make_fixture.py --arch arm64 --output .local/fixture.ipa
 python3 -m radek convert .local/fixture.ipa --authorized --output workspace/fixture
-# workspace/fixture/RadekiOSConventor-debug.apk
+# workspace/fixture/fixture.apk
 ```
 
-`--arch armv6`, `armv7`, `armv7s`, `thumb`, and `thumb2` exercise **offline ARM32 → ARM64 lowering** for the proven closed integer leaf subset. This does not make general ARMv6 games (which commonly depend on UIKit, graphics, audio, input and runtime services) compatible. The fixtures are generated synthetic Mach-O programs, not installable signed iOS apps. The resulting native routine returns 42.
+`--arch armv6`, `armv7`, `armv7s`, `thumb`, and `thumb2` exercise the proven ARM32 integer-leaf path. ARM32-only fixtures are packaged with a 32-bit `armeabi-v7a` native library; use `--target-abi arm64-v8a` to request a lowered ARM64 artifact where supported. This is not general game conversion: branches, memory access, framework APIs and game runtimes remain blocked. The synthetic fixtures are not signed iOS apps and their native routine only returns 42. `armeabi-v7a` requires Android devices that support 32-bit ARM apps and does not mean compatibility with ARMv6-only hardware.
 
 Icons are recovered through a generic fallback chain (Info.plist names, `@2x`/`@3x`/`~ipad`
 variants, compiled `Assets.car` renditions, then other bundle images) with every attempt
-recorded; the recovered icon becomes the generated APK's launcher icon.
+recorded. The Android library uses the same architecture-independent plist/scale/asset-catalog
+fallback ordering for its displayed game icon; recovered host icons become the generated APK's
+launcher icon.
 
 For authorized real IPAs, `analyze` reads actual metadata/dependencies without attempting to decrypt or execute the input:
 

@@ -56,15 +56,22 @@ class Program:
     blocks: list[Block]
     machine_code: bytes
     source_size: int
+    target_abi: str = "arm64-v8a"
+    thumb: bool = False
 
     def report(self):
+        backend = "preserved-arm64" if self.architecture == "arm64" else (
+            "offline-arm32-to-arm32" if self.target_abi == "armeabi-v7a" else "offline-arm32-to-arm64"
+        )
         return {
             "architecture": self.architecture,
+            "targetAbi": self.target_abi,
+            "thumbMode": self.thumb,
             "blocks": [asdict(b) for b in self.blocks],
             "sourceBytes": self.source_size,
             "outputBytes": len(self.machine_code),
             "machineCodeSha256": hashlib.sha256(self.machine_code).hexdigest(),
-            "backend": "preserved-arm64" if self.architecture == "arm64" else "offline-arm32-to-arm64",
+            "backend": backend,
         }
 
 
@@ -87,9 +94,15 @@ def _emit(i: Instruction) -> bytes:
     return b"".join(struct.pack("<I", w) for w in words)
 
 
-def lift(code: bytes, architecture: str, thumb: bool = False) -> Program:
+def lift(code: bytes, architecture: str, thumb: bool = False, target_abi: str = "arm64-v8a") -> Program:
     if architecture not in ("arm64", "armv7", "armv7s", "armv6"):
         raise Unsupported("no safe backend for " + architecture)
+    if target_abi not in ("arm64-v8a", "armeabi-v7a"):
+        raise Unsupported("unsupported Android target ABI: " + target_abi)
+    if architecture == "arm64" and target_abi != "arm64-v8a":
+        raise Unsupported("ARM64 input cannot be preserved as 32-bit ARM instructions")
+    if architecture != "arm64" and target_abi == "armeabi-v7a" and architecture not in ("armv6", "armv7", "armv7s"):
+        raise Unsupported("unsupported ARM32 source architecture")
     instructions, initialized, output = [], set(), bytearray()
     p = 0
     while p < len(code) and len(instructions) < 4096:
@@ -176,10 +189,13 @@ def lift(code: bytes, architecture: str, thumb: bool = False) -> Program:
                 raise Unsupported(
                     f"Thumb instruction 0x{w:04x} at +0x{start:x} is unsupported (branches/IT require a future CFG backend)"
                 )
-        # ARM32 SP/LR/PC and ARM64 platform/callee-saved registers never cross the ABI.
-        limit = 16 if architecture == "arm64" else 13
-        if i.dst is not None and not 0 <= i.dst < limit:
-            raise Unsupported("special/platform/callee-saved register write")
+        # Keep the backend inside caller-saved register sets. ARM64 x0-x15 are
+        # caller-saved; on AAPCS32 only r0-r3 and r12 are caller-saved.
+        allowed_registers = set(range(16)) if architecture == "arm64" else set(range(4)) | {12}
+        if i.dst is not None and i.dst not in allowed_registers:
+            raise Unsupported("special/callee-saved/platform register write")
+        if i.src is not None and i.src not in allowed_registers:
+            raise Unsupported("special/callee-saved/platform register read")
         if i.op == Op.INSERT and i.dst not in initialized:
             raise Unsupported("read of uninitialized register")
         if i.src is not None and i.src not in initialized:
@@ -189,7 +205,10 @@ def lift(code: bytes, architecture: str, thumb: bool = False) -> Program:
         if i.dst is not None:
             initialized.add(i.dst)
         instructions.append(i)
-        output.extend(code[start:p] if architecture == "arm64" else _emit(i))
+        if architecture == "arm64" or target_abi == "armeabi-v7a":
+            output.extend(code[start:p])
+        else:
+            output.extend(_emit(i))
         if i.op == Op.RETURN:
-            return Program(architecture, [Block(0, instructions)], bytes(output), p)
+            return Program(architecture, [Block(0, instructions)], bytes(output), p, target_abi, thumb)
     raise Unsupported("entry point does not terminate within 4096 verified instructions")

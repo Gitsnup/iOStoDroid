@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
-from radek.apk import Toolchain, elf_info, validate_apk, ARTIFACT
+from radek.apk import Toolchain, artifact_filename, elf_info, validate_apk
 from radek.archive import InputError
 from radek.pipeline import Pipeline
 from .fixtures import ipa, macho
@@ -23,9 +23,23 @@ class ELFTests(unittest.TestCase):
         with self.assertRaises(InputError):
             elf_info(b)
 
+    def test_elf32_arm_library_is_recognized_as_armeabi_v7a(self):
+        data = bytearray(0x200 + 40)
+        data[:16] = b"\x7fELF\x01\x01\x01" + bytes(9)
+        struct.pack_into("<HHIIIIIHHHHHH", data, 16, 3, 40, 1, 0, 52, 0x200, 0, 52, 32, 2, 40, 1, 0)
+        struct.pack_into("<IIIIIIII", data, 52, 1, 0x100, 0x1000, 0, 16, 16, 5, 0x1000)
+        struct.pack_into("<IIIIIIII", data, 84, 2, 0x120, 0x1020, 0, 8, 8, 4, 4)
+        struct.pack_into("<iI", data, 0x120, 0, 0)
+        self.assertEqual(elf_info(bytes(data))["architecture"], "armeabi-v7a")
+
     def test_missing_apk_rejected_before_tools(self):
         with self.assertRaises(InputError):
             validate_apk(Path("/not-an-apk"), None, "p", "entry")
+
+    def test_output_apk_name_uses_sanitized_ipa_basename(self):
+        self.assertEqual(artifact_filename("/imports/My Game.ipa"), "My Game.apk")
+        self.assertEqual(artifact_filename(r"C:\\imports\\bad:name.ipa"), "bad_name.apk")
+        self.assertEqual(artifact_filename("...ipa"), "ConvertedIPA.apk")
 
     def test_incomplete_apk_rejected(self):
         with tempfile.TemporaryDirectory() as d:
@@ -57,10 +71,13 @@ class AndroidIntegrationTests(unittest.TestCase):
         result = Pipeline(self.root / name).run(source, True, key=self.key)
         self.assertEqual(result["state"], "READY", result.get("error") or result.get("blockers"))
         self.assertEqual(result["validation"]["status"], "PASSED")
-        output = self.root / name / ARTIFACT
+        output = self.root / name / artifact_filename(source.name)
         self.assertTrue(output.is_file())
+        abi = result["output"]["abi"]
+        self.assertEqual(abi, result["targetAbi"])
         with zipfile.ZipFile(output) as z:
-            native = z.read("lib/arm64-v8a/libconverted.so")
+            native = z.read(f"lib/{abi}/libconverted.so")
+            self.assertEqual(elf_info(native)["architecture"], abi)
             self.assertEqual(elf_info(native)["needed"], [])
             self.assertNotIn("assets/bundle/Fixture", z.namelist())
             self.assertIn("assets/bundle/config.json", z.namelist())
@@ -97,7 +114,8 @@ class AndroidIntegrationTests(unittest.TestCase):
         ]
         for name, binary in cases:
             with self.subTest(name=name):
-                self.convert(name, binary)
+                _, report = self.convert(name, binary)
+                self.assertEqual(report["targetAbi"], "armeabi-v7a")
 
     def test_tampered_apk_signature_rejected(self):
         original, report = self.convert("tamper-source", macho())

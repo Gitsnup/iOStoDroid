@@ -2,6 +2,7 @@ package dev.radek.conventor
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -14,6 +15,16 @@ object NativeBridge {
 }
 
 enum class ConversionState { IMPORTED, ANALYZING, CONVERTING, PACKAGING, VALIDATING, READY, PARTIAL, BLOCKED, FAILED }
+
+data class WorkflowProgress(val percent: Int, val stage: String, val message: String, val status: String = "RUNNING") {
+    fun toJson(): JSONObject = JSONObject()
+        .put("percent", percent.coerceIn(0, 100))
+        .put("stage", stage)
+        .put("message", message)
+        .put("status", status)
+        .put("basis", "completed workflow stages; not a playable-code percentage")
+        .put("updatedAt", java.time.Instant.now().toString())
+}
 
 /** Persistent private library. Android imports/analyzes; compilation uses the host CLI. */
 class Library(private val context: Context) {
@@ -31,37 +42,159 @@ class Library(private val context: Context) {
     fun recoverInterrupted() {
         root.listFiles().orEmpty().filter { it.isDirectory && !File(it, "report.json").isFile }.forEach { it.deleteRecursively() }
         entries().forEach { (dir, report) ->
+            var changed = false
             if (report.optString("state") in listOf("IMPORTED", "ANALYZING", "CONVERTING", "PACKAGING", "VALIDATING")) {
-                report.put("state", "FAILED").put("error", "Process ended before work completed; reimport to retry")
-                File(dir, "source.ipa").delete(); File(dir, "extracted").deleteRecursively()
-                save(dir, report)
+                val failureMessage = "Process ended before work completed; inspect the last saved stage or retry"
+                report.put("state", "FAILED").put("error", failureMessage)
+                val savedProgress = report.optJSONObject("workflowProgress")
+                val interruptedStage = savedProgress?.optString("stage")?.takeIf { it.isNotBlank() } ?: "workflow"
+                report.put("workflowProgress", WorkflowProgress(
+                    savedProgress?.optInt("percent", 0) ?: 0,
+                    "Interrupted during $interruptedStage",
+                    failureMessage,
+                    "FAILED",
+                ).toJson())
+                File(dir, "extracted").deleteRecursively()
+                val savedHash = report.optJSONObject("source")?.optString("sha256").orEmpty()
+                if (!savedHash.matches(Regex("[0-9a-f]{64}"))) File(dir, "source.ipa").delete()
+                changed = true
             }
+            val forced = report.optJSONObject("forceConversion")
+            if (forced?.optString("status") == "PACKAGING") {
+                forced.put("status", "FAILED").put("error", "Process stopped while building the installable game-stub APK")
+                File(dir, "${GameStubBuilder.fileName(report)}.pending").delete()
+                changed = true
+            }
+            val automatic = report.optJSONObject("automaticPackage")
+            if (automatic?.optString("status") == "PACKAGING") {
+                automatic.put("status", "FAILED").put("error", "Process stopped while building the game-stub APK")
+                File(dir, "${GameStubBuilder.fileName(report)}.pending").delete()
+                changed = true
+            }
+            if (forced?.optString("status") == "FAILED" || automatic?.optString("status") == "FAILED") {
+                val savedProgress = report.optJSONObject("workflowProgress")
+                if (savedProgress?.optString("status") == "RUNNING") {
+                    val failure = WorkflowProgress(
+                        savedProgress.optInt("percent", 0),
+                        "APK build interrupted",
+                        forced?.optString("error")?.takeIf { it.isNotBlank() }
+                            ?: automatic?.optString("error")?.takeIf { it.isNotBlank() }
+                            ?: "The APK build stopped before completion",
+                        "FAILED",
+                    )
+                    report.put("workflowProgress", failure.toJson())
+                    changed = true
+                }
+            }
+            if (forced?.optString("status") == "FAILED" || automatic?.optString("status") == "FAILED") {
+                File(dir, "game-stub-work").deleteRecursively()
+            }
+            if (changed) save(dir, report)
         }
     }
 
-    fun import(uri: Uri, progress: (String) -> Unit): Pair<File, JSONObject> {
+    private fun sourceDetails(uri: Uri): Pair<String, Long?> {
+        val details = try {
+            context.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) null else {
+                    val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    val name = if (nameColumn >= 0) cursor.getString(nameColumn) else null
+                    val size = if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) cursor.getLong(sizeColumn) else null
+                    name to size
+                }
+            }
+        } catch (_: Exception) { null }
+        val name = details?.first?.takeIf { it.isNotBlank() }
+            ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: "converted.ipa"
+        return name to details?.second?.takeIf { it > 0 }
+    }
+
+    fun import(uri: Uri, progress: (WorkflowProgress) -> Unit): Pair<File, JSONObject> {
+        val (originalName, declaredSize) = sourceDetails(uri)
         val dir = File(root, "${System.currentTimeMillis()}-${UUID.randomUUID()}").apply { check(mkdir()) }
         val events = JSONArray()
         val report = JSONObject().put("schemaVersion", 1).put("authorizationConfirmed", true).put("events", events)
+        val source = File(dir, "source.ipa")
+        var sourceReady = false
+        var currentPercent = 0
+        var lastStage = "Import"
+        var lastMessage = "Preparing IPA import"
+        fun updateProgress(percent: Int, stage: String, message: String, status: String = "RUNNING") {
+            val next = maxOf(currentPercent, percent.coerceIn(0, 100))
+            if (next == currentPercent && stage == lastStage && message == lastMessage && status == report.optJSONObject("workflowProgress")?.optString("status")) return
+            currentPercent = next
+            lastStage = stage
+            lastMessage = message
+            val snapshot = WorkflowProgress(currentPercent, stage, message, status)
+            report.put("workflowProgress", snapshot.toJson())
+            save(dir, report)
+            progress(snapshot)
+        }
         fun log(state: ConversionState, message: String) {
             report.put("state", state.name)
             val event = JSONObject().put("time", java.time.Instant.now().toString()).put("stage", state.name).put("message", message)
             events.put(event); File(dir, "conversion.jsonl").appendText(event.toString() + "\n")
-            save(dir, report); progress(message)
+            save(dir, report)
+            val stagePercent = when (state) {
+                ConversionState.IMPORTED -> 1
+                ConversionState.ANALYZING -> 32
+                ConversionState.CONVERTING -> 65
+                ConversionState.PACKAGING -> 75
+                ConversionState.VALIDATING -> 92
+                ConversionState.READY -> 100
+                ConversionState.PARTIAL, ConversionState.BLOCKED -> 65
+                ConversionState.FAILED -> currentPercent
+            }
+            val status = when (state) {
+                ConversionState.FAILED -> "FAILED"
+                ConversionState.BLOCKED -> "BLOCKED"
+                ConversionState.PARTIAL -> "ANALYSIS_COMPLETE"
+                else -> "RUNNING"
+            }
+            updateProgress(stagePercent, state.name.lowercase().replaceFirstChar { it.uppercase() }, message, status)
         }
         try {
             log(ConversionState.IMPORTED, "Copying selected IPA into isolated private storage")
-            val source = File(dir, "source.ipa")
             val digest = MessageDigest.getInstance("SHA-256")
             context.contentResolver.openInputStream(uri).use { input ->
                 requireNotNull(input) { "cannot open selected document" }
                 source.outputStream().use { output ->
-                    val buffer = ByteArray(65536); var total = 0L
-                    while (true) { val n = input.read(buffer); if (n < 0) break; total += n; require(total <= SafeZip.MAX_ARCHIVE) { "IPA exceeds 512 MiB" }; digest.update(buffer, 0, n); output.write(buffer, 0, n) }
+                    val buffer = ByteArray(65536)
+                    var total = 0L
+                    var lastReport = 0L
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        require(total <= SafeZip.MAX_ARCHIVE) { "IPA exceeds 512 MiB" }
+                        digest.update(buffer, 0, count)
+                        output.write(buffer, 0, count)
+                        if (total - lastReport >= 1024 * 1024 || (declaredSize != null && total >= declaredSize)) {
+                            val percent = declaredSize?.let { (1 + total * 10 / it).toInt().coerceIn(1, 11) } ?: currentPercent
+                            updateProgress(percent, "Copying IPA", "Copied ${total / (1024 * 1024)} MiB of the source file")
+                            lastReport = total
+                        }
+                    }
                 }
             }
             val hash = digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
-            SafeZip.extract(source, File(dir, "extracted")) { done, total -> if (done == total || done % 100 == 0) progress("Extracted $done / $total archive entries") }
+            report.put("source", JSONObject().put("path", "source.ipa").put("originalName", originalName)
+                .put("sha256", hash).put("bytes", source.length()))
+            save(dir, report)
+            sourceReady = true
+            updateProgress(12, "Source verified", "Copied ${source.length() / (1024 * 1024)} MiB and calculated the IPA SHA-256")
+            SafeZip.extract(source, File(dir, "extracted")) { done, total ->
+                val percent = if (total > 0) 12 + (done * 18 / total) else 30
+                updateProgress(percent, "Extracting IPA", "Validated $done of $total archive entries")
+            }
             log(ConversionState.ANALYZING, "Reading Info.plist and application icon")
             val apps = File(dir, "extracted/Payload").listFiles().orEmpty().filter { it.isDirectory && it.name.endsWith(".app") }
             require(apps.size == 1) { "expected exactly one Payload/*.app" }
@@ -72,9 +205,11 @@ class Library(private val context: Context) {
             require(SafeZip.validateName(executable) == executable && '/' !in executable)
             val bundle = plist["CFBundleIdentifier"] as? String ?: error("CFBundleIdentifier missing")
             require(bundle.isNotBlank())
+            val minimumIOSVersion = (plist["MinimumOSVersion"] as? String)?.takeIf { it.isNotBlank() }.orEmpty()
             report.put("application", JSONObject().put("name", plist["CFBundleDisplayName"] ?: plist["CFBundleName"] ?: executable)
                 .put("bundleId", bundle).put("version", plist["CFBundleShortVersionString"] ?: "")
-                .put("build", plist["CFBundleVersion"] ?: "").put("executable", executable).put("fileSize", source.length()).put("sha256", hash))
+                .put("build", plist["CFBundleVersion"] ?: "").put("executable", executable)
+                .put("minimumIOSVersion", minimumIOSVersion).put("fileSize", source.length()).put("sha256", hash))
             val names = mutableListOf<String>()
             for (key in listOf("CFBundleIcons", "CFBundleIcons~ipad")) {
                 val icons = plist[key] as? Map<*, *>
@@ -86,11 +221,25 @@ class Library(private val context: Context) {
             (plist["CFBundleIconFile"] as? String)?.let { names.add(it) }
             val iconReport = extractIcon(app, names, dir)
             report.put("icon", iconReport)
+            updateProgress(40, "Bundle assets", if (iconReport.optString("status") == "SUPPORTED") "Recovered the game's launcher icon" else "No compatible icon could be decoded")
+            val stubContent = try {
+                StubContent.collect(app, dir, executable) { done, total ->
+                    val percent = if (total > 0) 41 + (done * 3 / total) else 44
+                    updateProgress(percent, "Safe bundle content", "Checking $done of $total resources for non-executable content")
+                }
+            } catch (resourceError: Exception) {
+                JSONObject().put("status", "UNAVAILABLE").put("fileCount", 0).put("bytes", 0)
+                    .put("notice", "Safe resource copy failed: ${resourceError.message}")
+            }
+            report.put("stubContent", stubContent)
+            updateProgress(44, "Bundle content", "Cached ${stubContent.optInt("fileCount", 0)} allowed non-executable resource file(s)")
             val binary = File(app, executable)
             require(binary.isFile && binary.length() <= 64 * 1024 * 1024) { "Missing executable or exceeds the on-device 64 MiB analysis limit; use the host analyzer for larger files" }
+            updateProgress(44, "Mach-O analysis", "Reading architecture, symbols, imports and loader metadata")
             log(ConversionState.ANALYZING, "Parsing Mach-O load commands, symbols, fixups and dependencies")
             val macho = JSONObject(NativeBridge.analyze(binary.readBytes()))
             report.put("machO", macho)
+            updateProgress(53, "Mach-O analysis", "Primary executable analysis completed")
             val graph = JSONArray(); val nodes = JSONArray()
             var encrypted = false; var incompatible = false
             var hasCandidate = false
@@ -121,6 +270,17 @@ class Library(private val context: Context) {
                 }
             }
             report.put("dependencies", JSONObject().put("nodes", nodes).put("edges", graph))
+            updateProgress(57, "Dependencies", "Scanned ${nodes.length()} Mach-O image(s) and ${graph.length()} linked dependency edge(s)")
+            val apiMapping = AndroidApiMapper.analyze(nodes)
+            report.put("apiMapping", apiMapping)
+            updateProgress(62, "Conversion assessment", "API candidates inventoried; no game code is emitted by the on-device backend")
+            report.put("portProgress", JSONObject()
+                .put("percent", 0)
+                .put("status", "NO_RUNNABLE_ANDROID_CODE_BUILT")
+                .put("basis", "On-device importer analyzed the IPA but emitted no Android executable code; this is actual output progress, not a stability prediction."))
+            log(ConversionState.ANALYZING,
+                "Inventoried ${apiMapping.getInt("distinctImportSymbols")} unique imported API symbols; " +
+                    "${apiMapping.getInt("mappedNameCandidates")} have a same-named Bionic candidate. This is not binary/API conversion.")
             val reason = when {
                 encrypted -> "Protected/encrypted Mach-O. Conversion prohibited; no DRM or FairPlay bypass."
                 !hasCandidate -> "No supported ARM64/ARMv7/ARMv6 slice. ARM64e PAC reconstruction is blocked."
@@ -133,7 +293,8 @@ class Library(private val context: Context) {
             report.put("error", "${e.javaClass.simpleName}: ${e.message}")
             log(ConversionState.FAILED, e.message ?: "Import failed")
         } finally {
-            File(dir, "source.ipa").delete(); File(dir, "extracted").deleteRecursively()
+            if (!sourceReady) source.delete()
+            File(dir, "extracted").deleteRecursively()
         }
         return dir to report
     }
@@ -142,7 +303,8 @@ class Library(private val context: Context) {
 /** Icon suffixes, highest scale first: the best available representation wins. */
 private val ICON_SUFFIXES = listOf(
     "@3x.png", "@2x.png", ".png", "@3x~ipad.png", "@2x~ipad.png", "~ipad.png",
-    "@3x~iphone.png", "@2x~iphone.png", "~iphone.png", "", "@3x.jpg", "@2x.jpg", ".jpg"
+    "@3x~iphone.png", "@2x~iphone.png", "~iphone.png",
+    "@3x.jpg", "@2x.jpg", ".jpg", "@3x.jpeg", "@2x.jpeg", ".jpeg", ""
 )
 private const val ICON_MAX_BYTES = 16L * 1024 * 1024
 private const val ICON_TARGET = 512
@@ -166,15 +328,110 @@ internal fun extractIcon(app: File, names: List<String>, dir: File): JSONObject 
         val key = file.relativeTo(app).path.lowercase(java.util.Locale.ROOT)
         if (seen.add(key)) candidates.add(file)
     }
-    for (name in names) {
+
+    // Info.plist names are authoritative. If a name includes an extension, try
+    // scale variants of its basename (Icon.png -> Icon@3x.png) before the exact
+    // fallback. This also keeps icon choice independent of the Mach-O CPU slices.
+    for (rawName in names) {
+        val name = rawName.trim()
+        if (name.isEmpty()) continue
         SafeZip.validateName(name) // fail closed on traversal or absolute names
-        for (suffix in ICON_SUFFIXES) addCandidate(File(app, name + suffix))
+        val lower = name.lowercase(java.util.Locale.ROOT)
+        val extension = listOf(".png", ".jpg", ".jpeg").firstOrNull { lower.endsWith(it) }
+        val base = if (extension == null) name else name.dropLast(extension.length)
+        for (suffix in ICON_SUFFIXES) addCandidate(File(app, base + suffix))
+        addCandidate(File(app, name))
     }
-    // A declared icon is only a preference: games often ship a broken/unsupported
-    // plist rendition alongside a perfectly usable loose PNG/JPEG. Always try the
-    // ranked bundle fallback after declared candidates, not only when names are absent.
+
+    fun saveBitmap(
+        bitmap: android.graphics.Bitmap,
+        source: String,
+        format: String,
+        decoder: String,
+        scale: Double,
+        kind: String,
+    ): JSONObject {
+        val width = bitmap.width
+        val height = bitmap.height
+        File(dir, "icon.png").outputStream().use {
+            require(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) { "cannot save recovered icon" }
+        }
+        bitmap.recycle()
+        return JSONObject().put("status", "SUPPORTED")
+            .put("source", source).put("path", "icon.png").put("kind", kind)
+            .put("format", format).put("decoder", decoder)
+            .put("width", width).put("height", height).put("scale", scale)
+            .put("reason", "Decoded bundle icon ($source, ${width}x${height})")
+            .put("attempts", attempts)
+    }
+
+    fun tryFiles(files: List<File>): JSONObject? {
+        for (candidate in files.take(48)) {
+            val relative = candidate.relativeTo(app).path
+            if (candidate.length() > ICON_MAX_BYTES) {
+                attempt(relative, false, "image exceeds size limit")
+                continue
+            }
+            val applePng = IconDecoder.isCgbi(candidate)
+            val bitmap = try { IconDecoder.decode(candidate, ICON_TARGET) } catch (_: Exception) { null }
+            if (bitmap == null) {
+                attempt(relative, false, "unsupported or corrupt image; tried Android PNG/JPEG and Apple CgBI decoders")
+                continue
+            }
+            attempt(relative, true, if (applePng) "decoded and normalized Apple CgBI channel order/alpha" else "decoded image", bitmap.width, bitmap.height)
+            val scale = when { "@3x" in candidate.name -> 3.0; "@2x" in candidate.name -> 2.0; else -> 1.0 }
+            val format = when {
+                applePng -> "cgbi-png"
+                candidate.name.endsWith(".jpeg", true) -> "jpeg"
+                candidate.name.endsWith(".jpg", true) -> "jpeg"
+                else -> "png"
+            }
+            val decoder = if (applePng) "radek-cgbi+android.graphics.Bitmap" else "android.graphics.BitmapFactory"
+            return saveBitmap(bitmap, relative, format, decoder, scale, "file")
+        }
+        return null
+    }
+
+    // Prefer the explicit bundle icon, but tolerate a broken or missing file.
+    // This pass occurs before reading the executable, so arm32, arm64 and FAT
+    // archives all follow the same icon path.
+    tryFiles(candidates)?.let { return it }
+
+    // Modern iOS games commonly keep their only app icon in a compiled asset
+    // catalog. Try it before arbitrary bundle textures/screenshots.
+    val preferred = names.firstOrNull()?.substringBeforeLast('.', names.firstOrNull().orEmpty())
+    val catalogs = app.walkTopDown().filter {
+        it.isFile && (it.name.equals("Assets.car", ignoreCase = true) || it.extension.equals("car", ignoreCase = true))
+    }.sortedWith(compareBy<File>({ if (it.name.equals("Assets.car", ignoreCase = true)) 0 else 1 }, { it.path }))
+    for (catalog in catalogs.take(8)) {
+        val extracted = AssetCatalogIcon.extract(catalog, preferred, ICON_TARGET)
+        val prefix = catalog.relativeTo(app).path
+        for (item in extracted.attempts) {
+            attempt("$prefix:${item.asset}", item.ok, item.detail)
+        }
+        if (extracted.bitmap != null) {
+            val source = extracted.asset ?: prefix
+            attempt(source, true, "decoded compiled asset-catalog rendition", extracted.bitmap.width, extracted.bitmap.height)
+            return saveBitmap(
+                extracted.bitmap,
+                source,
+                extracted.format ?: "asset-catalog-image",
+                "assetcatalog+android.graphics.Bitmap",
+                extracted.scale,
+                "assets.car",
+            )
+        }
+        attempt(prefix, false, extracted.error ?: "no usable icon rendition")
+    }
+
+    // Some games ship the launch artwork as an unlisted loose resource. Rank
+    // icon-like filenames above backgrounds and generic textures, then try all
+    // image files. `iTunesArtwork` is often extensionless, so the decoder sniffs
+    // its actual file signature rather than trusting the suffix.
     val fallbackImages = app.walkTopDown()
-        .filter { it.isFile && it.extension.lowercase() in setOf("png", "jpg", "jpeg") }
+        .filter {
+            it.isFile && (it.extension.lowercase() in setOf("png", "jpg", "jpeg") || it.name.equals("iTunesArtwork", true))
+        }
         .sortedWith(compareBy<File>({
             val lower = it.name.lowercase()
             when {
@@ -183,63 +440,11 @@ internal fun extractIcon(app: File, names: List<String>, dir: File): JSONObject 
                 "artwork" in lower || "logo" in lower -> 2
                 else -> 3
             }
-        }, { -it.length() }))
-    for (file in fallbackImages) addCandidate(file)
+        }, { -it.length() }, { it.path }))
+    tryFiles(fallbackImages)?.let { return it }
 
-    var best: Pair<File, android.graphics.Bitmap>? = null
-    var bestPixels = 0
-    var bestScale = 0
-    var bestDecoder = "android.graphics.BitmapFactory"
-    for (candidate in candidates.take(48)) {
-        val relative = candidate.relativeTo(app).path
-        if (candidate.length() > ICON_MAX_BYTES) { attempt(relative, false, "image exceeds size limit"); continue }
-        var decodeError: String? = null
-        val decoded: Pair<Boolean, android.graphics.Bitmap?> = try {
-            IconDecoder.isCgbi(candidate) to IconDecoder.decode(candidate, ICON_TARGET)
-        } catch (e: Exception) {
-            decodeError = e.message
-            false to null
-        }
-        val applePng = decoded.first
-        val bitmap = decoded.second
-        if (bitmap == null) {
-            attempt(relative, false, decodeError?.let { "image decoder rejected candidate: $it" } ?: "unsupported or corrupt image; tried PNG/JPEG and Apple CgBI decoders")
-            continue
-        }
-        val pixels = bitmap.width * bitmap.height
-        val scale = when { "@3x" in candidate.name -> 3; "@2x" in candidate.name -> 2; else -> 1 }
-        val decoder = if (applePng) "radek-cgbi+android.graphics.Bitmap" else "android.graphics.BitmapFactory"
-        attempt(relative, true, if (applePng) "decoded and normalized Apple CgBI channel order/alpha" else "decoded", bitmap.width, bitmap.height)
-        if (pixels > bestPixels || (pixels == bestPixels && scale > bestScale)) {
-            best?.second?.recycle()
-            best = candidate to bitmap
-            bestPixels = pixels
-            bestScale = scale
-            bestDecoder = decoder
-        } else bitmap.recycle()
-    }
-    val chosen = best
-    if (chosen == null) {
-        return JSONObject().put("status", "UNAVAILABLE")
-            .put("reason", "Icon unavailable: no decodable icon image was found in this bundle")
-            .put("decoder", "android.graphics.BitmapFactory")
-            .put("attempts", attempts)
-    }
-    val (file, bitmap) = chosen
-    val width = bitmap.width
-    val height = bitmap.height
-    File(dir, "icon.png").outputStream().use { require(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
-    val scale = when { "@3x" in file.name -> 3.0; "@2x" in file.name -> 2.0; else -> 1.0 }
-    val detail = "Decoded bundle icon (${file.relativeTo(app).path}, ${width}x${height})"
-    bitmap.recycle()
-    return JSONObject().put("status", "SUPPORTED")
-        .put("source", file.relativeTo(app).path)
-        .put("path", "icon.png")
-        .put("kind", "file")
-        .put("format", file.extension.lowercase())
-        .put("decoder", bestDecoder)
-        .put("width", width).put("height", height)
-        .put("scale", scale)
-        .put("reason", detail)
+    return JSONObject().put("status", "UNAVAILABLE")
+        .put("reason", "Icon unavailable: no decodable icon image was found in the bundle")
+        .put("decoder", "android.graphics.BitmapFactory")
         .put("attempts", attempts)
 }

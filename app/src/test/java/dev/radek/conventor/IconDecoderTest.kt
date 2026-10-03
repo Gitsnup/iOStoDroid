@@ -14,6 +14,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
+private fun be32(value: Int) = ByteBuffer.allocate(4).order(java.nio.ByteOrder.BIG_ENDIAN).putInt(value).array()
+private fun le16(value: Int) = ByteBuffer.allocate(2).order(java.nio.ByteOrder.LITTLE_ENDIAN).putShort(value.toShort()).array()
+private fun le32(value: Int) = ByteBuffer.allocate(4).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(value).array()
+
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], manifest = Config.NONE)
 class IconDecoderTest {
@@ -61,6 +65,89 @@ class IconDecoderTest {
         }
     }
 
+    private class CarBuilder {
+        private val blocks = mutableListOf(byteArrayOf())
+        private val variables = mutableListOf<Pair<String, Int>>()
+
+        fun add(value: ByteArray): Int { blocks += value; return blocks.lastIndex }
+        fun variable(name: String, index: Int) { variables += name to index }
+
+        fun tree(entries: List<Pair<ByteArray, ByteArray>>): Int {
+            val leaf = ByteArrayOutputStream().apply {
+                write(ByteBuffer.allocate(12).order(java.nio.ByteOrder.BIG_ENDIAN)
+                    .putShort(1).putShort(entries.size.toShort()).putInt(0).putInt(0).array())
+                entries.forEach { (key, value) ->
+                    val keyIndex = this@CarBuilder.add(key)
+                    val valueIndex = this@CarBuilder.add(value)
+                    write(be32(keyIndex)); write(be32(valueIndex))
+                }
+            }.toByteArray()
+            val leafIndex = add(leaf)
+            return add("tree".toByteArray() + ByteBuffer.allocate(16).order(java.nio.ByteOrder.BIG_ENDIAN)
+                .putInt(1).putInt(leafIndex).putInt(4096).putInt(entries.size).array() + byteArrayOf(0))
+        }
+
+        fun build(): ByteArray {
+            val indexSize = 4 + 8 * blocks.size
+            val variableSize = 4 + variables.sumOf { 5 + it.first.toByteArray().size }
+            val dataStart = 32 + indexSize + variableSize
+            val offsets = mutableListOf<Pair<Int, Int>>()
+            val payload = ByteArrayOutputStream()
+            blocks.forEach { block ->
+                val offset = if (block.isEmpty()) 0 else dataStart + payload.size()
+                offsets.add(offset to block.size)
+                payload.write(block)
+                while (payload.size() % 4 != 0) payload.write(0)
+            }
+            val output = ByteArrayOutputStream()
+            output.write("BOMStore".toByteArray())
+            output.write(ByteBuffer.allocate(24).order(java.nio.ByteOrder.BIG_ENDIAN)
+                .putInt(1).putInt(blocks.size).putInt(32).putInt(indexSize).putInt(32 + indexSize).putInt(variableSize).array())
+            output.write(be32(blocks.size))
+            offsets.forEach { (offset, length) -> output.write(be32(offset)); output.write(be32(length)) }
+            output.write(be32(variables.size))
+            variables.forEach { (name, index) ->
+                val bytes = name.toByteArray()
+                output.write(be32(index)); output.write(bytes.size); output.write(bytes)
+            }
+            output.write(payload.toByteArray())
+            return output.toByteArray()
+        }
+    }
+
+    private fun assetCatalog(iconPng: ByteArray, backgroundPng: ByteArray): ByteArray {
+        val builder = CarBuilder()
+        fun rendition(asset: String, id: Int, png: ByteArray): Pair<ByteArray, ByteArray> {
+            val key = le16(0x55) + le16(0xb5) + le16(3) + le16(id)
+            val header = ByteArray(184)
+            "ISTC".toByteArray().copyInto(header)
+            ByteBuffer.wrap(header).order(java.nio.ByteOrder.LITTLE_ENDIAN).apply {
+                position(4); putInt(1); putInt(0); putInt(8); putInt(8); putInt(300); putInt(0x47425241); putInt(1)
+                position(36); putShort(0)
+                position(40); put(asset.toByteArray().copyOf(127))
+                position(168); putInt(0); putInt(0); putInt(0); putInt(png.size)
+            }
+            return key to (header + png)
+        }
+        val renditionTree = builder.tree(listOf(
+            rendition("AppIcon.png", 0x8019, iconPng),
+            rendition("Background.png", 0x1234, backgroundPng),
+        ))
+        fun facet(id: Int) = le16(0) + le16(0) + le16(3) + le16(1) + le16(0x55) +
+            le16(2) + le16(0xb5) + le16(16) + le16(id)
+        val facetTree = builder.tree(listOf("AppIcon".toByteArray() to facet(0x8019), "Background".toByteArray() to facet(0x1234)))
+        val carHeader = ByteArray(436); "CTAR".toByteArray().copyInto(carHeader)
+        ByteBuffer.wrap(carHeader).order(java.nio.ByteOrder.LITTLE_ENDIAN).apply {
+            position(4); putInt(804); putInt(17); putInt(1700000000); putInt(2); putInt(0)
+        }
+        builder.variable("CARHEADER", builder.add(carHeader))
+        builder.variable("KEYFORMAT", builder.add("kfmt".toByteArray() + le32(1) + le32(4) + le32(1) + le32(2) + le32(11) + le32(16)))
+        builder.variable("RENDITIONS", renditionTree)
+        builder.variable("FACETKEYS", facetTree)
+        return builder.build()
+    }
+
+
     @Test fun decodesCgbiRawDeflateAndRestoresStraightAlpha() {
         val bitmap = IconDecoder.decodeCgbi(cgbiPng(), 512)
         try {
@@ -68,6 +155,46 @@ class IconDecoderTest {
             assertEquals(Color.argb(128, 128, 64, 32), bitmap.getPixel(0, 0))
         } finally {
             bitmap.recycle()
+        }
+    }
+
+    @Test fun declaredScaledAppIconWinsOverLargerLooseTexture() {
+        val root = createTempDir(prefix = "radek-icon-priority-test")
+        try {
+            val app = File(root, "Fixture.app").apply { mkdirs() }
+            File(app, "AppIcon.png").writeBytes(byteArrayOf(1, 2, 3))
+            File(app, "AppIcon@2x.png").writeBytes(platformPng(Color.MAGENTA))
+            File(app, "Background.png").writeBytes(platformPng(Color.BLACK))
+            val output = File(root, "result").apply { mkdirs() }
+
+            val result = extractIcon(app, listOf("AppIcon.png"), output)
+
+            assertEquals("SUPPORTED", result.getString("status"))
+            assertEquals("AppIcon@2x.png", result.getString("source"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test fun compiledAssetCatalogProvidesTheGameIcon() {
+        val root = createTempDir(prefix = "radek-car-icon-test")
+        try {
+            val app = File(root, "Fixture.app").apply { mkdirs() }
+            File(app, "Assets.car").writeBytes(assetCatalog(platformPng(Color.MAGENTA), platformPng(Color.BLACK)))
+            val output = File(root, "result").apply { mkdirs() }
+
+            val result = extractIcon(app, listOf("AppIcon"), output)
+
+            assertEquals("SUPPORTED", result.getString("status"))
+            assertEquals("assets.car", result.getString("kind"))
+            assertTrue(result.getString("source").contains("AppIcon"))
+            assertTrue(result.getJSONArray("attempts").length() >= 1)
+            val saved = BitmapFactory.decodeFile(File(output, "icon.png").path)
+            assertNotNull(saved)
+            assertEquals(Color.MAGENTA, saved!!.getPixel(0, 0))
+            saved.recycle()
+        } finally {
+            root.deleteRecursively()
         }
     }
 

@@ -11,7 +11,7 @@ sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.
 sdkmanager --licenses
 ```
 
-The host packager currently supports Linux x86_64 toolchains. The generated APKs target Android 8.0+ ARM64 devices. No iPhone, macOS, server, iOS runtime or emulator is required by the output.
+The host packager currently supports Linux x86_64 toolchains. It emits Android 8.0+ `arm64-v8a` APKs for ARM64 inputs and can emit `armeabi-v7a` APKs for the restricted ARM32 leaf subset. ARM32 APKs require a device that still supports 32-bit ARM apps; this is not ARMv6-device compatibility. No iPhone, macOS, server, iOS runtime or emulator is required by the output.
 
 ```sh
 python3 tools/build_native.py
@@ -33,9 +33,13 @@ ctest --test-dir native/build --output-on-failure
 
 ## Import on Android
 
-Install the importer APK, tap **+ ADD IPA**, confirm authorization and select a document. The library persists inside app-private storage. Details include real bundle name/version/identifier, decoded icon where possible, architectures, import size, dependency blockers, raw JSON report and logs. Extraction progress reports actual completed/total entries, never invented percentages. Restarted incomplete jobs become FAILED.
+Install the importer APK, tap **+ ADD IPA**, confirm authorization and select a document. The library persists inside app-private storage; the source IPA stays private until the entry is deleted and is **never copied into the generated APK**. Import starts analysis automatically and shows workflow-stage progress. With the default Settings option enabled, it then attempts to build an IPA-named, signed APK whose launcher icon is the recovered IPA icon. The stub can include metadata and up to 64 MiB of allowlisted non-executable bundle resources; it excludes the original IPA and Mach-O code and is not a playable game. Details include real bundle name/version/identifier, declared `MinimumOSVersion` when present, recovered icon and method, architectures, API-name candidates, blockers, full JSON report and logs. The UI separates workflow completion from actual runnable game-code output (currently 0% on device); symbol candidates are not a conversion score. Extraction progress reports real archive entries. Restarted jobs become FAILED with their last recorded progress.
 
-The phone is an importer/analyzer; it is **not** currently an on-device native compiler. Transfer the original authorized input to the Linux host and run the CLI below. Attach the resulting APK to its matching library entry; source SHA-256/package identity must match. Android's installer verifies signing before installing. APK attachment does not falsely change the original analysis state to READY.
+The **Force convert to .apk** action shows a clear nonplayable disclaimer, displays live build stages/percentage, and launches Android's installer after signing and verification. Its percentage measures workflow steps, not a prediction of compatibility or playability. Settings control automatic stub creation, detailed live steps, host ABI preference and APK-install permission.
+
+The host CLI can emit a 32-bit `armeabi-v7a` APK for ARMv6/ARMv7 inputs that pass its closed integer-leaf proof; `--target-abi arm64-v8a` requests ARM64 lowering instead. This only handles verified straight-line immediate arithmetic and return instructions. Ordinary ARM games remain blocked when they require calls, branches, memory, frameworks or game-runtime services. `armeabi-v7a` requires a device that supports 32-bit ARM apps; it is not ARMv6-only hardware compatibility.
+
+The phone is an importer/analyzer; it is **not** currently an on-device native compiler or general game converter. The automatic `<picked-ipa-name>.apk` is a signed, installable icon-branded stub; its launcher icon is the recovered IPA icon and its APK omits the source IPA and gameplay. It opens to a small information screen and is not playable. The red **Force convert to .apk** action rebuilds that stub and opens Android's package installer, which requires the user to confirm. Transfer the original authorized input to the Linux host and run the CLI below for the restricted verified leaf-conversion path; its output is also named after the IPA. Attach a host-built APK to its matching library entry; source SHA-256/package identity must match. APK attachment does not falsely change the original analysis state to READY.
 
 ## Native conversion
 
@@ -47,16 +51,16 @@ python3 -m radek convert .local/test.ipa --authorized --output workspace/test
 The workspace must not already exist. `report.json` and `conversion.jsonl` contain real steps and tool outputs. READY is only emitted after static APK validation. Runtime device execution is recorded separately as NOT_TESTED, not implied by static validation.
 
 ```sh
-python3 -m radek validate workspace/test/RadekiOSConventor-debug.apk \
+python3 -m radek validate workspace/test/test.apk \
   --package dev.radek.converted.p<SOURCE_SHA256_FIRST_20_HEX> \
   --entry dev.radek.generated.MainActivity
 ```
 
-Read the exact package from `report.json`. `adb install -r <apk>` installs the result on a physical ARM64 Android device. The native synthetic entry returns 42 and logs `RadekNative: native entry returned 42`.
+Read the exact package and ABI from `report.json`. `adb install -r <apk>` installs the result on an ABI-compatible Android device. ARM32-only source fixtures use `armeabi-v7a`; that ABI is not available on ARM64-only devices. The synthetic native entry returns 42 and logs `RadekNative: native entry returned 42`.
 
 ## Development signing
 
-The host creates `.local/signing/debug.keystore` on first use and reuses it. A configurable persistent development key can be supplied with `--debug-key`. Alias `androiddebugkey`, passwords `android`, RSA-2048, development-only certificate. This is a reproducible **configuration and reusable identity**, not a promise of bit-for-bit reproducible newly generated keys or APKs. A clean machine generates a different key; preserve your development key outside Git if updates must retain signing identity. Gradle uses its standard development signing key for the importer. Never use these keys/passwords for production.
+The host creates `.local/signing/debug.keystore` on first use and reuses it. A configurable persistent development key can be supplied with `--debug-key`. Alias `androiddebugkey`, passwords `android`, RSA-2048, development-only certificate. This is a reproducible **configuration and reusable identity**, not a promise of bit-for-bit reproducible newly generated keys or APKs. A clean machine generates a different key; preserve your development key outside Git if updates must retain signing identity. Gradle uses its standard development signing key for the importer and game-stub template APKs; the importer embeds this key so it can sign generated stubs locally. Never distribute a release build with this key or use these keys/passwords for production.
 
 ## CI
 

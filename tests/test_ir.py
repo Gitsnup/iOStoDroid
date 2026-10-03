@@ -15,6 +15,23 @@ class IRTests(unittest.TestCase):
         code = struct.pack("<III", 0xE3A00028, 0xE2800002, 0xE12FFF1E)
         self.assertEqual(lift(code, "armv7").machine_code, expected)
 
+    def test_arm32_direct_backend_preserves_safe_code_and_reports_abi(self):
+        code = struct.pack("<II", 0xE3A0002A, 0xE12FFF1E)
+        program = lift(code, "armv6", target_abi="armeabi-v7a")
+        self.assertEqual(program.machine_code, code)
+        self.assertEqual(program.report()["targetAbi"], "armeabi-v7a")
+        self.assertEqual(program.report()["backend"], "offline-arm32-to-arm32")
+
+        thumb_code = struct.pack("<HH", 0x202A, 0x4770)
+        thumb = lift(thumb_code, "armv6", True, "armeabi-v7a")
+        self.assertEqual(thumb.machine_code, thumb_code)
+        self.assertTrue(thumb.thumb)
+
+    def test_arm32_callee_saved_register_writes_are_rejected(self):
+        code = struct.pack("<III", 0xE3A0402A, 0xE3A0002A, 0xE12FFF1E)
+        with self.assertRaisesRegex(Unsupported, "callee-saved"):
+            lift(code, "armv7", target_abi="armeabi-v7a")
+
     def test_armv6_offline_lowering(self):
         code = struct.pack("<II", 0xE3A0002A, 0xE12FFF1E)
         self.assertEqual(lift(code, "armv6").machine_code, struct.pack("<II", 0x52800540, 0xD65F03C0))

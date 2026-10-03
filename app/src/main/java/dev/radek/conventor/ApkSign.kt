@@ -172,7 +172,7 @@ object ApkSign {
         return seq(tbs, seq(oid(SHA256_RSA), nullTag()), bitString(signer.sign(tbs)))
     }
 
-    /** `META-INF/*.RSA`: PKCS#7 SignedData over the `META-INF/*.SF` bytes. */
+    /** PKCS#7 SignedData over the JAR signature file (the `META-INF` .RSA member). */
     fun pkcs7(identity: Identity, data: ByteArray): ByteArray {
         val algorithm = seq(oid(OID_SHA256), nullTag())
         val signerInfo = seq(

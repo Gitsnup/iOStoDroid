@@ -200,8 +200,9 @@ class ConverterTest {
             file.writeBytes(writer.finish())
             ZipFile(file).use { zip ->
                 for ((name, data) in entries) {
-                    val entry = zip.getEntry(name) ?: fail("missing $name")
-                    assertArrayEquals(data, zip.getInputStream(entry).readBytes())
+                    val entry = zip.getEntry(name)
+                    assertNotNull("missing $name", entry)
+                    assertArrayEquals(data, zip.getInputStream(entry!!).readBytes())
                 }
                 assertEquals(entries.size, zip.entries().toList().size)
             }
@@ -243,20 +244,22 @@ class ConverterTest {
                 assertNotNull(zip.getEntry("META-INF/MANIFEST.MF"))
                 assertNotNull(zip.getEntry("META-INF/RADEK.SF"))
                 assertNotNull(zip.getEntry("META-INF/RADEK.RSA"))
-                val manifestText = zip.getInputStream(zip.getEntry("META-INF/MANIFEST.MF")).readBytes()
+                val manifestText = zip.getInputStream(zip.getEntry("META-INF/MANIFEST.MF")!!).readBytes()
                     .toString(Charsets.UTF_8)
                 assertTrue(manifestText.startsWith("Manifest-Version: 1.0"))
                 assertTrue(manifestText.contains("Name: AndroidManifest.xml"))
                 assertTrue(manifestText.contains("SHA-256-Digest: " +
                     java.util.Base64.getEncoder().encodeToString(sha256(manifest))))
-                val signature = zip.getInputStream(zip.getEntry("META-INF/RADEK.SF")).readBytes()
+                val signature = zip.getInputStream(zip.getEntry("META-INF/RADEK.SF")!!).readBytes()
                     .toString(Charsets.UTF_8)
                 // Rollback protection: a v1+v2 APK must advertise scheme 2.
                 assertTrue(signature.contains("X-Android-APK-Signed: 2"))
                 assertTrue(signature.contains("SHA-256-Digest-Manifest: " +
                     java.util.Base64.getEncoder().encodeToString(sha256(manifestText.toByteArray()))))
                 for ((name, data) in entries) {
-                    assertArrayEquals(data, zip.getInputStream(zip.getEntry(name)).readBytes())
+                    val entry = zip.getEntry(name)
+                    assertNotNull("missing $name", entry)
+                    assertArrayEquals(data, zip.getInputStream(entry!!).readBytes())
                 }
             }
 

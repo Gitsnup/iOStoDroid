@@ -51,7 +51,9 @@ tasks.register("bundleRuntimeDex") {
     group = "build"
     description = "Compiles the converted-app runtime into assets/runtime.dex"
     dependsOn("compileDebugJavaWithJavac")
-    val assetsDir = layout.buildDirectory.dir("generated/runtimeAssets/assets")
+    // This directory *is* the assets root (see sourceSets below), so the file is
+    // packaged as `assets/runtime.dex`.
+    val assetsDir = layout.buildDirectory.dir("generated/runtimeAssets")
     // AGP's javac output path is version dependent, so the runtime classes are
     // located by walking the build directory instead of a hard-coded path.
     val buildDir = layout.buildDirectory

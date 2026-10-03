@@ -1,0 +1,94 @@
+package dev.radek.conventor
+
+import java.io.File
+import java.io.RandomAccessFile
+import java.util.zip.ZipFile
+
+/** Rejects symlinks, ZIP64, encrypted members, duplicate paths and ZIP bombs. */
+object SafeZip {
+    const val MAX_ARCHIVE = 512L * 1024 * 1024
+    private const val MAX_FILE = 256L * 1024 * 1024
+    private const val MAX_TOTAL = 1024L * 1024 * 1024
+    fun validateName(name: String): String {
+        require(name.isNotEmpty() && !name.startsWith('/') && '\\' !in name && ':' !in name && '\u0000' !in name) { "unsafe ZIP path" }
+        val parts = name.trimEnd('/').split('/')
+        require(parts.size <= 32 && name.toByteArray().size <= 1024 && parts.none { it == ".." || it == "." || it.isEmpty() }) { "unsafe ZIP path" }
+        return parts.joinToString("/")
+    }
+    private fun centralDirectory(file: File) {
+        RandomAccessFile(file, "r").use { f ->
+            val length = f.length()
+            require(length >= 22 && length <= MAX_ARCHIVE) { "invalid IPA size" }
+            val tail = ByteArray(minOf(length, 65557).toInt())
+            f.seek(length - tail.size); f.readFully(tail)
+            fun u16(b: ByteArray, p: Int): Int = (b[p].toInt() and 255) or ((b[p+1].toInt() and 255) shl 8)
+            fun u32(b: ByteArray, p: Int): Long = u16(b, p).toLong() or (u16(b, p+2).toLong() shl 16)
+            val end = (tail.size - 22 downTo 0).firstOrNull { u32(tail, it) == 0x06054b50L && it + 22 + u16(tail, it + 20) == tail.size }
+                ?: error("ZIP end record missing")
+            require(u16(tail, end+4) == 0 && u16(tail, end+6) == 0) { "multi-disk ZIP unsupported" }
+            val entries = u16(tail, end+10)
+            require(entries <= 20000 && entries == u16(tail, end+8)) { "ZIP entry limit / ZIP64 unsupported" }
+            val size = u32(tail, end+12); val offset = u32(tail, end+16)
+            require(size <= 16 * 1024 * 1024 && offset + size == length - tail.size + end) { "invalid central directory / ZIP64 unsupported" }
+            f.seek(offset)
+            val header = ByteArray(46)
+            repeat(entries) {
+                require(f.filePointer + 46 <= offset + size)
+                f.readFully(header)
+                require(u32(header, 0) == 0x02014b50L) { "invalid central directory signature" }
+                require((u16(header, 8) and 1) == 0) { "encrypted ZIP prohibited" }
+                require(u16(header, 10) in listOf(0, 8)) { "unsupported ZIP compression" }
+                val kind = (u32(header, 38) shr 16).toInt() and 0xf000
+                require(kind in listOf(0, 0x8000, 0x4000)) { "ZIP links / special files prohibited" }
+                require(u32(header, 20) != 0xffffffffL && u32(header, 24) != 0xffffffffL && u32(header, 42) != 0xffffffffL) { "ZIP64 unsupported on device" }
+                val remaining = u16(header, 28) + u16(header, 30) + u16(header, 32)
+                require(f.filePointer + remaining <= offset + size)
+                f.seek(f.filePointer + remaining)
+            }
+            require(f.filePointer == offset + size)
+        }
+    }
+    fun extract(source: File, destination: File, onFile: (Int, Int) -> Unit = { _, _ -> }) {
+        require(!destination.exists()) { "workspace already exists" }
+        centralDirectory(source)
+        require(destination.mkdirs())
+        try {
+            ZipFile(source).use { zip ->
+                val entries = zip.entries().toList()
+                require(entries.size <= 20000)
+                val names = mutableSetOf<String>()
+                var total = 0L
+                entries.forEachIndexed { index, entry ->
+                    val name = validateName(entry.name)
+                    require(names.add(name.lowercase(java.util.Locale.ROOT))) { "duplicate/case-colliding ZIP path" }
+                    require(entry.size in 0..MAX_FILE && entry.compressedSize >= 0 && entry.size <= maxOf(1L, entry.compressedSize) * 250) { "ZIP expansion limit" }
+                    total += entry.size; require(total <= MAX_TOTAL) { "ZIP expanded size limit" }
+                    val target = File(destination, name)
+                    require(target.canonicalPath.startsWith(destination.canonicalPath + File.separator))
+                    if (entry.isDirectory) {
+                        require(target.isDirectory || target.mkdirs())
+                    } else {
+                        require(target.parentFile!!.isDirectory || target.parentFile!!.mkdirs())
+                        require(target.createNewFile()) { "ZIP path collision" }
+                        zip.getInputStream(entry).use { input ->
+                            target.outputStream().use { output ->
+                                val buffer = ByteArray(65536); var written = 0L
+                                val crc = java.util.zip.CRC32()
+                                while (true) {
+                                    val count = input.read(buffer); if (count < 0) break
+                                    written += count; require(written <= entry.size && written <= MAX_FILE)
+                                    crc.update(buffer, 0, count); output.write(buffer, 0, count)
+                                }
+                                require(written == entry.size && crc.value == entry.crc) { "ZIP size/CRC mismatch" }
+                            }
+                        }
+                    }
+                    onFile(index + 1, entries.size)
+                }
+            }
+        } catch (error: Throwable) {
+            destination.deleteRecursively()
+            throw error
+        }
+    }
+}

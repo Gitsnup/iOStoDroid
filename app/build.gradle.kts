@@ -25,6 +25,13 @@ android {
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/runtimeAssets"))
 }
 
+/** The compiled converted-app runtime classes, wherever AGP placed them. */
+fun runtimeClasses(root: File): Set<File> =
+    if (!root.isDirectory) emptySet()
+    else root.walkTopDown().filter { it.isFile && it.extension == "class" &&
+        (it.path.replace('\\', '/').contains("/dev/radek/generated/") ||
+            it.path.replace('\\', '/').contains("/dev/radek/runtime/")) }.toSet()
+
 /**
  * Packages the converted-app runtime (`dev.radek.generated`) as `assets/runtime.dex`
  * so a generated APK carries a real, minimal DEX instead of this application's own.
@@ -33,15 +40,18 @@ android {
  * (a stripped checkout, a host without build-tools) the converter falls back to
  * its own `classes.dex`, which contains the same runtime classes.
  */
+
 tasks.register("bundleRuntimeDex") {
     group = "build"
     description = "Compiles the converted-app runtime into assets/runtime.dex"
     dependsOn("compileDebugJavaWithJavac")
     val assetsDir = layout.buildDirectory.dir("generated/runtimeAssets/assets")
-    val classesDir = layout.buildDirectory.dir("intermediates/javac/debug/classes")
+    // AGP's javac output path is version dependent, so the runtime classes are
+    // located by pattern instead of by a hard-coded directory.
+    val classesDir = layout.buildDirectory.dir("intermediates/javac/debug")
     // The classes directory does not exist until javac has run, so it is declared
     // as an optional file collection (Gradle rejects a missing inputs.dir).
-    inputs.files(fileTree(classesDir) { include("dev/radek/generated/**") }).optional(true)
+    inputs.files(runtimeClasses(classesDir.get().asFile)).optional(true)
     // Deliberately no outputs.dir: the generated directory is a *source* of the
     // main asset set, and declaring a producer would make every asset/lint task
     // demand an implicit dependency on this one. Ordering is wired explicitly
@@ -49,7 +59,7 @@ tasks.register("bundleRuntimeDex") {
     doLast {
         val output = assetsDir.get().asFile
         try {
-            val classes = fileTree(classesDir) { include("dev/radek/generated/**") }.files
+            val classes = runtimeClasses(classesDir.get().asFile)
             if (classes.isEmpty()) {
                 logger.warn("bundleRuntimeDex: no compiled runtime classes; generated APKs will reuse classes.dex")
                 return@doLast

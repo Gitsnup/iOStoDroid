@@ -10,7 +10,7 @@ import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.Signature
 import java.security.spec.PKCS8EncodedKeySpec
-import java.security.spec.RSAPublicKeySpec
+import java.security.spec.X509EncodedKeySpec
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -129,20 +129,23 @@ object ApkSign {
         }
     }
 
-    /** Load the device identity, generating and persisting it on first use. */
+    /**
+     * Load the device identity, generating and persisting it on first use.
+     *
+     * The private key (PKCS#8), its public key (X.509 SubjectPublicKeyInfo) and the
+     * certificate are all stored, so loading never has to cast a provider-specific
+     * key class - `KeyFactory` implementations differ between Android releases.
+     */
     fun identity(directory: File): Identity {
         directory.mkdirs()
         val keyFile = File(directory, "signing.pk8")
+        val spkiFile = File(directory, "signing.spki")
         val certFile = File(directory, "signing.x509")
         val factory = KeyFactory.getInstance("RSA")
-        if (keyFile.isFile && certFile.isFile) {
+        if (keyFile.isFile && spkiFile.isFile && certFile.isFile) {
             val privateKey = factory.generatePrivate(PKCS8EncodedKeySpec(keyFile.readBytes()))
-            val certificate = certFile.readBytes()
-            val public = factory.generatePublic(RSAPublicKeySpec(
-                (privateKey as java.security.interfaces.RSAPrivateCrtKey).modulus,
-                privateKey.publicExponent
-            ))
-            return Identity(privateKey, public, certificate, public.encoded)
+            val public = factory.generatePublic(X509EncodedKeySpec(spkiFile.readBytes()))
+            return Identity(privateKey, public, certFile.readBytes(), spkiFile.readBytes())
         }
         val generator = KeyPairGenerator.getInstance("RSA")
         generator.initialize(2048)
@@ -151,6 +154,7 @@ object ApkSign {
         val pending = Identity(pair.private, pair.public, ByteArray(0), spki)
         val certificate = certificate(spki, pending)
         keyFile.writeBytes(pair.private.encoded)              // PKCS#8 DER
+        spkiFile.writeBytes(spki)
         certFile.writeBytes(certificate)
         return Identity(pair.private, pair.public, certificate, spki)
     }

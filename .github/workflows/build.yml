@@ -66,7 +66,8 @@ jobs:
               sys.exit(1)
           info = apk.getinfo("assets/runtime.dex")
           data = apk.read("assets/runtime.dex")
-          if info.file_size <= 512 or data[:4] != b"dex\n" or data[4:7] != b"035":
+          # d8 emits 035, 038 or 039 depending on its version; all are valid DEX.
+          if info.file_size <= 512 or data[:4] != b"dex\n" or data[4:7] not in (b"035", b"038", b"039"):
               print(f"::error::runtime.dex is not a usable DEX ({info.file_size} bytes, header {data[:8]!r})")
               sys.exit(1)
           print("runtime.dex:", info.file_size, "bytes, version", data[4:7].decode())

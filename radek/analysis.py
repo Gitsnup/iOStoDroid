@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from .archive import InputError
 from .resources import MACH_MAGICS
+from .arch import is_convertible, priority as arch_priority
 from .ir import Unsupported, Program, lift
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -110,16 +111,14 @@ def prove_leaf(
         raise Unsupported(
             "embedded frameworks/plugins require a native linker backend that is not implemented"
         )
-    candidates = sorted(
-        report["slices"], key=lambda s: {"arm64": 0, "armv7s": 1, "armv7": 2}.get(s["architecture"], 99)
-    )
+    candidates = sorted(report["slices"], key=lambda s: arch_priority(s["architecture"]))
     failures = []
     data = executable.read_bytes()
     for sl in candidates:
         try:
             if sl["architecture"] == "arm64e" or sl["pacRequired"]:
                 raise Unsupported("ARM64e pointer authentication stripping/re-signing is not proven safe")
-            if sl["architecture"] not in ("arm64", "armv7", "armv7s") or sl["bigEndian"]:
+            if not is_convertible(sl["architecture"]) or sl["bigEndian"]:
                 raise Unsupported("unsupported CPU/endian format")
             if sl["fileType"] != 2:
                 raise Unsupported("entry must be an MH_EXECUTE program")

@@ -82,6 +82,42 @@ class MachOTests(unittest.TestCase):
         self.assertEqual(s["imports"][0]["name"], "_malloc")
         self.assertEqual(s["imports"][0]["ordinal"], 1)
 
+    def _bind(self, stream):
+        cmd = struct.pack("<12I", 0x80000022, 48, 0, 0, 0x2000, len(stream), 0, 0, 0, 0, 0, 0)
+        return self.parse(macho(extras=[cmd], blobs={0x2000: stream}))["slices"][0]
+
+    def test_dyld_bind_address_overflow_is_reported_not_fatal(self):
+        """A overflowing bind address used to abort the whole import with an
+        IOException. The stream is now stopped, the reason recorded, and the rest
+        of the slice is still analyzed."""
+        stream = b"\x40_sym\x00\x70\x00\x90\x80" + b"\xff" * 9 + b"\x01"
+        s = self._bind(stream)
+        self.assertEqual(s["imports"][0]["name"], "_sym")
+        self.assertEqual(s["architecture"], "arm64")
+        self.assertEqual(s["fixupStreams"][0]["status"], "partial")
+        self.assertEqual(s["fixupStreams"][0]["decodedBinds"], 1)
+        reasons = [a["reason"] for a in s["fixupAnomalies"]]
+        self.assertIn("dyld bind address overflow", reasons)
+        self.assertEqual(s["fixupAnomalies"][0]["stream"], "bind")
+
+    def test_dyld_bind_outside_segment_is_reported_not_fatal(self):
+        stream = b"\x40_sym\x00\x70\xff\xff\x7f\x90"
+        s = self._bind(stream)
+        self.assertEqual(s["imports"], [])
+        self.assertEqual(s["fixupStreams"][0]["status"], "partial")
+        self.assertIn("dyld bind outside segment", [a["reason"] for a in s["fixupAnomalies"]])
+
+    def test_truncated_bind_stream_is_reported_not_fatal(self):
+        s = self._bind(b"\x40_sym\x00\x80\xff\xff")
+        self.assertEqual(s["fixupStreams"][0]["status"], "partial")
+        self.assertIn("truncated ULEB128", [a["reason"] for a in s["fixupAnomalies"]])
+
+    def test_threaded_bind_ordinals_decoded(self):
+        s = self._bind(b"\xd0\x00\x07\xd1")
+        self.assertEqual(s["fixupStreams"][0]["status"], "decoded")
+        self.assertEqual(s["fixupStreams"][0]["threadedOrdinals"], 1)
+        self.assertEqual(s["fixupAnomalies"], [])
+
     def test_chained_fixup_imports(self):
         blob = (
             struct.pack("<7I", 0, 28, 32, 36, 1, 1, 0)

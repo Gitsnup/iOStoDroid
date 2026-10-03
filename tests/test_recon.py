@@ -9,6 +9,7 @@ from radek.analysis import analyze
 from radek.recon import reconstruct
 from radek.recon import objc as objc_mod
 from radek.recon import swift as swift_mod
+from radek.recon.disasm import decode_arm64
 from radek.recon.image import load
 from radek.recon.report import blockers, markdown, summary
 
@@ -226,7 +227,14 @@ class ReconstructionTests(Base):
         stats = slice_data["disassembly"]
         self.assertEqual(stats["functions"], 2)
         self.assertGreaterEqual(stats["instructions"], 10)
-        self.assertEqual(stats["unknownInstructions"], 1)
+        # The shifted-register add/sub and logical decoders now cover SUBS/ORR,
+        # so the fixture's cmp decodes; only genuinely unallocated encodings are
+        # reported as undecoded.
+        self.assertEqual(stats["unknownInstructions"], 0)
+        self.assertTrue(decode_arm64(0x000000FF, 0).unknown)
+        self.assertIn("cmp", "\n".join(
+            line for f in slice_data["functions"] for line in f["listing"]
+        ))
         self.assertEqual(slice_data["entryPoint"], f"0x{meta['entry']:x}")
         names = {f["name"] for f in slice_data["functions"]}
         self.assertEqual(names, {"_main", "-[MyClass doWork]"})
@@ -235,7 +243,9 @@ class ReconstructionTests(Base):
         self.assertIn("objc_msgSend", listing)
         self.assertIn("@selector(doWork)", listing)
         other = next(f for f in slice_data["functions"] if f["name"] == "-[MyClass doWork]")
-        self.assertIn("undecoded instruction", "\n".join(other["listing"]))
+        # SUBS is decoded now, so the pseudocode shows the comparison instead of
+        # an undecoded encoding; unallocated words are still marked unknown above.
+        self.assertIn("cmp", "\n".join(other["listing"]))
 
     def test_used_apis_are_attributed_and_unused_are_separated(self):
         builder, _ = objc_image()

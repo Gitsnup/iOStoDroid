@@ -273,8 +273,17 @@ def _decode_thumb(word: int, address: int) -> Instruction:
     )
 
 
-def _decode_thumb2(first: int, second: int, address: int) -> Instruction:
+#: Architectures whose Thumb mode is Thumb-1 only. A 32-bit Thumb encoding in a
+#: pre-ARMv7 slice is not a valid instruction, so it is rejected rather than read
+#: as two unrelated 16-bit instructions.
+THUMB1_ONLY = ("armv4t", "armv5tej", "armv6", "armv6m")
+
+
+def _decode_thumb2(first: int, second: int, address: int, architecture: str = "armv7") -> Instruction:
     """32-bit Thumb encodings (T2). MOVW/MOVT are proven; everything else is not."""
+    if architecture in THUMB1_ONLY:
+        label = architecture.replace("arm", "ARM", 1)
+        raise Unsupported(f"Thumb-2 is unavailable on {label} (Thumb-1 only)")
     if second & 0x8000:
         raise Unsupported("invalid Thumb-2 MOVW/MOVT")
     imm = ((first & 15) << 12) | ((first >> 10 & 1) << 11) | ((second >> 12 & 7) << 8) | (second & 255)
@@ -342,7 +351,7 @@ def lift(code: bytes, architecture: str, thumb: bool = False) -> Program:
                 second = struct.unpack_from("<H", code, p)[0]
                 if w & 0xFBF0 in (0xF240, 0xF2C0) and not second & 0x8000:
                     p += 2
-                    i = _decode_thumb2(w, second, start)
+                    i = _decode_thumb2(w, second, start, architecture)
                 else:
                     raise Unsupported(
                         f"Thumb-2 instruction 0x{w:04x} 0x{second:04x} at +0x{start:x} is unsupported"

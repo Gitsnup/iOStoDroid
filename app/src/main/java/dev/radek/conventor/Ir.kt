@@ -206,7 +206,14 @@ object Ir {
         )
     }
 
-    private fun thumb2(first: Int, second: Int): Instruction {
+    /** Thumb-1-only architectures: a 32-bit Thumb encoding is not valid there. */
+    private val THUMB1_ONLY = setOf("armv4t", "armv5tej", "armv6", "armv6m")
+
+    private fun thumb2(first: Int, second: Int, architecture: String): Instruction {
+        if (architecture in THUMB1_ONLY) {
+            val label = architecture.replaceFirst("arm", "ARM")
+            throw Unsupported("Thumb-2 is unavailable on $label (Thumb-1 only)")
+        }
         if (second and 0x8000 != 0) throw Unsupported("invalid Thumb-2 MOVW/MOVT")
         val imm = (((first and 15) shl 12) or ((first shr 10 and 1) shl 11) or
             ((second shr 12 and 7) shl 8) or (second and 255)).toLong()
@@ -262,7 +269,7 @@ object Ir {
                     if (p + 4 > code.size) throw Unsupported("truncated Thumb-2 instruction")
                     val second = u16(code, p + 2)
                     if ((w and 0xFBF0 == 0xF240 || w and 0xFBF0 == 0xF2C0) && second and 0x8000 == 0) {
-                        i = thumb2(w, second)
+                        i = thumb2(w, second, architecture)
                         consumed = 4
                     } else throw Unsupported(
                         "Thumb-2 instruction 0x${Integer.toHexString(w)} 0x${Integer.toHexString(second)} is unsupported"

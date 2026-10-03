@@ -11,11 +11,7 @@ import android.graphics.Shader
 import android.graphics.Typeface
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.zip.CRC32
-import java.util.zip.Deflater
-import java.util.zip.Inflater
 
 /**
  * Icon recovery for imported IPAs.
@@ -45,33 +41,31 @@ object Icons {
     )
 
     // ------------------------------------------------------------------ decode
-    /** Decode bytes to a bitmap, repairing Apple `CgBI` payloads when needed. */
+    /**
+     * Decode image bytes.
+     *
+     * Ordinary PNG/JPEG goes through `BitmapFactory`. Apple `CgBI` PNGs - which
+     * every `pngcrush`-processed iOS bundle ships - cannot be decoded by
+     * `BitmapFactory` at all, so they are normalised by [IconDecoder] (raw/zlib
+     * DEFLATE, BGRA channel order and premultiplied alpha).
+     */
     fun decode(data: ByteArray, sample: Int = 1): Bitmap? {
+        if (data.isEmpty() || data.size > MAX_IMAGE_BYTES) return null
         val options = BitmapFactory.Options()
         options.inSampleSize = maxOf(1, sample)
         BitmapFactory.decodeByteArray(data, 0, data.size, options)?.let { return it }
-        val repaired = repairCgbi(data) ?: return null
-        val bitmap = BitmapFactory.decodeByteArray(repaired, 0, repaired.size, options) ?: return null
-        return swapRedBlue(bitmap)
+        return try {
+            IconDecoder.decodeCgbi(data, TARGET)
+        } catch (_: Exception) {
+            null
+        }
     }
 
-    private fun swapRedBlue(bitmap: Bitmap): Bitmap {
-        val width = bitmap.width
-        val height = bitmap.height
-        val pixels = IntArray(width * height)
-        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-        for (index in pixels.indices) {
-            val value = pixels[index]
-            val alpha = value and 0xFF000000.toInt()
-            val red = (value shr 16) and 0xFF
-            val green = (value shr 8) and 0xFF
-            val blue = value and 0xFF
-            pixels[index] = alpha or (blue shl 16) or (green shl 8) or red
-        }
-        val swapped = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        swapped.setPixels(pixels, 0, width, 0, 0, width, height)
-        if (bitmap != swapped) bitmap.recycle()
-        return swapped
+    /** True when the payload is an Apple CgBI PNG. */
+    fun isCgbi(data: ByteArray): Boolean = try {
+        IconDecoder.isCgbiBytes(data)
+    } catch (_: Exception) {
+        false
     }
 
     /**
@@ -94,88 +88,6 @@ object Icons {
             index += step
         }
         return sampled > 0 && visible * 100 / sampled >= 5
-    }
-
-    // ------------------------------------------------------------- CgBI repair
-    /**
-     * Rewrite an Apple `CgBI` PNG as a standard PNG: the `CgBI` chunk is dropped
-     * and the raw-deflate IDAT stream is re-wrapped in zlib, which is what
-     * `BitmapFactory` requires. Returns null when the payload is not a CgBI PNG.
-     */
-    fun repairCgbi(data: ByteArray): ByteArray? {
-        if (data.size < 33 || !startsWith(data, PNG_SIGNATURE)) return null
-        var at = 8
-        var cgbi = false
-        val idat = ByteArrayOutputStream()
-        val chunks = mutableListOf<Triple<String, ByteArray, Boolean>>()
-        while (at + 12 <= data.size) {
-            val length = readU32(data, at)
-            val type = String(data, at + 4, 4, Charsets.US_ASCII)
-            if (length < 0 || at + 12 + length > data.size) return null
-            val payload = data.copyOfRange(at + 8, at + 8 + length)
-            if (type == "CgBI") cgbi = true
-            if (type == "IDAT") idat.write(payload) else chunks.add(Triple(type, payload, false))
-            if (type == "IEND") break
-            at += 12 + length
-        }
-        if (!cgbi) return null
-        val raw = idat.toByteArray()
-        if (raw.isEmpty()) return null
-        val inflated = try {
-            rawInflate(raw)
-        } catch (error: Exception) {
-            return null
-        } ?: return null
-        val out = ByteArrayOutputStream()
-        out.write(PNG_SIGNATURE)
-        fun writeChunk(type: String, payload: ByteArray) {
-            val name = type.toByteArray(Charsets.US_ASCII)
-            writeU32(out, payload.size)
-            out.write(name)
-            out.write(payload)
-            val crc = CRC32()
-            crc.update(name)
-            crc.update(payload)
-            writeU32(out, crc.value.toInt())
-        }
-        for ((type, payload, _) in chunks) {
-            if (type == "CgBI") continue
-            if (type == "IDAT" || type == "IEND") continue
-            writeChunk(type, payload)
-        }
-        writeChunk("IDAT", zlibDeflate(inflated))
-        writeChunk("IEND", ByteArray(0))
-        return out.toByteArray()
-    }
-
-    private fun rawInflate(data: ByteArray): ByteArray? {
-        val inflater = Inflater(true)                       // nowrap: raw deflate stream
-        inflater.setInput(data)
-        val out = ByteArrayOutputStream()
-        val buffer = ByteArray(65536)
-        try {
-            while (!inflater.finished() && out.size() < 64 * 1024 * 1024) {
-                val count = inflater.inflate(buffer)
-                if (count == 0) {
-                    if (inflater.needsInput() || inflater.needsDictionary()) break
-                }
-                out.write(buffer, 0, count)
-            }
-        } finally {
-            inflater.end()
-        }
-        return if (out.size() == 0) null else out.toByteArray()
-    }
-
-    private fun zlibDeflate(data: ByteArray): ByteArray {
-        val deflater = Deflater(6, false)                   // zlib wrapper
-        deflater.setInput(data)
-        deflater.finish()
-        val out = ByteArrayOutputStream()
-        val buffer = ByteArray(65536)
-        while (!deflater.finished()) out.write(buffer, 0, deflater.deflate(buffer))
-        deflater.end()
-        return out.toByteArray()
     }
 
     // ---------------------------------------------------------- Assets.car scan
@@ -272,11 +184,6 @@ object Icons {
         ((data[at].toInt() and 255) shl 24) or ((data[at + 1].toInt() and 255) shl 16) or
             ((data[at + 2].toInt() and 255) shl 8) or (data[at + 3].toInt() and 255)
 
-    private fun writeU32(out: ByteArrayOutputStream, value: Int) {
-        out.write((value ushr 24) and 0xFF); out.write((value ushr 16) and 0xFF)
-        out.write((value ushr 8) and 0xFF); out.write(value and 0xFF)
-    }
-
     private fun startsWith(data: ByteArray, prefix: ByteArray, at: Int = 0): Boolean {
         if (at + prefix.size > data.size) return false
         for (index in prefix.indices) if (data[at + index] != prefix[index]) return false
@@ -334,7 +241,7 @@ object Icons {
             val bounds = BitmapFactory.Options()
             bounds.inJustDecodeBounds = true
             BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
-            if (bounds.outWidth in 1..8192 && bounds.outHeight in 1..8192) {
+            if (bounds.outWidth in 1..8192 && bounds.outHeight in 1..8192 || isCgbi(data)) {
                 val sample = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / TARGET)
                 val bitmap = decode(data, sample)
                 if (bitmap != null) {

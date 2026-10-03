@@ -599,11 +599,13 @@ Json thin(Reader r) {
                 j["exports"].push(s);
         }
     }
-    // A malformed, oversized or only partially understood dyld opcode stream is
-    // a fact about the input, not a reason to discard the whole analysis. Every
+    // A malformed, oversized or only partially understood dyld opcode stream is a
+    // fact about the input, not a reason to discard the whole analysis. Every
     // stream is decoded independently: what is understood is reported, the first
     // problem stops only that stream, and the reason is recorded so the report
     // stays honest instead of surfacing as an opaque IOException.
+    j["bindDecodingComplete"] = true;
+    j["bindDiagnostics"] = array();
     for (auto &b : binds) {
         size_t p = b.off, end = p + b.size;
         uint64_t decoded = 0, threaded = 0;
@@ -611,17 +613,26 @@ Json thin(Reader r) {
             std::string symbol;
             int64_t ordinal = 0, addend = 0;
             uint64_t seg = 0, address = 0, type = 1, flags = 0;
+            bool segmentSet = false;
             const uint64_t pointerSize = wide ? 8 : 4;
+            auto segmentSize = [&]() -> uint64_t {
+                if (!segmentSet || seg >= j["segments"].items.size())
+                    throw std::runtime_error("bind uses an invalid segment index");
+                return std::stoull(j["segments"].items[seg].fields["vmSize"].value);
+            };
             auto advance = [&](uint64_t amount) {
-                if (amount > std::numeric_limits<uint64_t>::max() - address)
-                    throw std::runtime_error("dyld bind address overflow");
+                auto vmSize = segmentSize();
+                // Bind addresses are segment-relative offsets. Check the segment bound
+                // before adding so malformed ULEBs cannot wrap the 64-bit cursor.
+                if (address > vmSize || amount > vmSize - address)
+                    throw std::runtime_error("dyld bind address outside segment");
                 address += amount;
             };
             auto emit = [&]() {
                 r.consume(symbol.size() + 64);
-                if (symbol.empty() || seg >= j["segments"].items.size())
-                    throw std::runtime_error("bind without symbol or valid segment");
-                auto vmSize = std::stoull(j["segments"].items[seg].fields["vmSize"].value);
+                if (symbol.empty())
+                    throw std::runtime_error("bind without symbol");
+                auto vmSize = segmentSize();
                 uint64_t width = type == 1 ? pointerSize : 4;
                 if (address > vmSize || width > vmSize - address)
                     throw std::runtime_error("dyld bind outside segment");
@@ -647,6 +658,7 @@ Json thin(Reader r) {
                         symbol.clear();
                         ordinal = addend = 0;
                         seg = address = flags = 0;
+                        segmentSet = false;
                         type = 1;
                     }
                     break;
@@ -676,10 +688,14 @@ Json thin(Reader r) {
                 case 0x60:
                     addend = r.sleb(p, end);
                     break;
-                case 0x70:
+                case 0x70: {
                     seg = imm;
                     address = r.leb(p, end);
+                    segmentSet = true;
+                    if (address > segmentSize())
+                        throw std::runtime_error("dyld bind address outside segment");
                     break;
+                }
                 case 0x80:
                     advance(r.leb(p, end));
                     break;
@@ -731,7 +747,17 @@ Json thin(Reader r) {
         try {
             decode();
             stream["status"] = "decoded";
-        } catch (const std::runtime_error &e) {
+        } catch (const std::exception &e) {
+            // Keep load commands, segments and other streams available for analysis,
+            // but make an incomplete binding table explicit. Conversion backends must
+            // fail closed whenever this flag is false.
+            j["bindDecodingComplete"] = false;
+            Json diagnostic = object();
+            diagnostic["stream"] = b.kind;
+            diagnostic["offset"] = uint64_t(b.off);
+            diagnostic["size"] = uint64_t(b.size);
+            diagnostic["message"] = e.what();
+            j["bindDiagnostics"].push(diagnostic);
             stream["status"] = "partial";
             stream["reason"] = e.what();
             if (j["fixupAnomalies"].items.size() < 64) {
@@ -743,7 +769,8 @@ Json thin(Reader r) {
             }
         }
         stream["decodedBinds"] = decoded;
-        stream["threadedOrdinals"] = threaded;
+        if (threaded)
+            stream["threadedOrdinals"] = threaded;
         j["fixupStreams"].push(stream);
     }
     if (exportSize) {

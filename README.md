@@ -3,15 +3,17 @@
 An **offline native-reconstruction workbench**, not an iOS emulator. Kotlin Android importer + C++ Mach-O analyzer + Python host conversion/SDK packaging pipeline.
 
 > **Important: this is NOT a general IPA/game converter.** Native conversion re-emits a
-> *proved* closed integer entry leaf as Android ARM64 machine code: straight-line code with
-> no imports, framework calls, memory access, relocations or runtime metadata. Anything
-> outside that proven subset is reported honestly instead of being stubbed, and ARM64e (PAC)
-> has no backend. Dependency lines are no longer simply "BLOCKED": every iOS framework and
-> imported symbol is mapped to the real Android implementation that provides it (identical C
-> ABIs such as OpenGL ES/EGL/iconv/SQLite, or platform APIs such as AAudio, MediaPlayer,
-> Choreographer, `android.view`, Canvas, sockets), and the app reports the resulting
-> percentage coverage. APIs with no Android contract (StoreKit, GameKit, AdSupport, MapKit,
-> CoreLocation ...) stay blocked and say why.
+> *proved* closed integer entry leaf as Android ARM64 machine code: straight-line entry code
+> with no reachable imports or framework calls, memory access, address references or
+> unsupported runtime semantics. Linked-but-unused dylib and import records can be omitted
+> only after that entry is proven; **no no-op framework stubs are ever generated**. Anything
+> outside the proven subset is reported honestly, and ARM64e (PAC) has no backend.
+> Dependency lines are no longer simply "BLOCKED": every iOS framework and imported symbol is
+> mapped to the real Android implementation that provides it (identical C ABIs such as
+> OpenGL ES/EGL/iconv/SQLite, or platform APIs such as AAudio, MediaPlayer, Choreographer,
+> `android.view`, Canvas, sockets), and the app reports the resulting provider coverage.
+> APIs with no Android contract (StoreKit, GameKit, AdSupport, MapKit, CoreLocation ...) stay
+> blocked and say why. An importer APK is not proof those apps can be converted.
 
 ## Offline reconstruction before conversion
 
@@ -19,7 +21,7 @@ Every import is analyzed before any conversion decision is made:
 
 - Mach-O images (executable, embedded dylibs/frameworks): headers, load commands,
   segments/sections, symbols, relocations, exports/imports, dependencies and fixups.
-- Disassembly and function discovery with basic-block CFGs (ARM64/ARM64e, ARMv7/Thumb/Thumb-2),
+- Disassembly and function discovery with basic-block CFGs (ARM64/ARM64e, ARMv6/ARMv7/Thumb/Thumb-2),
   register/constant/reference tracking and pseudocode listings.
 - Objective-C classes, categories, protocols, ivars, properties, selectors, message-send
   targets; Swift type/field metadata and demangling.
@@ -83,9 +85,11 @@ python3 -m radek convert .local/fixture.ipa --authorized --output workspace/fixt
 `--arch armv6`, `armv6thumb`, `armv4t`, `armv7`, `armv7s`, `thumb`, and `thumb2` exercise
 **offline ARM32 → ARM64 lowering**, including the Thumb-1-only code layout of iPhone OS 2-5
 games. The fixtures are generated synthetic Mach-O programs, not installable signed iOS apps.
-The resulting native routine returns 42. The 32-bit subset now covers register moves, ADD/SUB
-(register and immediate), AND/ORR/EOR/BIC, MUL and LSL/LSR/ASR immediates; everything else is
-rejected rather than mistranslated.
+The resulting native routine returns 42. The 32-bit subset covers register moves, ADD/SUB
+(register and immediate), AND/ORR/EOR/BIC, MUL and LSL/LSR/ASR immediates, plus the matching
+Thumb-1 forms; everything else is rejected rather than mistranslated. This does not make
+general ARMv6 games compatible - those commonly depend on UIKit, graphics, audio, input and
+runtime services listed below.
 
 Icons are recovered through a generic fallback chain (Info.plist names, `@2x`/`@3x`/`~ipad`
 variants, compiled `Assets.car` renditions, then other bundle images) with every attempt

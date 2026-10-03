@@ -13,7 +13,7 @@ import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.zip.CRC32
 import java.util.zip.Deflater
-import java.util.zip.Inflater
+import java.util.zip.Deflater.Level
 import java.util.zip.ZipFile
 
 /**
@@ -123,6 +123,15 @@ class ConverterTest {
         assertThrows(Ir.Unsupported::class.java) {
             Ir.lift(byteArrayOf(0x40, 0x05, 0x80.toByte(), 0x52, 0xC0.toByte(), 0x03, 0x5F, 0xD6.toByte()), "arm64e", false)
         }
+    }
+
+    @Test fun thumbTwoIsRejectedOnThumbOneOnlyArchitectures() {
+        // 0xF240 0x002A is MOVW r0, #42, a Thumb-2 encoding that ARMv6 cannot run.
+        val movw = byteArrayOf(0x40, 0xF2.toByte(), 0x2A, 0x00, 0x70, 0x47)
+        assertThrows(Ir.Unsupported::class.java) { Ir.lift(movw, "armv6", true) }
+        assertThrows(Ir.Unsupported::class.java) { Ir.lift(movw, "armv5tej", true) }
+        // The same encoding is proven on ARMv7.
+        assertEquals(2, Ir.lift(movw, "armv7", true).instructions.size)
     }
 
     @Test fun refusesArm64eAndUnknownArchitectures() {
@@ -386,19 +395,36 @@ class ConverterTest {
     }
 
     // ---------------------------------------------------------------- icons
-    @Test fun repairsAppleCgbiPngPayloads() {
-        val pixels = ByteArray(2 * 4) { (it * 37).toByte() }            // 2x1 BGRA row
-        val scanlines = byteArrayOf(0) + pixels + byteArrayOf(0) + pixels
-        val cgbi = png(2, 2, scanlines, cgbi = true)
-        val repaired = Icons.repairCgbi(cgbi)
-        assertNotNull("CgBI PNG must be repairable", repaired)
-        // The repaired image must not carry CgBI and must inflate to the same pixels.
-        assertFalse(containsChunk(repaired!!, "CgBI"))
-        assertTrue(containsChunk(repaired, "IDAT"))
-        assertArrayEquals(scanlines, inflateZlib(extractIdat(repaired)))
-        // A standard PNG is left alone.
-        assertNull(Icons.repairCgbi(png(2, 2, scanlines, cgbi = false)))
-        assertNull(Icons.repairCgbi(byteArrayOf(1, 2, 3)))
+    @Test fun decodesAppleCgbiPngPayloads() {
+        // CgBI stores premultiplied BGRA: (B=16, G=32, R=64, A=128) becomes
+        // straight-alpha RGBA (R=128, G=64, B=32, A=128).
+        val scanlines = byteArrayOf(0, 16, 32, 64, 128.toByte())
+        val cgbi = png(1, 1, scanlines, cgbi = true)
+        assertTrue(Icons.isCgbi(cgbi))
+        val bitmap = Icons.decode(cgbi)
+        assertNotNull("CgBI PNG must decode", bitmap)
+        val pixel = bitmap!!.getPixel(0, 0)
+        assertEquals(128, android.graphics.Color.alpha(pixel))
+        assertEquals(128, android.graphics.Color.red(pixel))
+        assertEquals(64, android.graphics.Color.green(pixel))
+        assertEquals(32, android.graphics.Color.blue(pixel))
+        bitmap.recycle()
+        // A standard PNG is decoded by BitmapFactory and is not reported as CgBI.
+        val standard = png(1, 1, scanlines, cgbi = false)
+        assertFalse(Icons.isCgbi(standard))
+        assertNotNull(Icons.decode(standard))
+        assertNull(Icons.decode(byteArrayOf(1, 2, 3)))
+    }
+
+    @Test fun generatedIconsAreVisibleAndDeterministic() {
+        val first = Icons.generate("My Game")
+        val second = Icons.generate("My Game")
+        assertTrue(Icons.isOpaque(first))
+        assertEquals(first.getPixel(20, 20), second.getPixel(20, 20))
+        assertFalse(Icons.isOpaque(android.graphics.Bitmap.createBitmap(
+            16, 16, android.graphics.Bitmap.Config.ARGB_8888)))
+        first.recycle()
+        second.recycle()
     }
 
     @Test fun extractsPngPayloadsFromACompiledAssetCatalog() {
@@ -427,49 +453,19 @@ class ConverterTest {
         }
     }
 
-    private fun containsChunk(png: ByteArray, type: String): Boolean {
-        var at = 8
-        while (at + 12 <= png.size) {
-            val length = ((png[at].toInt() and 255) shl 24) or ((png[at + 1].toInt() and 255) shl 16) or
-                ((png[at + 2].toInt() and 255) shl 8) or (png[at + 3].toInt() and 255)
-            if (String(png, at + 4, 4, Charsets.US_ASCII) == type) return true
-            at += 12 + length
-        }
-        return false
-    }
-
-    private fun extractIdat(png: ByteArray): ByteArray {
-        val out = ByteArrayOutputStream()
-        var at = 8
-        while (at + 12 <= png.size) {
-            val length = ((png[at].toInt() and 255) shl 24) or ((png[at + 1].toInt() and 255) shl 16) or
-                ((png[at + 2].toInt() and 255) shl 8) or (png[at + 3].toInt() and 255)
-            val type = String(png, at + 4, 4, Charsets.US_ASCII)
-            if (type == "IDAT") out.write(png, at + 8, length)
-            at += 12 + length
-        }
-        return out.toByteArray()
-    }
-
-    private fun inflateZlib(data: ByteArray): ByteArray {
-        val inflater = Inflater()
-        inflater.setInput(data)
-        val out = ByteArrayOutputStream()
-        val buffer = ByteArray(4096)
-        while (!inflater.finished()) out.write(buffer, 0, inflater.inflate(buffer))
-        inflater.end()
-        return out.toByteArray()
-    }
-
+    /** CgBI IDAT streams are raw DEFLATE; standard PNGs use zlib. */
     private fun rawDeflate(data: ByteArray): ByteArray {
-        val deflater = Deflater(6, true)
-        deflater.setInput(data)
-        deflater.finish()
-        val out = ByteArrayOutputStream()
-        val buffer = ByteArray(4096)
-        while (!deflater.finished()) out.write(buffer, 0, deflater.deflate(buffer))
-        deflater.end()
-        return out.toByteArray()
+        val deflater = Deflater(Level.BEST_COMPRESSION, true)
+        try {
+            deflater.setInput(data)
+            deflater.finish()
+            val out = ByteArrayOutputStream()
+            val buffer = ByteArray(4096)
+            while (!deflater.finished()) out.write(buffer, 0, deflater.deflate(buffer))
+            return out.toByteArray()
+        } finally {
+            deflater.end()
+        }
     }
 
     private fun png(width: Int, height: Int, scanlines: ByteArray, cgbi: Boolean): ByteArray {

@@ -128,9 +128,10 @@ class MainActivity : Activity() {
             val item = card(); val app = report.optJSONObject("application") ?: JSONObject()
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }; item.addView(row)
             val iconPath = File(dir, "icon.png")
+            val iconBitmap = if (iconPath.isFile) android.graphics.BitmapFactory.decodeFile(iconPath.path) else null
             val icon = ImageView(this).apply {
-                if (iconPath.isFile) setImageURI(Uri.fromFile(iconPath)) else setImageResource(dev.radek.conventor.R.drawable.ic_launcher)
-                contentDescription = if (iconPath.isFile) "Application icon"
+                if (iconBitmap != null) setImageBitmap(iconBitmap) else setImageResource(dev.radek.conventor.R.drawable.ic_launcher)
+                contentDescription = if (iconBitmap != null) "Application icon"
                 else report.optJSONObject("icon")?.optString("reason")?.takeIf { it.isNotBlank() } ?: "Icon unavailable"
             }
             row.addView(icon, LinearLayout.LayoutParams(dp(56), dp(56)).apply { rightMargin = dp(14) })
@@ -179,7 +180,16 @@ class MainActivity : Activity() {
             text("iOS dependency → Android provider", 15f, Color.WHITE, true)
             for (i in 0 until edges.length()) {
                 val dep = edges.getJSONObject(i)
-                val status = dep.optString("status", Providers.STATUS_BLOCKED)
+                val status = dep.optString("status", "")
+                if (status.isEmpty()) {
+                    // No Android provider mapping (embedded image or unknown dylib):
+                    // report the analyser's own classification verbatim.
+                    val classification = dep.optString("classification", "unverified").uppercase()
+                    text("$classification · ${dep.optString("installName")}", 13f, muted)
+                    val reason = dep.optString("reason")
+                    if (reason.isNotEmpty()) text(reason, 11f, muted)
+                    continue
+                }
                 val color = when (status) {
                     Providers.STATUS_PROVIDED -> accent
                     Providers.STATUS_COMPATIBILITY -> Color.rgb(245, 203, 116)
@@ -192,7 +202,8 @@ class MainActivity : Activity() {
                 }
                 val provider = dep.optString("provider").ifBlank { "no Android provider" }
                 text("$marker · ${dep.optString("framework", dep.optString("installName"))} → $provider", 13f, color)
-                text(dep.optString("reason"), 11f, muted, parent = body)
+                val reason = dep.optString("reason")
+                if (reason.isNotEmpty()) text(reason, 11f, muted)
             }
         }
         button("View full machine-readable report") { showText("Conversion report", report.toString(2)) }

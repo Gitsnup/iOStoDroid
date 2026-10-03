@@ -1,7 +1,6 @@
 package dev.radek.conventor
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
@@ -129,6 +128,7 @@ class Library(private val context: Context) {
             report.put("machO", macho)
             val graph = JSONArray(); val nodes = JSONArray()
             var encrypted = false; var incompatible = false
+            var incompleteBindings = false
             var hasCandidate = false
             fun inspect(file: File, analysis: JSONObject) {
                 nodes.put(JSONObject().put("path", file.relativeTo(app).path).put("analysis", analysis))
@@ -138,6 +138,9 @@ class Library(private val context: Context) {
                     encrypted = encrypted || slice.getBoolean("encrypted")
                     val arch = slice.getString("architecture")
                     if (file == binary && (arch == "arm64" || arch in Ir.ARM32)) hasCandidate = true
+                    if (!slice.optBoolean("bindDecodingComplete", true)) {
+                        incompleteBindings = true
+                    }
                     val deps = slice.getJSONArray("dependencies")
                     for (d in 0 until deps.length()) {
                         val edge = Providers.classify(deps.getJSONObject(d).getString("path"))
@@ -161,7 +164,8 @@ class Library(private val context: Context) {
             report.put("dependencies", JSONObject().put("nodes", nodes).put("edges", graph))
             val reason = when {
                 encrypted -> "Protected/encrypted Mach-O. Conversion prohibited; no DRM or FairPlay bypass."
-                !hasCandidate -> "No supported ARM64/ARMv7 slice. ARM64e PAC reconstruction is blocked."
+                !hasCandidate -> "No supported ARM64/ARMv6/ARMv7 slice. ARM64e PAC reconstruction is blocked."
+                incompleteBindings -> "Incomplete dyld binding table: the binding stream is malformed, so dependencies cannot be resolved safely on this device."
                 incompatible -> "Dependencies, imports, metadata or embedded code need the compatibility runtime; conversion continues on device and reports real provider coverage."
                 else -> "Analysis completed. The entry leaf can be proved and converted to Android ARM64 on this device."
             }

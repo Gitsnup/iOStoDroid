@@ -164,6 +164,18 @@ class MainActivity : Activity() {
         }
         parent.addView(indicator, LinearLayout.LayoutParams(-1, dp(height)).apply { topMargin = dp(4); bottomMargin = dp(4) })
     }
+    private fun addJobProgressCard(parent: LinearLayout = body) {
+        val jobCard = card(parent)
+        text(Jobs.title, 17f, textColor, true, jobCard)
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = Jobs.percent
+            progressTintList = android.content.res.ColorStateList.valueOf(accent)
+        }
+        progressBar = bar
+        jobCard.addView(bar, LinearLayout.LayoutParams(-1, dp(12)).apply { topMargin = dp(8); bottomMargin = dp(4) })
+        progressLabel = text("${Jobs.percent}% · ${Jobs.message}", 13f, muted, parent = jobCard)
+    }
     private fun card(parent: LinearLayout = body): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL; background = rounded(panel); setPadding(dp(18), dp(14), dp(18), dp(16))
         parent.addView(this, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
@@ -186,16 +198,7 @@ class MainActivity : Activity() {
         button("Settings", parent = body) { settingsScreen() }.isEnabled = !Jobs.busy
         if (Jobs.busy) {
             wasBusy = true
-            val jobCard = card()
-            text(Jobs.title, 17f, textColor, true, jobCard)
-            val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-                max = 100
-                progress = Jobs.percent
-                progressTintList = android.content.res.ColorStateList.valueOf(accent)
-            }
-            progressBar = bar
-            jobCard.addView(bar, LinearLayout.LayoutParams(-1, dp(12)).apply { topMargin = dp(8); bottomMargin = dp(4) })
-            progressLabel = text("${Jobs.percent}% · ${Jobs.message}", 13f, muted, parent = jobCard)
+            addJobProgressCard()
         } else if (Jobs.message.startsWith("Failed")) text(Jobs.message, 14f, statusColor("FAILED"))
         text("Game Library", 23f, textColor, true)
         val entries = library.entries()
@@ -357,7 +360,7 @@ class MainActivity : Activity() {
         }
         text(app.optString("name", "Application details"), 28f, textColor, true)
         val state = report.optString("state"); text(state, 12f, statusColor(state), true)
-        if (Jobs.busy) addLiveProgressCard()
+        if (Jobs.busy) addJobProgressCard()
         val metadata = card()
         for ((name, value) in listOf(
             "Bundle ID" to app.optString("bundleId"),

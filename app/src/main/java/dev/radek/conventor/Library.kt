@@ -409,6 +409,7 @@ internal fun extractIcon(app: File, names: List<String>, dir: File): JSONObject 
                 else -> 3
             }
         }, { -it.length() }, { it.path }))
+        .toList()
     tryFiles(fallbackImages)?.let { return it }
 
     return JSONObject().put("status", "UNAVAILABLE")

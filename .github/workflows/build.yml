@@ -40,9 +40,7 @@ jobs:
         run: python3 tools/build_native.py
       - name: AddressSanitizer and UndefinedBehaviorSanitizer tests
         run: python3 tools/ci_run.py bash tools/test_sanitized.sh
-      - name: Host tests and real signed synthetic IPA conversions
-        env:
-          RADEK_REQUIRE_ANDROID: '1'
+      - name: Host tests and no-placeholder conversion regressions
         run: python3 tools/ci_run.py python3 -m unittest discover -v
       - name: Android unit tests, lint, JNI native build and APK
         run: python3 tools/ci_run.py ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
@@ -51,24 +49,11 @@ jobs:
           mkdir -p artifacts
           cp app/build/outputs/apk/debug/app-debug.apk artifacts/RadekiOSConventor-debug.apk
           python3 -m radek validate artifacts/RadekiOSConventor-debug.apk --package dev.radek.conventor --entry dev.radek.conventor.MainActivity --converter-app > artifacts/validation.json
-      - name: Build and validate standalone native fixture artifact
-        run: |
-          python3 tools/make_fixture.py --output .local/fixture.ipa
-          python3 -m radek convert .local/fixture.ipa --authorized --output .local/fixture-result
       - name: Upload RadekiOSConventor APK
         uses: actions/upload-artifact@v6
         with:
           name: RadekiOSConventor-debug.apk
           path: artifacts/RadekiOSConventor-debug.apk
-          if-no-files-found: error
-      - name: Upload standalone converted fixture (not the converter UI)
-        uses: actions/upload-artifact@v6
-        with:
-          name: standalone-native-fixture
-          path: |
-            .local/fixture-result/fixture.apk
-            .local/fixture-result/report.json
-            .local/fixture-result/conversion.jsonl
           if-no-files-found: error
       - name: Upload test reports
         if: always() && hashFiles('app/build/reports/**', 'artifacts/validation.json') != ''

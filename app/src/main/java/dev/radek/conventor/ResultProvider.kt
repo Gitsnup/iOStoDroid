@@ -10,43 +10,42 @@ import android.provider.OpenableColumns
 import org.json.JSONObject
 import java.io.File
 
-/** Read-only, URI-granted access to validated host or generated APK results. */
+/** Read-only, URI-granted access to validated complete-game host APKs only. */
 class ResultProvider : ContentProvider() {
     override fun onCreate() = true
 
-    private fun entry(uri: Uri): Pair<File, JSONObject> {
+    private fun entry(uri: Uri): File {
         val parts = uri.pathSegments
         require(parts.size == 2 && parts[0].matches(Regex("[0-9]+-[0-9a-f-]{36}")))
         val root = File(requireNotNull(context).filesDir, "library").canonicalFile
         val entryDirectory = File(root, parts[0]).canonicalFile
         require(entryDirectory.path.startsWith(root.path + File.separator) && entryDirectory.isDirectory)
         val report = JSONObject(File(entryDirectory, "report.json").readText())
-        val allowedName = parts[1] == GameStubBuilder.fileName(report) || parts[1] == "RadekiOSConventor-debug.apk"
-        require(allowedName) { "unsupported result name" }
-        val result = File(entryDirectory, parts[1]).canonicalFile
+        val conversion = report.optJSONObject("hostConversion") ?: error("no complete-game conversion attached")
+        val expectedName = ArtifactNames.apkFileName(report)
+        require(conversion.optString("status") == "ATTACHED" && conversion.optBoolean("completeGameConversion", false)) {
+            "only complete-game conversions may be opened"
+        }
+        require(conversion.optString("artifact") == expectedName && parts[1] == expectedName) {
+            "unsupported result name"
+        }
+        val result = File(entryDirectory, expectedName).canonicalFile
         require(result.path.startsWith(root.path + File.separator) && result.isFile)
-        return result to report
-    }
-
-    private fun isInstallable(report: JSONObject, name: String): Boolean {
-        if (name == "RadekiOSConventor-debug.apk") return true // old attached-host-result compatibility
-        return report.optJSONObject("hostConversion")?.optString("status") == "ATTACHED" ||
-            report.optJSONObject("automaticPackage")?.optBoolean("installableAndroidPackage", false) == true ||
-            report.optJSONObject("forceConversion")?.optBoolean("installableAndroidPackage", false) == true
+        return result
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         require(mode == "r") { "read only" }
-        return ParcelFileDescriptor.open(entry(uri).first, ParcelFileDescriptor.MODE_READ_ONLY)
+        return ParcelFileDescriptor.open(entry(uri), ParcelFileDescriptor.MODE_READ_ONLY)
     }
 
     override fun getType(uri: Uri): String {
-        val (file, report) = entry(uri)
-        return if (isInstallable(report, file.name)) "application/vnd.android.package-archive" else "application/zip"
+        entry(uri)
+        return "application/vnd.android.package-archive"
     }
 
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor {
-        val file = entry(uri).first
+        val file = entry(uri)
         val columns = projection ?: arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
         return MatrixCursor(columns).apply {
             addRow(columns.map { when (it) {

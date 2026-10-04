@@ -117,7 +117,11 @@ def prove_leaf(
             "embedded frameworks/plugins require a native linker backend that is not implemented"
         )
     candidates = list(report["slices"])
-    if target_abi == "armeabi-v7a":
+    if target_abi == "arm64-v8a":
+        candidates = [s for s in candidates if s["architecture"] == "arm64"]
+        if not candidates:
+            raise Unsupported("the selected 64-bit Android ABI requires an ARM64 IPA slice")
+    elif target_abi == "armeabi-v7a":
         candidates = [s for s in candidates if s["architecture"] in ("armv7s", "armv7", "armv6")]
         if not candidates:
             raise Unsupported("the selected 32-bit Android ABI requires an ARMv6/ARMv7 IPA slice")
@@ -205,10 +209,8 @@ def prove_leaf(
             address = section["address"] + entry - section["offset"]
             thumb = any(sym["value"] == address and sym["description"] & 8 for sym in sl["symbols"])
             code = data[sl["offset"] + entry : sl["offset"] + section["offset"] + section["size"]]
-            output_abi = target_abi
-            if output_abi == "auto":
-                output_abi = "arm64-v8a" if sl["architecture"] == "arm64" else "armeabi-v7a"
-            program = lift(code, sl["architecture"], thumb, output_abi)
+            target_arch = "arm64" if sl["architecture"] == "arm64" else "armv7"
+            program = lift(code, sl["architecture"], thumb, target_arch=target_arch)
             code_start = entry - section["offset"]
             code_end = code_start + program.source_size
             for relocation in section["relocations"]:
@@ -361,8 +363,8 @@ def _usage_detail(component: str, usage: dict) -> dict | None:
             ),
         }
     parts = [
-        f"{entry['count']} reachable API(s): {entry['native']} natively implementable, "
-        f"{entry['compatibility']} needing a compatibility layer, {entry['blocked']} unsupported"
+        f"{entry['count']} reachable API(s): {entry['native']} same-name Android native candidates, "
+        f"{entry['compatibility']} requiring compatibility rewrites, {entry['blocked']} unsupported"
     ]
     if entry["symbols"]:
         parts.append("e.g. " + ", ".join(entry["symbols"][:4]))
@@ -378,14 +380,14 @@ def capabilities(reconstruction: dict | None = None) -> list[dict]:
     usage = _reconstructed_usage(reconstruction) if reconstruction else {}
     entries = [
         {
-            "component": "ARM64 closed integer leaf code",
+            "component": "ARM64 closed integer leaf assessment",
             "status": "PARTIAL",
-            "detail": "MOVZ/MOVK, 32-bit immediate ADD/SUB, RET; preserved native instructions",
+            "detail": "MOVZ/MOVK, 32-bit immediate ADD/SUB and RET can be lowered in memory only; no runnable code or game APK is emitted",
         },
         {
-            "component": "ARMv6/ARMv7/ARMv7s/Thumb/Thumb-2",
+            "component": "ARMv6/ARMv7/ARMv7s/Thumb/Thumb-2 assessment",
             "status": "PARTIAL",
-            "detail": "offline straight-line ARMv6 A32/Thumb-1 and ARMv7/v7s immediate MOV/ADD/SUB/return lowering; Thumb-2 MOVW/MOVT only on ARMv7/v7s; no general branches/loads/calls",
+            "detail": "selected immediate MOV/ADD/SUB/return subsets can be lowered in memory to ARMv7 form; no runnable code or 32-bit game APK is emitted",
         },
         {
             "component": "Objective-C",
@@ -409,9 +411,9 @@ def capabilities(reconstruction: dict | None = None) -> list[dict]:
             ),
         },
         {
-            "component": "APK packaging",
-            "status": "SUPPORTED",
-            "detail": "host SDK/NDK: ARM64 JNI ELF, aapt2, D8, zipalign, apksigner; no on-device compiler",
+            "component": "complete game APK packaging",
+            "status": "BLOCKED",
+            "detail": "disabled until a complete game-code/API replacement backend exists; the importer APK is a separate product",
         },
     ]
     if not usage:

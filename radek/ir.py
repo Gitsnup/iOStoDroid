@@ -56,26 +56,28 @@ class Program:
     blocks: list[Block]
     machine_code: bytes
     source_size: int
-    target_abi: str = "arm64-v8a"
+    output_architecture: str = "arm64"
     thumb: bool = False
 
+    @property
+    def target_abi(self) -> str:
+        return "arm64-v8a" if self.output_architecture == "arm64" else "armeabi-v7a"
+
     def report(self):
-        backend = "preserved-arm64" if self.architecture == "arm64" else (
-            "offline-arm32-to-arm32" if self.target_abi == "armeabi-v7a" else "offline-arm32-to-arm64"
-        )
         return {
             "architecture": self.architecture,
+            "outputArchitecture": self.output_architecture,
             "targetAbi": self.target_abi,
-            "thumbMode": self.thumb,
             "blocks": [asdict(b) for b in self.blocks],
             "sourceBytes": self.source_size,
             "outputBytes": len(self.machine_code),
             "machineCodeSha256": hashlib.sha256(self.machine_code).hexdigest(),
-            "backend": backend,
+            "sourceThumb": self.thumb,
+            "backend": "preserved-arm64" if self.output_architecture == "arm64" and self.architecture == "arm64" else f"offline-{self.architecture}-to-{self.output_architecture}",
         }
 
 
-def _emit(i: Instruction) -> bytes:
+def _emit_arm64(i: Instruction) -> bytes:
     if i.op == Op.CONST:
         value = i.immediate & 0xFFFFFFFF
         words = [0x52800000 | ((value & 0xFFFF) << 5) | i.dst]
@@ -94,15 +96,76 @@ def _emit(i: Instruction) -> bytes:
     return b"".join(struct.pack("<I", w) for w in words)
 
 
-def lift(code: bytes, architecture: str, thumb: bool = False, target_abi: str = "arm64-v8a") -> Program:
+def _armv7_immediate(value: int) -> int | None:
+    """Encode the ARM rotated-eight-bit immediate field, if representable."""
+    value &= 0xFFFFFFFF
+    for rotate in range(16):
+        shift = rotate * 2
+        for imm8 in range(256):
+            rotated = ((imm8 >> shift) | (imm8 << (32 - shift))) & 0xFFFFFFFF if shift else imm8
+            if rotated == value:
+                return (rotate << 8) | imm8
+    return None
+
+
+def _movw(rd: int, value: int) -> int:
+    return 0xE3000000 | ((value & 0xF000) << 4) | (rd << 12) | (value & 0x0FFF)
+
+
+def _movt(rd: int, value: int) -> int:
+    return 0xE3400000 | ((value & 0xF000) << 4) | (rd << 12) | (value & 0x0FFF)
+
+
+def _emit_armv7(i: Instruction) -> bytes:
+    if i.op == Op.CONST:
+        value = i.immediate & 0xFFFFFFFF
+        words = [_movw(i.dst, value & 0xFFFF)]
+        if value >> 16:
+            words.append(_movt(i.dst, value >> 16))
+    elif i.op == Op.INSERT:
+        if i.shift != 16:
+            raise Unsupported("ARMv7 backend only lowers a high-half MOVK/MOVT")
+        words = [_movt(i.dst, i.immediate & 0xFFFF)]
+    elif i.op in (Op.ADD, Op.SUB):
+        immediate = _armv7_immediate(i.immediate)
+        if immediate is None:
+            raise Unsupported("immediate cannot be represented by one ARMv7 ADD/SUB")
+        base = 0xE2800000 if i.op == Op.ADD else 0xE2400000
+        words = [base | (i.src << 16) | (i.dst << 12) | immediate]
+    elif i.op == Op.RETURN:
+        words = [0xE12FFF1E]  # BX LR
+    else:
+        raise Unsupported("IR operation has no verified ARMv7 backend: " + i.op.value)
+    return b"".join(struct.pack("<I", word) for word in words)
+
+
+def lift(
+    code: bytes,
+    architecture: str,
+    thumb: bool = False,
+    target_arch: str = "arm64",
+    target_abi: str | None = None,
+) -> Program:
     if architecture not in ("arm64", "armv7", "armv7s", "armv6"):
         raise Unsupported("no safe backend for " + architecture)
-    if target_abi not in ("arm64-v8a", "armeabi-v7a"):
-        raise Unsupported("unsupported Android target ABI: " + target_abi)
-    if architecture == "arm64" and target_abi != "arm64-v8a":
-        raise Unsupported("ARM64 input cannot be preserved as 32-bit ARM instructions")
-    if architecture != "arm64" and target_abi == "armeabi-v7a" and architecture not in ("armv6", "armv7", "armv7s"):
-        raise Unsupported("unsupported ARM32 source architecture")
+    target_aliases = {
+        "arm64": "arm64",
+        "arm64-v8a": "arm64",
+        "armv7": "armv7",
+        "armeabi-v7a": "armv7",
+    }
+    if target_abi is not None:
+        abi_arch = target_aliases.get(target_abi)
+        if abi_arch is None:
+            raise Unsupported("unsupported Android target ABI: " + target_abi)
+        requested_arch = target_aliases.get(target_arch)
+        if target_arch != "arm64" and requested_arch != abi_arch:
+            raise Unsupported("conflicting Android target architecture and ABI")
+        target_arch = abi_arch
+    else:
+        target_arch = target_aliases.get(target_arch)
+    if target_arch not in ("arm64", "armv7"):
+        raise Unsupported("unsupported Android target architecture")
     instructions, initialized, output = [], set(), bytearray()
     p = 0
     while p < len(code) and len(instructions) < 4096:
@@ -189,13 +252,15 @@ def lift(code: bytes, architecture: str, thumb: bool = False, target_abi: str = 
                 raise Unsupported(
                     f"Thumb instruction 0x{w:04x} at +0x{start:x} is unsupported (branches/IT require a future CFG backend)"
                 )
-        # Keep the backend inside caller-saved register sets. ARM64 x0-x15 are
-        # caller-saved; on AAPCS32 only r0-r3 and r12 are caller-saved.
-        allowed_registers = set(range(16)) if architecture == "arm64" else set(range(4)) | {12}
-        if i.dst is not None and i.dst not in allowed_registers:
-            raise Unsupported("special/callee-saved/platform register write")
-        if i.src is not None and i.src not in allowed_registers:
-            raise Unsupported("special/callee-saved/platform register read")
+        # Never leak guest writes to registers the Android JNI caller expects preserved.
+        # ARMv7 AAPCS keeps r4-r11 and reserves r9; only r0-r3/r12 are volatile.
+        allowed_destinations = (
+            {0, 1, 2, 3, 12}
+            if target_arch == "armv7"
+            else set(range(13 if architecture != "arm64" else 16))
+        )
+        if i.dst is not None and i.dst not in allowed_destinations:
+            raise Unsupported("special/platform/callee-saved register write")
         if i.op == Op.INSERT and i.dst not in initialized:
             raise Unsupported("read of uninitialized register")
         if i.src is not None and i.src not in initialized:
@@ -205,10 +270,12 @@ def lift(code: bytes, architecture: str, thumb: bool = False, target_abi: str = 
         if i.dst is not None:
             initialized.add(i.dst)
         instructions.append(i)
-        if architecture == "arm64" or target_abi == "armeabi-v7a":
+        if architecture == "arm64" and target_arch == "arm64":
             output.extend(code[start:p])
+        elif target_arch == "armv7":
+            output.extend(_emit_armv7(i))
         else:
-            output.extend(_emit(i))
+            output.extend(_emit_arm64(i))
         if i.op == Op.RETURN:
-            return Program(architecture, [Block(0, instructions)], bytes(output), p, target_abi, thumb)
+            return Program(architecture, [Block(0, instructions)], bytes(output), p, target_arch, thumb)
     raise Unsupported("entry point does not terminate within 4096 verified instructions")

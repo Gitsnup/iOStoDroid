@@ -8,7 +8,7 @@ from .apk import Toolchain, validate_apk
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Authorized IPA inspection and restricted offline native conversion (no emulation)"
+        description="Authorized IPA inspection and fail-closed game-conversion assessment (no emulation)"
     )
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("analyze", "convert"):
@@ -18,18 +18,22 @@ def main():
         p.add_argument(
             "--authorized", action="store_true", help="confirm ownership/permission to convert this IPA"
         )
-        p.add_argument("--debug-key", type=Path)
         p.add_argument(
             "--target-abi",
             choices=("auto", "arm64-v8a", "armeabi-v7a"),
             default="auto",
-            help="Android native ABI; auto preserves ARM64 input and emits ARM32 APKs for ARMv6/ARMv7-only IPAs",
+            help="assessment target ABI; auto prefers ARM64 in a FAT IPA and selects ARMv7 for ARM32-only inputs; no APK is emitted",
         )
     p = sub.add_parser("validate")
     p.add_argument("apk", type=Path)
     p.add_argument("--package", required=True)
     p.add_argument("--entry", required=True)
-    p.add_argument("--abi", choices=("arm64-v8a", "armeabi-v7a"), default="arm64-v8a")
+    p.add_argument(
+        "--abi",
+        choices=("arm64-v8a", "armeabi-v7a"),
+        default=None,
+        help="expected native ABI; inferred from conversion provenance when omitted",
+    )
     p.add_argument(
         "--converter-app",
         action="store_true",
@@ -52,7 +56,6 @@ def main():
             args.ipa,
             args.authorized,
             args.command == "analyze",
-            args.debug_key,
             args.target_abi,
         )
         print(

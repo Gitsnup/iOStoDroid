@@ -15,17 +15,18 @@ class IRTests(unittest.TestCase):
         code = struct.pack("<III", 0xE3A00028, 0xE2800002, 0xE12FFF1E)
         self.assertEqual(lift(code, "armv7").machine_code, expected)
 
-    def test_arm32_direct_backend_preserves_safe_code_and_reports_abi(self):
+    def test_arm32_target_abi_alias_lowers_safe_code_to_armv7(self):
         code = struct.pack("<II", 0xE3A0002A, 0xE12FFF1E)
         program = lift(code, "armv6", target_abi="armeabi-v7a")
-        self.assertEqual(program.machine_code, code)
+        self.assertEqual(program.machine_code, struct.pack("<II", 0xE300002A, 0xE12FFF1E))
         self.assertEqual(program.report()["targetAbi"], "armeabi-v7a")
-        self.assertEqual(program.report()["backend"], "offline-arm32-to-arm32")
+        self.assertEqual(program.report()["backend"], "offline-armv6-to-armv7")
 
         thumb_code = struct.pack("<HH", 0x202A, 0x4770)
         thumb = lift(thumb_code, "armv6", True, "armeabi-v7a")
-        self.assertEqual(thumb.machine_code, thumb_code)
+        self.assertEqual(thumb.machine_code, struct.pack("<II", 0xE300002A, 0xE12FFF1E))
         self.assertTrue(thumb.thumb)
+        self.assertTrue(thumb.report()["sourceThumb"])
 
     def test_arm32_callee_saved_register_writes_are_rejected(self):
         code = struct.pack("<III", 0xE3A0402A, 0xE3A0002A, 0xE12FFF1E)
@@ -38,6 +39,32 @@ class IRTests(unittest.TestCase):
         thumb = lift(struct.pack("<HH", 0x202A, 0x4770), "armv6", True)
         self.assertEqual(thumb.machine_code, struct.pack("<II", 0x52800540, 0xD65F03C0))
 
+    def test_armv6_to_armv7_32bit_android_code(self):
+        source = struct.pack("<II", 0xE3A0002A, 0xE12FFF1E)
+        program = lift(source, "armv6", target_arch="armv7")
+        expected = struct.pack("<II", 0xE300002A, 0xE12FFF1E)
+        self.assertEqual(program.machine_code, expected)
+        self.assertEqual(program.target_abi, "armeabi-v7a")
+        self.assertEqual(program.report()["outputArchitecture"], "armv7")
+
+    def test_armv7_output_rejects_callee_saved_and_platform_registers(self):
+        for register in (4, 9, 11):
+            source = struct.pack("<III", 0xE3A0002A, 0xE3A00000 | (register << 12) | 1, 0xE12FFF1E)
+            with self.subTest(register=register), self.assertRaisesRegex(Unsupported, "callee-saved"):
+                lift(source, "armv7", target_arch="armv7")
+
+    def test_armv7_leaf_lowers_to_32bit_android_code(self):
+        source = struct.pack("<III", 0xE3A00028, 0xE2800002, 0xE12FFF1E)
+        program = lift(source, "armv7", target_arch="armv7")
+        expected = struct.pack("<III", 0xE3000028, 0xE2800002, 0xE12FFF1E)
+        self.assertEqual(program.machine_code, expected)
+        self.assertEqual(program.target_abi, "armeabi-v7a")
+
+    def test_thumb_armv7_leaf_lowers_to_a32_android_code(self):
+        source = struct.pack("<HH", 0x202A, 0x4770)
+        program = lift(source, "armv7", True, target_arch="armv7")
+        self.assertEqual(program.machine_code, struct.pack("<II", 0xE300002A, 0xE12FFF1E))
+
     def test_thumb_offline_lowering(self):
         p = lift(struct.pack("<HHHH", 0x2029, 0x3002, 0x3801, 0x4770), "armv7", True)
         self.assertEqual(len(p.machine_code), 16)
@@ -49,9 +76,31 @@ class IRTests(unittest.TestCase):
         self.assertEqual(p.blocks[0].instructions[1].immediate, 0x5678)
         self.assertEqual(p.machine_code, struct.pack("<III", 0x52824680, 0x72AACF00, 0xD65F03C0))
 
+        armv7 = lift(
+            struct.pack("<HHHHH", 0xF241, 0x2034, 0xF2C5, 0x6078, 0x4770),
+            "armv7s",
+            True,
+            target_arch="armv7",
+        )
+        self.assertEqual(armv7.machine_code, struct.pack("<III", 0xE3010234, 0xE3450678, 0xE12FFF1E))
+        self.assertEqual(armv7.target_abi, "armeabi-v7a")
+
     def test_arm_rotated_constant(self):
-        p = lift(struct.pack("<II", 0xE3A004FF, 0xE12FFF1E), "armv7")
+        source = struct.pack("<II", 0xE3A004FF, 0xE12FFF1E)
+        p = lift(source, "armv7")
         self.assertEqual(p.blocks[0].instructions[0].immediate, 0xFF000000)
+        armv7 = lift(source, "armv7", target_arch="armv7")
+        self.assertEqual(
+            armv7.machine_code,
+            struct.pack("<III", 0xE3000000, 0xE34F0F00, 0xE12FFF1E),
+        )
+
+        add = lift(
+            struct.pack("<III", 0xE3A01001, 0xE28104FF, 0xE12FFF1E),
+            "armv7",
+            target_arch="armv7",
+        )
+        self.assertEqual(add.machine_code, struct.pack("<III", 0xE3001001, 0xE28104FF, 0xE12FFF1E))
 
     def test_uninitialized_inputs(self):
         for code in (

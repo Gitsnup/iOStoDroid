@@ -16,19 +16,10 @@ object NativeBridge {
 
 enum class ConversionState { IMPORTED, ANALYZING, CONVERTING, PACKAGING, VALIDATING, READY, PARTIAL, BLOCKED, FAILED }
 
-data class WorkflowProgress(val percent: Int, val stage: String, val message: String, val status: String = "RUNNING") {
-    fun toJson(): JSONObject = JSONObject()
-        .put("percent", percent.coerceIn(0, 100))
-        .put("stage", stage)
-        .put("message", message)
-        .put("status", status)
-        .put("basis", "completed workflow stages; not a playable-code percentage")
-        .put("updatedAt", java.time.Instant.now().toString())
-}
-
 /** Persistent private library. Android imports/analyzes; compilation uses the host CLI. */
 class Library(private val context: Context) {
     val root = File(context.filesDir, "library").apply { mkdirs() }
+    private fun formatBytes(value: Long) = "%.1f MiB".format(java.util.Locale.ROOT, value / 1048576.0)
     fun entries(): List<Pair<File, JSONObject>> = root.listFiles().orEmpty().filter { it.isDirectory }.mapNotNull { dir ->
         try { dir to JSONObject(File(dir, "report.json").readText()) } catch (_: Exception) { null }
     }.sortedByDescending { it.first.name }
@@ -44,158 +35,132 @@ class Library(private val context: Context) {
         entries().forEach { (dir, report) ->
             var changed = false
             if (report.optString("state") in listOf("IMPORTED", "ANALYZING", "CONVERTING", "PACKAGING", "VALIDATING")) {
-                val failureMessage = "Process ended before work completed; inspect the last saved stage or retry"
-                report.put("state", "FAILED").put("error", failureMessage)
-                val savedProgress = report.optJSONObject("workflowProgress")
-                val interruptedStage = savedProgress?.optString("stage")?.takeIf { it.isNotBlank() } ?: "workflow"
-                report.put("workflowProgress", WorkflowProgress(
-                    savedProgress?.optInt("percent", 0) ?: 0,
-                    "Interrupted during $interruptedStage",
-                    failureMessage,
-                    "FAILED",
-                ).toJson())
+                val interruptedMessage = "Process ended before work completed; inspect the last saved stage or retry"
+                report.put("state", "FAILED").put("error", interruptedMessage)
+                report.optJSONObject("analysisProgress")
+                    ?.put("status", "FAILED")
+                    ?.put("message", interruptedMessage)
+                report.optJSONObject("conversionProgress")
+                    ?.put("status", "FAILED")
+                    ?.put("message", interruptedMessage)
+                report.optJSONObject("workflowProgress")
+                    ?.put("status", "FAILED")
+                    ?.put("message", interruptedMessage)
                 File(dir, "extracted").deleteRecursively()
                 val savedHash = report.optJSONObject("source")?.optString("sha256").orEmpty()
                 if (!savedHash.matches(Regex("[0-9a-f]{64}"))) File(dir, "source.ipa").delete()
                 changed = true
-            }
-            val forced = report.optJSONObject("forceConversion")
-            if (forced?.optString("status") == "PACKAGING") {
-                forced.put("status", "FAILED").put("error", "Process stopped while building the installable game-stub APK")
-                File(dir, "${GameStubBuilder.fileName(report)}.pending").delete()
-                changed = true
-            }
-            val automatic = report.optJSONObject("automaticPackage")
-            if (automatic?.optString("status") == "PACKAGING") {
-                automatic.put("status", "FAILED").put("error", "Process stopped while building the game-stub APK")
-                File(dir, "${GameStubBuilder.fileName(report)}.pending").delete()
-                changed = true
-            }
-            if (forced?.optString("status") == "FAILED" || automatic?.optString("status") == "FAILED") {
-                val savedProgress = report.optJSONObject("workflowProgress")
-                if (savedProgress?.optString("status") == "RUNNING") {
-                    val failure = WorkflowProgress(
-                        savedProgress.optInt("percent", 0),
-                        "APK build interrupted",
-                        forced?.optString("error")?.takeIf { it.isNotBlank() }
-                            ?: automatic?.optString("error")?.takeIf { it.isNotBlank() }
-                            ?: "The APK build stopped before completion",
-                        "FAILED",
-                    )
-                    report.put("workflowProgress", failure.toJson())
-                    changed = true
-                }
-            }
-            if (forced?.optString("status") == "FAILED" || automatic?.optString("status") == "FAILED") {
-                File(dir, "game-stub-work").deleteRecursively()
             }
             if (changed) save(dir, report)
         }
     }
 
     private fun sourceDetails(uri: Uri): Pair<String, Long?> {
-        val details = try {
-            context.contentResolver.query(
-                uri,
-                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
-                null,
-                null,
-                null,
-            )?.use { cursor ->
+        val queried = try {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
                 if (!cursor.moveToFirst()) null else {
-                    val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
-                    val name = if (nameColumn >= 0) cursor.getString(nameColumn) else null
-                    val size = if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) cursor.getLong(sizeColumn) else null
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    val name = if (nameIndex >= 0) cursor.getString(nameIndex) else null
+                    val size = if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) cursor.getLong(sizeIndex).takeIf { it >= 0 } else null
                     name to size
                 }
             }
         } catch (_: Exception) { null }
-        val name = details?.first?.takeIf { it.isNotBlank() }
+        val fallbackName = queried?.first?.takeIf { it.isNotBlank() }
             ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
             ?: "converted.ipa"
-        return name to details?.second?.takeIf { it > 0 }
+        return fallbackName to queried?.second
     }
 
-    fun import(uri: Uri, progress: (WorkflowProgress) -> Unit): Pair<File, JSONObject> {
-        val (originalName, declaredSize) = sourceDetails(uri)
+    fun import(uri: Uri, progress: (Int, String) -> Unit): Pair<File, JSONObject> {
+        val (originalName, expectedSourceBytes) = sourceDetails(uri)
         val dir = File(root, "${System.currentTimeMillis()}-${UUID.randomUUID()}").apply { check(mkdir()) }
         val events = JSONArray()
-        val report = JSONObject().put("schemaVersion", 1).put("authorizationConfirmed", true).put("events", events)
+        val report = JSONObject()
+            .put("schemaVersion", 1)
+            .put("authorizationConfirmed", true)
+            .put("events", events)
+            .put("conversionProgress", JSONObject()
+                .put("percent", 0)
+                .put("stage", "NOT_STARTED")
+                .put("status", "NOT_BUILT")
+                .put("message", "No real Android conversion was run on-device; no placeholder APK will be emitted."))
+            .put("portProgress", JSONObject()
+                .put("percent", 0)
+                .put("status", "NO_RUNNABLE_ANDROID_GAME_CODE")
+                .put("basis", "No Android game code has been generated. API candidates and analysis progress do not count as playable code."))
         val source = File(dir, "source.ipa")
         var sourceReady = false
-        var currentPercent = 0
-        var lastStage = "Import"
-        var lastMessage = "Preparing IPA import"
-        fun updateProgress(percent: Int, stage: String, message: String, status: String = "RUNNING") {
-            val next = maxOf(currentPercent, percent.coerceIn(0, 100))
-            if (next == currentPercent && stage == lastStage && message == lastMessage && status == report.optJSONObject("workflowProgress")?.optString("status")) return
-            currentPercent = next
-            lastStage = stage
-            lastMessage = message
-            val snapshot = WorkflowProgress(currentPercent, stage, message, status)
-            report.put("workflowProgress", snapshot.toJson())
-            save(dir, report)
-            progress(snapshot)
+        var progressPercent = 0
+        var lastPersistedPercent = -1
+        var lastUiPercent = -1
+        var lastUiAt = 0L
+        fun updateProgress(value: Int, stage: String, message: String, forceSave: Boolean = false) {
+            progressPercent = maxOf(progressPercent, value.coerceIn(0, 100))
+            val progressStatus = when (stage) {
+                "PARTIAL", "BLOCKED", "FAILED" -> "COMPLETE"
+                else -> "RUNNING"
+            }
+            report.put("analysisProgress", JSONObject()
+                .put("percent", progressPercent)
+                .put("stage", stage)
+                .put("status", progressStatus)
+                .put("message", message)
+                .put("updatedAt", java.time.Instant.now().toString()))
+            val now = System.currentTimeMillis()
+            if (progressPercent != lastUiPercent || now - lastUiAt >= 250L || forceSave) {
+                progress(progressPercent, message)
+                lastUiPercent = progressPercent
+                lastUiAt = now
+            }
+            if (forceSave || progressPercent != lastPersistedPercent) {
+                save(dir, report)
+                lastPersistedPercent = progressPercent
+            }
         }
-        fun log(state: ConversionState, message: String) {
+        fun log(state: ConversionState, message: String, percent: Int) {
             report.put("state", state.name)
             val event = JSONObject().put("time", java.time.Instant.now().toString()).put("stage", state.name).put("message", message)
             events.put(event); File(dir, "conversion.jsonl").appendText(event.toString() + "\n")
+            updateProgress(percent, state.name, message, forceSave = true)
             save(dir, report)
-            val stagePercent = when (state) {
-                ConversionState.IMPORTED -> 1
-                ConversionState.ANALYZING -> 32
-                ConversionState.CONVERTING -> 65
-                ConversionState.PACKAGING -> 75
-                ConversionState.VALIDATING -> 92
-                ConversionState.READY -> 100
-                ConversionState.PARTIAL, ConversionState.BLOCKED -> 65
-                ConversionState.FAILED -> currentPercent
-            }
-            val status = when (state) {
-                ConversionState.FAILED -> "FAILED"
-                ConversionState.BLOCKED -> "BLOCKED"
-                ConversionState.PARTIAL -> "ANALYSIS_COMPLETE"
-                else -> "RUNNING"
-            }
-            updateProgress(stagePercent, state.name.lowercase().replaceFirstChar { it.uppercase() }, message, status)
         }
         try {
-            log(ConversionState.IMPORTED, "Copying selected IPA into isolated private storage")
+            log(ConversionState.IMPORTED, "Copying selected IPA into isolated private storage", 0)
             val digest = MessageDigest.getInstance("SHA-256")
             context.contentResolver.openInputStream(uri).use { input ->
                 requireNotNull(input) { "cannot open selected document" }
                 source.outputStream().use { output ->
-                    val buffer = ByteArray(65536)
-                    var total = 0L
-                    var lastReport = 0L
+                    val buffer = ByteArray(65536); var total = 0L
                     while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        total += count
-                        require(total <= SafeZip.MAX_ARCHIVE) { "IPA exceeds 512 MiB" }
-                        digest.update(buffer, 0, count)
-                        output.write(buffer, 0, count)
-                        if (total - lastReport >= 1024 * 1024 || (declaredSize != null && total >= declaredSize)) {
-                            val percent = declaredSize?.let { (1 + total * 10 / it).toInt().coerceIn(1, 11) } ?: currentPercent
-                            updateProgress(percent, "Copying IPA", "Copied ${total / (1024 * 1024)} MiB of the source file")
-                            lastReport = total
-                        }
+                        val n = input.read(buffer); if (n < 0) break
+                        total += n; require(total <= SafeZip.MAX_ARCHIVE) { "IPA exceeds 512 MiB" }
+                        digest.update(buffer, 0, n); output.write(buffer, 0, n)
+                        val copyPercent = expectedSourceBytes?.takeIf { it > 0 }?.let { (total * 5L / it).toInt() } ?: 2
+                        updateProgress(copyPercent.coerceAtMost(5), "IMPORTING", "Copying authorized IPA · ${formatBytes(total)}")
                     }
                 }
             }
+            updateProgress(5, "IMPORTED", "Input staged; checking archive and bundle contents", forceSave = true)
             val hash = digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
             report.put("source", JSONObject().put("path", "source.ipa").put("originalName", originalName)
                 .put("sha256", hash).put("bytes", source.length()))
             save(dir, report)
             sourceReady = true
-            updateProgress(12, "Source verified", "Copied ${source.length() / (1024 * 1024)} MiB and calculated the IPA SHA-256")
-            SafeZip.extract(source, File(dir, "extracted")) { done, total ->
-                val percent = if (total > 0) 12 + (done * 18 / total) else 30
-                updateProgress(percent, "Extracting IPA", "Validated $done of $total archive entries")
-            }
-            log(ConversionState.ANALYZING, "Reading Info.plist and application icon")
+            SafeZip.extract(
+                source,
+                File(dir, "extracted"),
+                onFile = { done, total ->
+                    val percent = if (total > 0) 5 + done * 20 / total else 25
+                    updateProgress(percent, "EXTRACTING", "Extracting IPA entries · $done / $total")
+                },
+                onBytes = { done, total, path ->
+                    val percent = if (total > 0) 5 + (done * 20L / total).toInt() else 25
+                    updateProgress(percent, "EXTRACTING", "Extracting ${path.substringAfterLast('/')} · ${formatBytes(done)}")
+                },
+            )
+            log(ConversionState.ANALYZING, "Reading Info.plist and application icon", 25)
             val apps = File(dir, "extracted/Payload").listFiles().orEmpty().filter { it.isDirectory && it.name.endsWith(".app") }
             require(apps.size == 1) { "expected exactly one Payload/*.app" }
             val app = apps.single()
@@ -219,25 +184,16 @@ class Library(private val context: Context) {
             }
             names.addAll((plist["CFBundleIconFiles"] as? List<*>)?.filterIsInstance<String>().orEmpty())
             (plist["CFBundleIconFile"] as? String)?.let { names.add(it) }
+            updateProgress(30, "ANALYZING", "Bundle metadata read; recovering the original launcher icon", forceSave = true)
             val iconReport = extractIcon(app, names, dir)
             report.put("icon", iconReport)
-            updateProgress(40, "Bundle assets", if (iconReport.optString("status") == "SUPPORTED") "Recovered the game's launcher icon" else "No compatible icon could be decoded")
-            val stubContent = try {
-                StubContent.collect(app, dir, executable) { done, total ->
-                    val percent = if (total > 0) 41 + (done * 3 / total) else 44
-                    updateProgress(percent, "Safe bundle content", "Checking $done of $total resources for non-executable content")
-                }
-            } catch (resourceError: Exception) {
-                JSONObject().put("status", "UNAVAILABLE").put("fileCount", 0).put("bytes", 0)
-                    .put("notice", "Safe resource copy failed: ${resourceError.message}")
-            }
-            report.put("stubContent", stubContent)
-            updateProgress(44, "Bundle content", "Cached ${stubContent.optInt("fileCount", 0)} allowed non-executable resource file(s)")
+            updateProgress(40, "ICON_RECOVERY", if (iconReport.optString("status") == "SUPPORTED") "Recovered the original game icon for the analysis library" else "No compatible icon could be decoded")
+            updateProgress(44, "ANALYZING", "Launcher icon recovered; preparing bounded native analysis")
             val binary = File(app, executable)
             require(binary.isFile && binary.length() <= 64 * 1024 * 1024) { "Missing executable or exceeds the on-device 64 MiB analysis limit; use the host analyzer for larger files" }
-            updateProgress(44, "Mach-O analysis", "Reading architecture, symbols, imports and loader metadata")
-            log(ConversionState.ANALYZING, "Parsing Mach-O load commands, symbols, fixups and dependencies")
+            log(ConversionState.ANALYZING, "Parsing Mach-O load commands, symbols, fixups and dependencies", 33)
             val macho = JSONObject(NativeBridge.analyze(binary.readBytes()))
+            updateProgress(38, "ANALYZING", "Main executable parsed; checking embedded Mach-O images", forceSave = true)
             report.put("machO", macho)
             updateProgress(53, "Mach-O analysis", "Primary executable analysis completed")
             val graph = JSONArray(); val nodes = JSONArray()
@@ -269,29 +225,41 @@ class Library(private val context: Context) {
                     incompatible = true
                 }
             }
+            updateProgress(45, "ANALYZING", "Dependency inventory complete; cataloging API candidates only", forceSave = true)
             report.put("dependencies", JSONObject().put("nodes", nodes).put("edges", graph))
-            updateProgress(57, "Dependencies", "Scanned ${nodes.length()} Mach-O image(s) and ${graph.length()} linked dependency edge(s)")
             val apiMapping = AndroidApiMapper.analyze(nodes)
             report.put("apiMapping", apiMapping)
-            updateProgress(62, "Conversion assessment", "API candidates inventoried; no game code is emitted by the on-device backend")
+            report.put("apiTranslation", JSONObject()
+                .put("status", "NOT_IMPLEMENTED")
+                .put("attempted", false)
+                .put("generatedApiReplacements", 0)
+                .put("codeGenerated", false)
+                .put("message", "Imported symbols and semantic targets are candidates only; no Android API replacement implementation was generated or linked."))
             report.put("portProgress", JSONObject()
                 .put("percent", 0)
                 .put("status", "NO_RUNNABLE_ANDROID_CODE_BUILT")
                 .put("basis", "On-device importer analyzed the IPA but emitted no Android executable code; this is actual output progress, not a stability prediction."))
             log(ConversionState.ANALYZING,
-                "Inventoried ${apiMapping.getInt("distinctImportSymbols")} unique imported API symbols; " +
-                    "${apiMapping.getInt("mappedNameCandidates")} have a same-named Bionic candidate. This is not binary/API conversion.")
+                "Inventoried ${apiMapping.getInt("distinctImportSymbols")} API symbols; ${apiMapping.getInt("mappedNameCandidates")} direct NDK names and ${apiMapping.getInt("semanticRewriteCandidates")} semantic rewrite candidates were not generated or linked.", 50)
             val reason = when {
                 encrypted -> "Protected/encrypted Mach-O. Conversion prohibited; no DRM or FairPlay bypass."
                 !hasCandidate -> "No supported ARM64/ARMv7/ARMv6 slice. ARM64e PAC reconstruction is blocked."
                 incompatible -> "Frameworks, imports, incomplete dyld bindings, metadata or embedded code require unsupported compatibility/linker implementations."
-                else -> "Analysis completed. A host SDK/NDK is required to prove the restricted leaf subset, reconstruct native code and package an APK. On-device compilation is not implemented."
+                else -> "Analysis completed, but complete iOS-to-Android game-code translation, API replacement, and packaging are not implemented. No APK can be produced from this analysis."
             }
-            report.put("blockers", JSONArray().put(reason)).put("hostCommand", "python3 -m radek convert input.ipa --authorized --output workspace/result")
-            log(if (encrypted || incompatible || !hasCandidate) ConversionState.BLOCKED else ConversionState.PARTIAL, reason)
+            report.put("blockers", JSONArray().put(reason)).put("hostCommand", "python3 -m radek analyze input.ipa --authorized --output workspace/analysis")
+            val terminalState = if (encrypted || incompatible || !hasCandidate) ConversionState.BLOCKED else ConversionState.PARTIAL
+            report.put("conversionProgress", JSONObject()
+                .put("percent", 0)
+                .put("stage", "NOT_BUILT")
+                .put("status", "NOT_BUILT")
+                .put("message", reason)
+                .put("basis", "No placeholder APK is emitted; only a real host conversion that passes validation can be attached."))
+            log(terminalState, reason, 100)
+            save(dir, report)
         } catch (e: Exception) {
             report.put("error", "${e.javaClass.simpleName}: ${e.message}")
-            log(ConversionState.FAILED, e.message ?: "Import failed")
+            log(ConversionState.FAILED, e.message ?: "Import failed", progressPercent)
         } finally {
             if (!sourceReady) source.delete()
             File(dir, "extracted").deleteRecursively()

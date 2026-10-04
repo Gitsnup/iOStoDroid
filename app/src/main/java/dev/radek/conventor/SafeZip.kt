@@ -48,7 +48,12 @@ object SafeZip {
             require(f.filePointer == offset + size)
         }
     }
-    fun extract(source: File, destination: File, onFile: (Int, Int) -> Unit = { _, _ -> }) {
+    fun extract(
+        source: File,
+        destination: File,
+        onBytes: (Long, Long, String) -> Unit = { _, _, _ -> },
+        onFile: (Int, Int) -> Unit = { _, _ -> },
+    ) {
         require(!destination.exists()) { "workspace already exists" }
         centralDirectory(source)
         require(destination.mkdirs())
@@ -56,8 +61,10 @@ object SafeZip {
             ZipFile(source).use { zip ->
                 val entries = zip.entries().toList()
                 require(entries.size <= 20000)
+                val uncompressedTotal = entries.sumOf { it.size }
                 val names = mutableSetOf<String>()
                 var total = 0L
+                var extractedBytes = 0L
                 entries.forEachIndexed { index, entry ->
                     val name = validateName(entry.name)
                     require(names.add(name.lowercase(java.util.Locale.ROOT))) { "duplicate/case-colliding ZIP path" }
@@ -78,6 +85,8 @@ object SafeZip {
                                     val count = input.read(buffer); if (count < 0) break
                                     written += count; require(written <= entry.size && written <= MAX_FILE)
                                     crc.update(buffer, 0, count); output.write(buffer, 0, count)
+                                    extractedBytes += count
+                                    onBytes(extractedBytes, uncompressedTotal, name)
                                 }
                                 require(written == entry.size && crc.value == entry.crc) { "ZIP size/CRC mismatch" }
                             }

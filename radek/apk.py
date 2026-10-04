@@ -1,24 +1,30 @@
-"""Real SDK/NDK packaging and independent APK structural/signature validation."""
+"""APK validation utilities; game-APK packaging stays disabled without a full translator."""
 
 from __future__ import annotations
+import hashlib
 import json
 import os
 import re
-import shutil
-import struct
 import subprocess
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from xml.sax.saxutils import quoteattr
-from . import providers
 from .archive import InputError, safe_name
-from .resources import fallback_icon
 from .dex import classes as dex_classes
 
-ARTIFACT = "RadekiOSConventor-debug.apk"
 BUILD_TOOLS = "35.0.0"
-NDK_VERSION = "27.2.12479018"
+
+
+def artifact_filename(source_name: str | Path) -> str:
+    """Return a safe `<IPA stem>.apk` output name derived from the input filename."""
+    name = str(source_name).replace("\\", "/").rsplit("/", 1)[-1]
+    if name.lower().endswith(".ipa"):
+        stem = name[:-4]
+    else:
+        stem = name.rsplit(".", 1)[0] if "." in name else name
+    safe = "".join(ch if ch.isalnum() or ch in " ._-" else "_" for ch in stem)
+    safe = safe.strip(" ._-")[:80].strip(" ._-") or "ConvertedIPA"
+    return f"{safe}.apk"
 
 
 def run(args: list[str | Path], log=None, timeout=180) -> str:
@@ -39,8 +45,6 @@ def run(args: list[str | Path], log=None, timeout=180) -> str:
 class Toolchain:
     sdk: Path
     build: Path
-    platform: Path
-    clang: Path
 
     @classmethod
     def discover(cls):
@@ -49,54 +53,14 @@ class Toolchain:
             raise RuntimeError("ANDROID_SDK_ROOT or ANDROID_HOME is required; see docs/BUILD.md")
         sdk = Path(home)
         build = sdk / "build-tools" / BUILD_TOOLS
-        platform = sdk / "platforms/android-35/android.jar"
-        clang = (
-            sdk / f"ndk/{NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
-        )
-        for path in (platform, clang, *(build / name for name in ("aapt2", "d8", "zipalign", "apksigner"))):
+        for name in ("aapt2", "zipalign", "apksigner"):
+            path = build / name
             if not path.is_file():
                 raise RuntimeError("missing toolchain file: " + str(path))
-        for tool in ("java", "javac", "keytool"):
-            if not shutil.which(tool):
-                raise RuntimeError("Java 17 JDK tool missing: " + tool)
-        return cls(sdk, build, platform, clang)
+        return cls(sdk, build)
 
     def tool(self, name):
         return self.build / name
-
-
-def development_key(path: Path, log=None) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        # No committed secret. Stable alias/password for DEVELOPMENT ONLY.
-        run(
-            [
-                "keytool",
-                "-genkeypair",
-                "-keystore",
-                path,
-                "-storepass",
-                "android",
-                "-keypass",
-                "android",
-                "-alias",
-                "androiddebugkey",
-                "-dname",
-                "CN=Radek Development,O=Radek,C=US",
-                "-keyalg",
-                "RSA",
-                "-keysize",
-                "2048",
-                "-validity",
-                "10000",
-                "-storetype",
-                "JKS",
-                "-noprompt",
-            ],
-            log,
-        )
-        path.chmod(0o600)
-    return path
 
 
 def build_apk(
@@ -110,272 +74,169 @@ def build_apk(
     tools: Toolchain,
     key: Path,
     log=None,
+    target_abi: str | None = None,
 ) -> dict:
-    work.mkdir(parents=True, exist_ok=False)
-    package = "dev.radek.converted.p" + metadata["sha256"][:20]
-    source = work / "src/dev/radek/generated"
-    source.mkdir(parents=True)
-    label = str(metadata["name"])[:200]
-    manifest = work / "AndroidManifest.xml"
-    manifest.write_text(
-        f"""<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="{package}" android:versionCode="1" android:versionName="0.1">
-<uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35"/>
-<application android:label={quoteattr(label)} android:icon="@drawable/app_icon" android:allowBackup="false" android:extractNativeLibs="true" android:theme="@android:style/Theme.Material.Light.NoActionBar">
-<activity android:name="dev.radek.generated.MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
-</application></manifest>""",
-        encoding="utf-8",
+    """Refuse the former integer-entry wrapper, which was not a game conversion."""
+    raise InputError(
+        "APK packaging is disabled: no complete iOS-to-Android game translator and API replacement backend is implemented"
     )
-    java = source / "MainActivity.java"
-    java.write_text(
-        """package dev.radek.generated;
-import android.app.Activity;
-import android.os.Bundle;
-import android.widget.TextView;
-public final class MainActivity extends Activity {
-    static { System.loadLibrary("converted"); }
-    private static native int runNative();
-    @Override public void onCreate(Bundle state) {
-        super.onCreate(state);
-        int result = runNative();
-        android.util.Log.i("RadekNative", "native entry returned " + result);
-        TextView view = new TextView(this);
-        view.setTextSize(22); view.setPadding(28, 60, 28, 28);
-        view.setText("Standalone native program\\n\\nEntry returned: " + result +
-            "\\n\\nThis closed integer program runs as Android ARM64 code. It is not an iOS UI port.");
-        setContentView(view);
-    }
-}"""
-    )
-    res = work / "res/drawable"
-    res.mkdir(parents=True)
-    (res / "app_icon.png").write_bytes(icon or fallback_icon())
-    assembly = work / "converted.S"
-    words = struct.unpack("<" + "I" * (len(machine_code) // 4), machine_code)
-    assembly.write_text(
-        ".text\n.p2align 2\n.global Java_dev_radek_generated_MainActivity_runNative\n.type Java_dev_radek_generated_MainActivity_runNative, %function\n"
-        + "Java_dev_radek_generated_MainActivity_runNative:\n"
-        + "".join(f"  .inst 0x{w:08x}\n" for w in words)
-        + '.size Java_dev_radek_generated_MainActivity_runNative, .-Java_dev_radek_generated_MainActivity_runNative\n.section .note.GNU-stack,"",%progbits\n'
-    )
-    native = work / "libconverted.so"
-    run(
-        [
-            tools.clang,
-            "-shared",
-            "-fPIC",
-            "-nostdlib",
-            "-Wl,-soname,libconverted.so",
-            "-Wl,-z,defs",
-            "-Wl,-z,noexecstack",
-            "-Wl,-z,max-page-size=16384",
-            "-Wl,--build-id=sha1",
-            assembly,
-            "-o",
-            native,
-        ],
-        log,
-    )
-    classes, dex = work / "classes", work / "dex"
-    classes.mkdir()
-    dex.mkdir()
-    run(["javac", "--release", "8", "-classpath", tools.platform, "-d", classes, java], log)
-    run(
-        [
-            tools.tool("d8"),
-            "--lib",
-            tools.platform,
-            "--min-api",
-            "26",
-            "--output",
-            dex,
-            *sorted(classes.rglob("*.class")),
-        ],
-        log,
-    )
-    (assets / "conversion.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": 1,
-                "package": package,
-                "source": metadata,
-                "conversion": report["conversion"],
-                "resourceInventory": report["resources"],
-                "contract": "closed-integer-entry-v1",
-            },
-            indent=2,
-        )
-    )
-    compiled, unsigned, aligned = work / "compiled.zip", work / "unsigned.apk", work / "aligned.apk"
-    run([tools.tool("aapt2"), "compile", "--dir", work / "res", "-o", compiled], log)
-    run(
-        [
-            tools.tool("aapt2"),
-            "link",
-            "-o",
-            unsigned,
-            "-I",
-            tools.platform,
-            "--manifest",
-            manifest,
-            "--min-sdk-version",
-            "26",
-            "--target-sdk-version",
-            "35",
-            "-A",
-            assets,
-            compiled,
-        ],
-        log,
-    )
-    with zipfile.ZipFile(unsigned, "a", compression=zipfile.ZIP_DEFLATED) as z:
-        z.write(dex / "classes.dex", "classes.dex")
-        z.write(native, "lib/arm64-v8a/libconverted.so")
-    run([tools.tool("zipalign"), "-f", "-P", "16", "4", unsigned, aligned], log)
-    key = development_key(key, log)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    run(
-        [
-            tools.tool("apksigner"),
-            "sign",
-            "--ks",
-            key,
-            "--ks-key-alias",
-            "androiddebugkey",
-            "--ks-pass",
-            "pass:android",
-            "--key-pass",
-            "pass:android",
-            "--out",
-            output,
-            aligned,
-        ],
-        log,
-    )
-    return {"package": package, "entryPoint": "dev.radek.generated.MainActivity", "apk": str(output)}
 
 
 def elf_info(data: bytes) -> dict:
-    if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01":
-        raise InputError("native library is not ELF64 little-endian")
-    etype, machine = struct.unpack_from("<HH", data, 16)
-    if etype != 3 or machine != 183:
-        raise InputError("native library is not Android ARM64 ET_DYN")
-    offset = struct.unpack_from("<Q", data, 32)[0]
-    stride, count = struct.unpack_from("<HH", data, 54)
-    if stride != 56 or not count or count > 1024 or offset + count * stride > len(data):
-        raise InputError("malformed ELF program headers")
-    loads, dynamic = [], None
-    executable = False
-    for i in range(count):
-        kind, flags, off, va, _, filesz, memsz, align = struct.unpack_from(
-            "<IIQQQQQQ", data, offset + i * stride
-        )
-        if off + filesz > len(data) or filesz > memsz:
-            raise InputError("ELF segment outside file")
-        if kind == 1:
-            if flags & 3 == 3:
-                raise InputError("writable executable ELF segment")
-            executable |= bool(flags & 1)
-            loads.append((va, off, filesz))
-        if kind == 2:
-            dynamic = (off, filesz)
-        if kind == 0x6474E551 and flags & 1:
-            raise InputError("executable native stack")
-    if not executable or dynamic is None:
-        raise InputError("ELF has no code or dynamic loader information")
-    tags = {}
-    for off in range(dynamic[0], dynamic[0] + dynamic[1], 16):
-        if off + 16 > dynamic[0] + dynamic[1]:
-            raise InputError("truncated ELF dynamic table")
-        tag, value = struct.unpack_from("<qQ", data, off)
-        if tag == 0:
-            break
-        tags.setdefault(tag, []).append(value)
-    needed = []
-    if 1 in tags:
-        if 5 not in tags or 10 not in tags:
-            raise InputError("ELF missing string table")
-        address, size = tags[5][0], tags[10][0]
-        mapping = next(
-            (
-                (base, off, length)
-                for base, off, length in loads
-                if base <= address and address + size <= base + length
-            ),
-            None,
-        )
-        if mapping is None:
-            raise InputError("ELF strings not mapped")
-        base, off, _ = mapping
-        table = data[off + address - base : off + address - base + size]
-        for index in tags[1]:
-            end = table.find(b"\x00", index)
-            if index >= size or end < 0:
-                raise InputError("invalid ELF dependency")
-            needed.append(table[index:end].decode("ascii"))
-    # Independently inspect the dynamic symbol table, including the JNI entry.
-    section_offset = struct.unpack_from("<Q", data, 40)[0]
-    section_stride, section_count = struct.unpack_from("<HH", data, 58)
-    if (
-        section_stride != 64
-        or not section_count
-        or section_count > 65535
-        or section_offset + section_count * 64 > len(data)
-    ):
-        raise InputError("missing/malformed ELF section table")
-    sections = [
-        struct.unpack_from("<IIQQQQIIQQ", data, section_offset + i * 64) for i in range(section_count)
-    ]
-    exports, undefined = {}, []
-    for section in sections:
-        _, kind, _, _, off, size, link, _, _, stride = section
-        if kind != 11:
-            continue
-        if (
-            stride != 24
-            or size % 24
-            or size // 24 > 200000
-            or off + size > len(data)
-            or link >= section_count
-        ):
-            raise InputError("invalid ELF dynamic symbols")
-        strings = sections[link]
-        if strings[1] != 3 or strings[4] + strings[5] > len(data):
-            raise InputError("invalid ELF dynamic strings")
-        table = data[strings[4] : strings[4] + strings[5]]
-        for sym in range(off + 24, off + size, 24):
-            index, info, visibility, shndx, address, length = struct.unpack_from("<IBBHQQ", data, sym)
-            end = table.find(b"\x00", index)
-            if end < 0 or end - index > 4096:
-                raise InputError("invalid ELF symbol name")
-            name = table[index:end].decode("utf-8", errors="strict")
-            if info >> 4 not in (1, 2):
-                continue
-            if shndx == 0:
-                undefined.append(name)
-            elif visibility & 3 in (0, 3):
-                item = {"address": address, "size": length, "type": info & 15}
-                mapping = next(
-                    (
-                        (base, start)
-                        for base, start, amount in loads
-                        if base <= address and address + length <= base + amount
-                    ),
-                    None,
-                )
-                if mapping is not None and length:
-                    import hashlib
+    """Inspect supported Android ARM32/ARM64 ELF libraries."""
+    from .elf import inspect
 
-                    base, start = mapping
-                    item["sha256"] = hashlib.sha256(
-                        data[start + address - base : start + address - base + length]
-                    ).hexdigest()
-                exports[name] = item
-    return {"architecture": "arm64-v8a", "needed": needed, "exports": exports, "undefinedSymbols": undefined}
+    return inspect(data)
+
+def _validate_complete_game_metadata(metadata: dict, expected_package: str, target_abi: str) -> dict:
+    """Fail closed unless the APK declares full reachable-code/API/resource coverage."""
+    if not isinstance(metadata, dict):
+        raise InputError("complete-game conversion provenance must be a JSON object")
+    if metadata.get("contract") != "complete-game-v1":
+        raise InputError("APK is not a complete-game conversion; restricted native-entry packages are rejected")
+    source = metadata.get("source") or {}
+    if not isinstance(source, dict):
+        raise InputError("complete-game source provenance is invalid")
+    source_hash = source.get("sha256", "")
+    if not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", source_hash):
+        raise InputError("complete-game source hash is missing or invalid")
+    if expected_package != "dev.radek.converted.p" + source_hash[:20] or metadata.get("package") != expected_package:
+        raise InputError("complete-game APK package/source identity mismatch")
+    if metadata.get("targetAbi") != target_abi:
+        raise InputError("complete-game target ABI mismatch")
+
+    conversion = metadata.get("conversion") or {}
+    if not isinstance(conversion, dict):
+        raise InputError("complete-game conversion details are invalid")
+    output_bytes = conversion.get("outputBytes")
+    if not isinstance(output_bytes, int) or isinstance(output_bytes, bool) or not 0 < output_bytes <= 64 * 1024 * 1024:
+        raise InputError("missing or invalid generated native-code size")
+    backend = conversion.get("backend", "")
+    if conversion.get("targetAbi") != target_abi or not isinstance(backend, str) or not backend.strip():
+        raise InputError("missing or inconsistent complete-game conversion provenance")
+
+    game = metadata.get("gameConversion") or {}
+    if not isinstance(game, dict):
+        raise InputError("complete-game evidence must be a JSON object")
+    if game.get("status") != "COMPLETE" or game.get("completeGameConversion") is not True:
+        raise InputError("host did not attest a complete game conversion")
+    reachable = game.get("reachableSourceFunctions")
+    translated = game.get("translatedReachableFunctions")
+    untranslated = game.get("untranslatedReachableFunctions")
+    if (
+        not isinstance(reachable, int)
+        or isinstance(reachable, bool)
+        or reachable <= 0
+        or not isinstance(translated, int)
+        or isinstance(translated, bool)
+        or translated != reachable
+        or not isinstance(untranslated, int)
+        or isinstance(untranslated, bool)
+        or untranslated != 0
+    ):
+        raise InputError("not all reachable game functions were translated")
+
+    reachable_apis = game.get("reachableApiCount")
+    generated_replacements = game.get("generatedApiReplacements")
+    native_passthroughs = game.get("nativeApiPassthroughs")
+    untranslated_apis = game.get("untranslatedReachableApiCount")
+    replacements = game.get("apiReplacements")
+    if (
+        game.get("apiCoverageComplete") is not True
+        or not isinstance(untranslated_apis, int)
+        or isinstance(untranslated_apis, bool)
+        or untranslated_apis != 0
+        or not isinstance(reachable_apis, int)
+        or isinstance(reachable_apis, bool)
+        or not isinstance(generated_replacements, int)
+        or isinstance(generated_replacements, bool)
+        or not isinstance(native_passthroughs, int)
+        or isinstance(native_passthroughs, bool)
+        or reachable_apis < 0
+        or generated_replacements < 0
+        or native_passthroughs < 0
+        or reachable_apis != generated_replacements + native_passthroughs
+        or not isinstance(replacements, list)
+        or len(replacements) != generated_replacements
+    ):
+        raise InputError("reachable iOS API replacement accounting is incomplete")
+    for replacement in replacements:
+        if not isinstance(replacement, dict):
+            raise InputError("API mapping is only a candidate; generated linked implementation evidence is missing")
+        source_symbol = replacement.get("sourceSymbol")
+        target_api = replacement.get("targetAndroidApi")
+        implementation_hash = replacement.get("implementationSha256")
+        implementation_artifact = replacement.get("implementationArtifact")
+        if (
+            replacement.get("codeGenerated") is not True
+            or replacement.get("linkedIntoApk") is not True
+            or replacement.get("reachableFromEntry") is not True
+            or not isinstance(source_symbol, str)
+            or not source_symbol.strip()
+            or not isinstance(target_api, str)
+            or not target_api.strip()
+            or not isinstance(implementation_hash, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", implementation_hash)
+            or not isinstance(implementation_artifact, str)
+            or not implementation_artifact.strip()
+        ):
+            raise InputError("API mapping is only a candidate; generated linked implementation evidence is missing")
+        try:
+            safe_name(implementation_artifact)
+        except (InputError, UnicodeError) as exc:
+            raise InputError("generated API implementation path is unsafe") from exc
+
+    if game.get("resourcesComplete") is not True:
+        raise InputError("game resources are not declared complete")
+    if game.get("lifecycleImplemented") is not True:
+        raise InputError("Android application lifecycle is not declared implemented")
+    icon_hash = game.get("sourceIconSha256", "")
+    launcher_hash = game.get("launcherIconSha256", "")
+    if (
+        not isinstance(icon_hash, str)
+        or not isinstance(launcher_hash, str)
+        or (icon_hash and (not re.fullmatch(r"[0-9a-f]{64}", icon_hash) or launcher_hash != icon_hash))
+        or (launcher_hash and not re.fullmatch(r"[0-9a-f]{64}", launcher_hash))
+    ):
+        raise InputError("recovered source icon was not preserved")
+    return game
+
+
+def _validate_packaged_payloads(z: zipfile.ZipFile, names: list[str], source_hash: str) -> None:
+    """Reject source IPA bytes and Apple executables anywhere in the APK."""
+    apple_executable_magics = {
+        b"\xcf\xfa\xed\xfe",
+        b"\xce\xfa\xed\xfe",
+        b"\xfe\xed\xfa\xcf",
+        b"\xfe\xed\xfa\xce",
+        b"\xca\xfe\xba\xbe",
+        b"\xca\xfe\xba\xbf",
+        b"\xbe\xba\xfe\xca",
+        b"\xbf\xba\xfe\xca",
+    }
+    for name in names:
+        if name.lower().endswith(".ipa"):
+            raise InputError("original IPA must not be included")
+        with z.open(name) as entry:
+            digest = hashlib.sha256()
+            magic = entry.read(4)
+            if magic in apple_executable_magics:
+                raise InputError("Apple executable leaked into APK")
+            digest.update(magic)
+            for chunk in iter(lambda: entry.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() == source_hash:
+            raise InputError("original IPA content must not be included in the APK")
 
 
 def validate_apk(
-    path: Path, tools: Toolchain, expected_package: str, expected_entry: str, converted: bool = True, log=None
+    path: Path,
+    tools: Toolchain,
+    expected_package: str,
+    expected_entry: str,
+    converted: bool = True,
+    log=None,
+    expected_abi: str | None = None,
 ) -> dict:
     if not path.is_file() or not 0 < path.stat().st_size <= 512 * 1024 * 1024:
         raise InputError("APK is missing/empty")
@@ -404,21 +265,53 @@ def validate_apk(
             raise InputError("Android entry class is absent from DEX definitions")
         if z.read("AndroidManifest.xml")[:2] != b"\x03\x00":
             raise InputError("APK manifest is not compiled binary XML")
+        conversion_metadata = None
+        if converted:
+            if "assets/conversion.json" not in names:
+                raise InputError("complete-game conversion provenance is absent")
+            try:
+                conversion_metadata = json.loads(z.read("assets/conversion.json"))
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise InputError("invalid complete-game conversion provenance") from exc
+        if converted:
+            if not isinstance(conversion_metadata, dict):
+                raise InputError("complete-game conversion provenance must be a JSON object")
+            conversion_details = conversion_metadata.get("conversion")
+            if not isinstance(conversion_details, dict):
+                raise InputError("complete-game target ABI provenance is missing")
+            target_abi = conversion_details.get("targetAbi")
+        else:
+            target_abi = "arm64-v8a"
+        if not isinstance(target_abi, str) or target_abi not in ("arm64-v8a", "armeabi-v7a"):
+            raise InputError("unsupported target ABI in conversion provenance")
+        if expected_abi is not None and expected_abi != target_abi:
+            raise InputError("APK native ABI does not match the requested validation ABI")
+        expected_library_prefix = f"lib/{target_abi}/"
         libraries = {
             name.rsplit("/", 1)[-1]: elf_info(z.read(name))
             for name in names
-            if name.startswith("lib/arm64-v8a/") and name.endswith(".so")
+            if name.startswith(expected_library_prefix) and name.endswith(".so")
         }
         if not libraries:
-            raise InputError("APK has no ARM64 native libraries")
+            raise InputError(f"APK has no {target_abi} native libraries")
         if any(
-            name.startswith("lib/") and not name.startswith("lib/arm64-v8a/")
+            name.startswith("lib/") and not name.startswith(expected_library_prefix)
             for name in names
             if name.endswith(".so")
         ):
             raise InputError("unexpected native architecture")
-        # Every library a provider legitimately binds against (see radek/providers.py).
-        android_system = set(providers.NATIVE_LIBRARIES)
+        if any(info["architecture"] != target_abi for info in libraries.values()):
+            raise InputError("native library ELF architecture does not match its APK ABI directory")
+        android_system = {
+            "libc.so",
+            "libm.so",
+            "libdl.so",
+            "liblog.so",
+            "libandroid.so",
+            "libGLESv2.so",
+            "libEGL.so",
+            "libz.so",
+        }
         for name, info in libraries.items():
             unresolved = set(info["needed"]) - libraries.keys() - android_system
             if unresolved:
@@ -426,16 +319,12 @@ def validate_apk(
         if converted:
             if "libconverted.so" not in libraries:
                 raise InputError("converted native library is absent")
-            metadata = json.loads(z.read("assets/conversion.json"))
-            if (
-                metadata.get("package") != expected_package
-                or metadata.get("contract") != "closed-integer-entry-v1"
-            ):
-                raise InputError("conversion metadata/package mismatch")
-            conversion = metadata.get("conversion", {})
-            if not conversion.get("outputBytes"):
-                raise InputError("missing reconstruction provenance")
+            metadata = conversion_metadata
+            game = _validate_complete_game_metadata(metadata, expected_package, target_abi)
+            conversion = metadata["conversion"]
             native = libraries["libconverted.so"]
+            if native["architecture"] != target_abi:
+                raise InputError("native ELF architecture does not match APK ABI path")
             entry = native["exports"].get("Java_dev_radek_generated_MainActivity_runNative")
             if (
                 entry is None
@@ -443,23 +332,30 @@ def validate_apk(
                 or entry["size"] != conversion["outputBytes"]
                 or entry.get("sha256") != conversion.get("machineCodeSha256")
             ):
-                raise InputError("native JNI entry/code does not match verified reconstruction")
-            if native["undefinedSymbols"] or native["needed"]:
-                raise InputError("closed native program unexpectedly depends on external code")
-            for resource in metadata.get("resourceInventory", []):
-                import hashlib
-
-                name = "assets/bundle/" + resource["path"]
-                if hashlib.sha256(z.read(name)).hexdigest() != resource["sha256"]:
-                    raise InputError("resource integrity failure: " + name)
-            for name in names:
-                if name.endswith(".ipa"):
-                    raise InputError("original IPA must not be included")
-                if name.startswith("assets/") and z.read(name)[:4] in (
-                    b"\xcf\xfa\xed\xfe",
-                    b"\xce\xfa\xed\xfe",
+                raise InputError("native JNI entry/code does not match conversion provenance")
+            for replacement in game["apiReplacements"]:
+                artifact = str(safe_name(replacement["implementationArtifact"]))
+                if artifact not in names:
+                    raise InputError("generated API implementation is not packaged: " + artifact)
+                if hashlib.sha256(z.read(artifact)).hexdigest() != replacement["implementationSha256"]:
+                    raise InputError("generated API implementation hash mismatch: " + artifact)
+            resource_inventory = metadata.get("resourceInventory", [])
+            if not isinstance(resource_inventory, list):
+                raise InputError("game resource inventory is invalid")
+            for resource in resource_inventory:
+                if not isinstance(resource, dict) or not isinstance(resource.get("path"), str):
+                    raise InputError("game resource inventory entry is invalid")
+                resource_path = str(safe_name(resource["path"]))
+                name = "assets/bundle/" + resource_path
+                resource_hash = resource.get("sha256")
+                if (
+                    name not in names
+                    or not isinstance(resource_hash, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", resource_hash)
+                    or hashlib.sha256(z.read(name)).hexdigest() != resource_hash
                 ):
-                    raise InputError("Apple executable leaked into assets")
+                    raise InputError("resource integrity failure: " + name)
+            _validate_packaged_payloads(z, names, metadata["source"]["sha256"])
     badging = run([tools.tool("aapt2"), "dump", "badging", path], log)
     if not re.search(r"^package: name='" + re.escape(expected_package) + r"'", badging, re.M):
         raise InputError("manifest package identity mismatch")
@@ -475,6 +371,7 @@ def validate_apk(
     run([tools.tool("zipalign"), "-c", "-P", "16", "4", path], log)
     return {
         "status": "PASSED",
+        "abi": target_abi,
         "checks": [
             "structure",
             "binary-manifest",
@@ -482,7 +379,7 @@ def validate_apk(
             "launcher",
             "DEX-integrity-and-entry",
             "signing",
-            "ARM64-ELF",
+            f"{target_abi}-ELF",
             "dependencies",
             "resources",
             "icon",
@@ -494,6 +391,7 @@ def validate_apk(
             else []
         ),
         "libraries": libraries,
+        "targetAbi": target_abi,
         "signature": signature.strip(),
         "runtimeExecution": "NOT_TESTED",
     }

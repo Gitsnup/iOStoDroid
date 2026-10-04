@@ -3,7 +3,6 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 from radek.pipeline import Pipeline
 from .fixtures import ipa, macho, fat
 
@@ -21,10 +20,10 @@ class PipelineTests(unittest.TestCase):
     def test_synthetic_arm64_analysis_is_partial_not_ready(self):
         report = self.run_fixture(analyze_only=True)
         self.assertEqual(report["state"], "PARTIAL")
-        self.assertEqual(report["conversion"]["backend"], "preserved-arm64")
+        self.assertEqual(report["leafTranslationAssessment"]["backend"], "preserved-arm64")
         self.assertEqual(report["icon"]["status"], "SUPPORTED")
         self.assertFalse(list((self.root / "job").glob("job-*")))
-        self.assertFalse((self.root / "job/RadekiOSConventor-debug.apk").exists())
+        self.assertFalse((self.root / "job/input.apk").exists())
         self.assertEqual(json.loads((self.root / "job/report.json").read_text())["state"], "PARTIAL")
 
     def test_unused_framework_dependency_needs_no_stub(self):
@@ -36,9 +35,9 @@ class PipelineTests(unittest.TestCase):
             analyze_only=True,
         )
         self.assertEqual(result["state"], "PARTIAL")
-        self.assertEqual(result["dependencies"]["edges"][0]["classification"], "not-required-by-proven-entry")
-        self.assertIn("no framework stub/provider was linked", result["dependencies"]["edges"][0]["reason"])
-        self.assertEqual(result["conversion"]["backend"], "preserved-arm64")
+        self.assertEqual(result["dependencies"]["edges"][0]["classification"], "not-required-by-experimental-leaf")
+        self.assertIn("does not implement the linked framework or the game", result["dependencies"]["edges"][0]["reason"])
+        self.assertEqual(result["leafTranslationAssessment"]["backend"], "preserved-arm64")
 
     def test_reachable_framework_call_remains_blocked(self):
         result = self.run_fixture(
@@ -100,8 +99,8 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(states["UIKit/CoreGraphics"], "SUPPORTED")
         self.assertEqual(states["Metal"], "SUPPORTED")
         self.assertIn("no reachable API use", " ".join(c["detail"] for c in result["capabilities"]))
-        self.assertNotIn("blockers", result)
-        self.assertEqual(result["dependencies"]["edges"][0]["classification"], "not-required-by-proven-entry")
+        self.assertIn("No complete iOS-to-Android game converter", " ".join(result["blockers"]))
+        self.assertEqual(result["dependencies"]["edges"][0]["classification"], "not-required-by-experimental-leaf")
 
     def test_icon_is_recovered_from_assets_car(self):
         from .test_icons import catalog_bytes
@@ -122,11 +121,15 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result["state"], "FAILED")
         self.assertIn("authorization", result["error"]["message"])
 
-    def test_missing_toolchain_is_failed_not_fake_ready(self):
-        with patch("radek.pipeline.Toolchain.discover", side_effect=RuntimeError("no SDK")):
-            result = self.run_fixture()
-        self.assertEqual(result["state"], "FAILED")
-        self.assertFalse((self.root / "job/RadekiOSConventor-debug.apk").exists())
+    def test_convert_refuses_restricted_leaf_apk(self):
+        result = self.run_fixture()
+        self.assertEqual(result["state"], "BLOCKED")
+        self.assertEqual(result["conversionProgress"]["status"], "NOT_BUILT")
+        self.assertEqual(result["portProgress"]["percent"], 0)
+        self.assertFalse(result["leafTranslationAssessment"]["apkProduced"])
+        self.assertEqual(result["apiTranslation"]["generatedApiReplacements"], 0)
+        self.assertFalse(result["apiTranslation"]["codeGenerated"])
+        self.assertFalse(list((self.root / "job").glob("*.apk")))
 
     def test_embedded_framework_graph(self):
         main = macho(dependencies=["@executable_path/Frameworks/Embedded.framework/Embedded"])
@@ -157,12 +160,14 @@ class PipelineTests(unittest.TestCase):
     def test_fat_selects_safe_arm64(self):
         result = self.run_fixture(fat([macho(cpu=12, subtype=9), macho()]), analyze_only=True)
         self.assertEqual(result["selectedArchitecture"], "arm64")
+        self.assertEqual(result["targetAbi"], "arm64-v8a")
 
-    def test_armv6_and_thumb_plans_are_offline_arm64(self):
+    def test_armv6_and_thumb_plans_target_32bit_armv7(self):
         arm_mode = self.run_fixture(macho(cpu=12, subtype=6), analyze_only=True)
         self.assertEqual(arm_mode["state"], "PARTIAL")
         self.assertEqual(arm_mode["selectedArchitecture"], "armv6")
-        self.assertEqual(arm_mode["conversion"]["backend"], "offline-arm32-to-arm64")
+        self.assertEqual(arm_mode["leafTranslationAssessment"]["backend"], "offline-armv6-to-armv7")
+        self.assertEqual(arm_mode["leafTranslationAssessment"]["targetAbi"], "armeabi-v7a")
 
         thumb_source = ipa(
             self.root / "thumb.ipa",
@@ -171,14 +176,32 @@ class PipelineTests(unittest.TestCase):
         thumb_mode = Pipeline(self.root / "job-thumb").run(thumb_source, True, analyze_only=True)
         self.assertEqual(thumb_mode["state"], "PARTIAL")
         self.assertEqual(thumb_mode["selectedArchitecture"], "armv6")
-        self.assertEqual(thumb_mode["conversion"]["outputBytes"], 8)
+        self.assertEqual(thumb_mode["leafTranslationAssessment"]["loweredBytesInMemory"], 8)
+        self.assertEqual(thumb_mode["leafTranslationAssessment"]["targetAbi"], "armeabi-v7a")
 
-    def test_thumb_plan_is_offline_arm64(self):
+    def test_thumb_plan_targets_32bit_armv7(self):
         result = self.run_fixture(
             macho(struct.pack("<HH", 0x202A, 0x4770), cpu=12, subtype=9, thumb=True), analyze_only=True
         )
-        self.assertEqual(result["conversion"]["backend"], "offline-arm32-to-arm64")
-        self.assertEqual(result["conversion"]["outputBytes"], 8)
+        self.assertEqual(result["leafTranslationAssessment"]["backend"], "offline-armv7-to-armv7")
+        self.assertEqual(result["leafTranslationAssessment"]["targetAbi"], "armeabi-v7a")
+        self.assertEqual(result["leafTranslationAssessment"]["loweredBytesInMemory"], 8)
+
+    def test_explicit_target_abi_requires_a_matching_source_slice(self):
+        arm32 = ipa(self.root / "arm32.ipa", macho(cpu=12, subtype=6))
+        blocked = Pipeline(self.root / "arm64-target").run(
+            arm32, True, analyze_only=True, target_abi="arm64-v8a"
+        )
+        self.assertEqual(blocked["state"], "BLOCKED")
+        self.assertIn("requires an ARM64 IPA slice", " ".join(blocked["blockers"]))
+
+        dual_arch = ipa(self.root / "dual.ipa", fat([macho(cpu=12, subtype=11), macho()]))
+        selected = Pipeline(self.root / "arm32-target").run(
+            dual_arch, True, analyze_only=True, target_abi="armeabi-v7a"
+        )
+        self.assertEqual(selected["state"], "PARTIAL")
+        self.assertEqual(selected["selectedArchitecture"], "armv7s")
+        self.assertEqual(selected["targetAbi"], "armeabi-v7a")
 
     def test_invalid_state_transition(self):
         p = Pipeline(self.root / "job")

@@ -1,67 +1,109 @@
-# Build / run / test
+# Build, run, and test
 
 ## Clean Linux machine
 
-Install Python 3.10 or newer, a C++17 compiler (`g++`), and Java 17 JDK (`java`, `javac`, `keytool` on PATH). Install Google's Android SDK command-line tools using Android Studio's SDK manager or the official command-line tools distribution. Set `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) to that SDK directory; nothing is tied to a developer's local path.
-
-Install packages:
+Install Python 3.10+, a C++17 compiler (`g++`), Java 17 JDK, and the Android SDK command-line tools.
+Set `ANDROID_HOME` or `ANDROID_SDK_ROOT` to the SDK directory.
 
 ```sh
 sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
 sdkmanager --licenses
 ```
 
-The host packager currently supports Linux x86_64 toolchains. The generated APKs target Android 8.0+ ARM64 devices. No iPhone, macOS, server, iOS runtime or emulator is required by the output.
+Run the native, host and Android importer checks:
 
 ```sh
 python3 tools/build_native.py
 python3 -m unittest discover -v
 bash tools/test_sanitized.sh
-RADEK_REQUIRE_ANDROID=1 python3 -m unittest tests.test_apk -v
 ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-The Android app APK is `app/build/outputs/apk/debug/app-debug.apk`. CI copies it to `RadekiOSConventor-debug.apk`. Android Studio can open the repository directly. There are no developer-local files to check in.
+The Android importer APK is `app/build/outputs/apk/debug/app-debug.apk`; CI copies it to
+`RadekiOSConventor-debug.apk`. There are no developer-local files to check in.
 
-The first host command uses only a C++17 compiler. Alternatively:
+The host's `radek validate` command needs Android build-tools 35.0.0 (`aapt2`, `zipalign`, and
+`apksigner`) to validate an already-built importer or future complete-game APK. It does not build a
+game APK.
+
+## Import and inspect on Android
+
+Install the importer APK, choose **Choose IPA**, confirm authorization, and select a document. The
+source IPA is stored in private app storage until the library entry is deleted. Import performs
+bounded extraction and inspection, then removes its temporary extracted tree. It does not create a
+game APK. Details include bundle name/version/identifier, declared `MinimumOSVersion` (not inferred),
+recovered icon when decodable (including supported compiled `Assets.car` renditions), architectures,
+API candidates, blockers, the raw JSON report and analysis logs.
+
+The analysis progress bar measures input copying, extraction and analysis only. It is not code
+translation, APK build progress, runtime validation or playability. The importer's runnable game
+code remains at zero unless a complete host conversion is attached under the strict contract. The
+red **Force convert to .apk** action does not bypass missing features or install a placeholder; it
+explains that no complete game converter is available in this build.
+
+A host APK attachment must match the IPA's SHA-256/package identity and safe IPA-derived basename,
+carry `complete-game-v1` metadata, account for every reachable function and API implementation,
+claim complete resources/lifecycle support, contain no original IPA or Apple executable, and pass
+Android package/signature checks. This repository's host CLI currently emits no APK that satisfies
+that contract. Restricted native-entry experiment APKs are rejected.
+
+## Host IPA inspection
+
+Build the native analyzer, then inspect an authorized IPA:
 
 ```sh
-cmake -S native -B native/build
-cmake --build native/build
-ctest --test-dir native/build --output-on-failure
+python3 tools/build_native.py
+python3 -m radek analyze authorized.ipa --authorized --output workspace/analysis
 ```
 
-## Import on Android
+The workspace must not already exist. Reports and logs persist; extracted workspaces are removed.
+The host also reconstructs code metadata and records whether its narrow closed-integer leaf check
+succeeds. That check is an experiment, not a complete app conversion. If `convert` is invoked on an
+input that passes only this restricted check, it returns `BLOCKED` and produces no APK. This is
+intentional: the experiment does not translate all game code, APIs, resources, or lifecycle.
 
-Install the importer APK, tap **+ ADD IPA**, confirm authorization and select a document. The library persists inside app-private storage. Details include real bundle name/version/identifier, decoded icon where possible, architectures, import size, dependency blockers, raw JSON report and logs. Extraction progress reports actual completed/total entries, never invented percentages. Restarted incomplete jobs become FAILED.
+ARM selection for the analysis is deterministic: automatic selection prefers ARM64 in a FAT IPA
+containing both ARM32 and ARM64; supported ARM32-only inputs target 32-bit Android ARMv7 (`armeabi-v7a`).
+This target selection is not evidence that an APK was built. Explicit `--target-abi` overrides must
+have a matching input slice.
 
-The phone is an importer/analyzer; it is **not** currently an on-device native compiler. Transfer the original authorized input to the Linux host and run the CLI below. Attach the resulting APK to its matching library entry; source SHA-256/package identity must match. Android's installer verifies signing before installing. APK attachment does not falsely change the original analysis state to READY.
+The API mapper currently reports candidate symbols and semantic targets only. It does not rewrite
+Mach-O bindings, generate Android API implementations, or prove behavior. Unsupported reachable
+APIs remain blockers; no conversion output is claimed.
 
-## Native conversion
+## Validation and status codes
+
+Validate the Android importer after building it:
 
 ```sh
-python3 tools/make_fixture.py --arch thumb2 --output .local/test.ipa
-python3 -m radek convert .local/test.ipa --authorized --output workspace/test
+python3 -m radek validate app/build/outputs/apk/debug/app-debug.apk \
+  --package dev.radek.conventor \
+  --entry dev.radek.conventor.MainActivity \
+  --converter-app
 ```
 
-The workspace must not already exist. `report.json` and `conversion.jsonl` contain real steps and tool outputs. READY is only emitted after static APK validation. Runtime device execution is recorded separately as NOT_TESTED, not implied by static validation.
+For future converted results, validation requires the complete-game evidence contract; the old
+`closed-integer-entry-v1` wrapper no longer qualifies. Runtime execution remains `NOT_TESTED` unless
+separate device tests are supplied.
 
-```sh
-python3 -m radek validate workspace/test/RadekiOSConventor-debug.apk \
-  --package dev.radek.converted.p<SOURCE_SHA256_FIRST_20_HEX> \
-  --entry dev.radek.generated.MainActivity
-```
+- `0 READY`: reserved for a future complete conversion that passed static validation; not currently
+  produced by the IPA pipeline.
+- `1 FAILED`: malformed input, tool failure or interrupted work.
+- `2 PARTIAL`: inspection completed without a complete conversion.
+- `3 BLOCKED`: requested conversion is unsupported or incomplete; no APK was emitted.
 
-Read the exact package from `report.json`. `adb install -r <apk>` installs the result on a physical ARM64 Android device. The native synthetic entry returns 42 and logs `RadekNative: native entry returned 42`.
+## Development signing and CI
 
-## Development signing
+Gradle signs the **importer app** using its normal Android debug build configuration. The repository
+no longer embeds an APK-signing key or signs generated game stubs. There is no generated game APK to
+install or distribute.
 
-The host creates `.local/signing/debug.keystore` on first use and reuses it. A configurable persistent development key can be supplied with `--debug-key`. Alias `androiddebugkey`, passwords `android`, RSA-2048, development-only certificate. This is a reproducible **configuration and reusable identity**, not a promise of bit-for-bit reproducible newly generated keys or APKs. A clean machine generates a different key; preserve your development key outside Git if updates must retain signing identity. Gradle uses its standard development signing key for the importer. Never use these keys/passwords for production.
-
-## CI
-
-`.github/workflows/build.yml` runs the entire SDK-enabled suite with `RADEK_REQUIRE_ANDROID=1`; absent SDKs cannot turn required integration tests into skips. It uploads importer and converted-program artifacts separately. Tests do not execute iOS binaries. No device/emulator runtime smoke test is currently part of CI.
+`.github/workflows/build.yml` runs native/Python/Android tests, builds and validates the importer,
+and uploads only `RadekiOSConventor-debug.apk` plus validation/test reports. CI does not publish a
+synthetic, placeholder, or restricted native-entry game APK. No iOS executable is run by tests, and
+there is no device/emulator runtime smoke test at present.
 
 ## Optional source formatting
 
-C++ uses `.clang-format` (LLVM style, four spaces, 110 columns). Python uses Black with `pyproject.toml` (110 columns); formatters are developer-only, not build/runtime dependencies. All business logic is separated from UI and SDK tool invocation for editing/testing.
+C++ uses `.clang-format` (LLVM style, four spaces, 110 columns). Python uses Black with
+`pyproject.toml` (110 columns); formatters are developer-only, not build/runtime dependencies.

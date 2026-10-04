@@ -1,7 +1,6 @@
 from __future__ import annotations
 import datetime
 import json
-import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -11,8 +10,6 @@ from .icons import extract as extract_icon, launcher as launcher_icon
 from .ir import Unsupported
 from .recon import reconstruct
 from .recon.report import blockers as recon_blockers, markdown as recon_markdown, summary as recon_summary
-from .resources import copy_resources
-from .apk import ARTIFACT, Toolchain, build_apk, validate_apk
 
 STATES = {
     "IMPORTED",
@@ -39,7 +36,30 @@ class Pipeline:
     def __init__(self, output: Path):
         self.output = output.resolve()
         self.output.mkdir(parents=True, exist_ok=False, mode=0o700)
-        self.report = {"schemaVersion": 1, "state": None, "events": [], "capabilities": capabilities()}
+        self.report = {
+            "schemaVersion": 1,
+            "state": None,
+            "events": [],
+            "capabilities": capabilities(),
+            "apiTranslation": {
+                "status": "NOT_IMPLEMENTED",
+                "attempted": False,
+                "generatedApiReplacements": 0,
+                "codeGenerated": False,
+                "message": "No verified Android API replacement backend is implemented.",
+            },
+            "portProgress": {
+                "percent": 0,
+                "status": "NO_COMPLETE_GAME_CODE_EMITTED",
+                "basis": "No complete runnable game code has been written.",
+            },
+            "conversionProgress": {
+                "percent": 0,
+                "stage": "NOT_BUILT",
+                "status": "NOT_BUILT",
+                "message": "No complete iOS-to-Android game conversion backend is implemented.",
+            },
+        }
         self._last_save = None
 
     def save(self, force: bool = False):
@@ -71,7 +91,13 @@ class Pipeline:
         self.log(state, message)
         self.save(force=True)
 
-    def run(self, ipa: Path, authorized: bool, analyze_only=False, key: Path | None = None):
+    def run(
+        self,
+        ipa: Path,
+        authorized: bool,
+        analyze_only=False,
+        target_abi: str = "auto",
+    ):
         try:
             if not authorized:
                 raise ValueError(
@@ -81,6 +107,7 @@ class Pipeline:
             if ipa.suffix.lower() != ".ipa":
                 raise ValueError("input must have .ipa extension")
             self.report["authorizationConfirmed"] = True
+            self.report["source"] = {"originalName": ipa.name}
             with tempfile.TemporaryDirectory(prefix="job-", dir=self.output) as temporary:
                 work = Path(temporary)
                 self.transition(
@@ -143,78 +170,81 @@ class Pipeline:
                         if key in ("functionCount", "objectiveCClasses", "swiftTypes", "usedApis")
                     ),
                 )
+                self.report["apiTranslation"] = {
+                    "status": "NOT_IMPLEMENTED",
+                    "attempted": False,
+                    "generatedApiReplacements": 0,
+                    "untranslatedReachableApiCount": self.report["reconstructionSummary"].get("usedApis", 0),
+                    "codeGenerated": False,
+                    "message": "Android API symbol matches and semantic targets are analysis candidates only; no API replacement or implementation was generated.",
+                }
                 try:
-                    selected, program = prove_leaf(executable, mach, graph, reconstruction)
+                    selected, program = prove_leaf(executable, mach, graph, reconstruction, target_abi)
                 except Unsupported as exc:
                     self.report["blockers"] = [line for line in str(exc).split("; ") if line]
                     summary = self.report.get("reconstructionSummary") or {}
                     if summary:
                         self.report["blockers"].append(
                             "Reachable APIs in reconstructed code: "
-                            f'{summary.get("usedApis", 0)} used, {summary.get("nativeApis", 0)} natively '
-                            f'implementable, {summary.get("blockedApis", 0)} without any Android mapping '
+                            f'{summary.get("usedApis", 0)} used, {summary.get("nativeApis", 0)} same-name native '
+                            f'candidates, {summary.get("blockedApis", 0)} without an identified Android target '
                             f'(see reconstruction.md)'
                         )
                     self.transition("BLOCKED", str(exc))
                     return self.report
-                self.report["selectedArchitecture"] = selected["architecture"]
-                # The accepted leaf has no call, memory, or address operations. Any
-                # linked dependency in this single-image case is therefore unused by
-                # the emitted code; do not synthesize symbols or ship no-op stubs.
-                unused_edges = self.report.get("dependencies", {}).get("edges", [])
-                for edge in unused_edges:
-                    edge["classification"] = "not-required-by-proven-entry"
+                # A proven integer leaf is only a narrow translation experiment; it
+                # is not a complete iOS game. Never wrap it in a launcher APK or mark
+                # it READY. Keep the assessment separate from emitted runnable code.
+                for edge in self.report.get("dependencies", {}).get("edges", []):
+                    edge["classification"] = "not-required-by-experimental-leaf"
                     edge["reason"] = (
-                        "The emitted closed integer entry has no calls, memory accesses, "
-                        "or address references; no framework stub/provider was linked."
+                        "The isolated test leaf has no calls, memory accesses, or address "
+                        "references. This does not implement the linked framework or the game."
                     )
-                self.report["conversion"] = program.report()
-                self.report["contract"] = "closed-integer-entry-v1"
+                self.report["selectedArchitecture"] = selected["architecture"]
+                self.report["targetAbi"] = program.target_abi
+                leaf_assessment = program.report()
+                leaf_assessment["loweredBytesInMemory"] = leaf_assessment.pop("outputBytes")
+                leaf_assessment["loweredCodeSha256InMemory"] = leaf_assessment.pop("machineCodeSha256")
+                self.report["leafTranslationAssessment"] = {
+                    **leaf_assessment,
+                    "status": "EXPERIMENTAL_SUBSET_ONLY",
+                    "machineCodeGeneratedInMemory": True,
+                    "completeGameConversion": False,
+                    "nativeCodeWritten": False,
+                    "apkProduced": False,
+                    "message": (
+                        "The restricted closed integer entry can be lowered in memory, but "
+                        "the rest of the game, Android lifecycle, resources and APIs are not translated."
+                    ),
+                }
+                self.report["portProgress"] = {
+                    "percent": 0,
+                    "status": "NO_COMPLETE_GAME_CODE_EMITTED",
+                    "basis": "The leaf assessment is not a complete game port; no runnable APK code was written.",
+                }
+                self.report["conversionProgress"] = {
+                    "percent": 0,
+                    "stage": "NOT_BUILT",
+                    "status": "NOT_BUILT",
+                    "message": "No APK was produced because complete game translation and API replacement are not implemented.",
+                }
+                blocker = (
+                    "No complete iOS-to-Android game converter is implemented: the restricted leaf "
+                    "assessment does not translate the game's full reachable code, APIs, lifecycle, or assets."
+                )
+                self.report.setdefault("blockers", []).append(blocker)
                 if analyze_only:
                     self.transition(
                         "PARTIAL",
-                        "Verified leaf conversion plan; packaging was not requested. No APK has been produced.",
+                        "Analysis and restricted leaf eligibility assessment completed; no code artifact or APK was emitted.",
                     )
-                    return self.report
-                tools = Toolchain.discover()
-                self.transition(
-                    "CONVERTING",
-                    f"Reconstructed {program.source_size} input bytes into {len(program.machine_code)} Android ARM64 instruction bytes",
-                )
-                assets = work / "assets"
-                self.report["resources"] = copy_resources(app, assets / "bundle", info["CFBundleExecutable"])
-                self.log(
-                    "CONVERTING",
-                    f'Preserved {len(self.report["resources"])} resource files with relative bundle paths',
-                )
-                self.transition(
-                    "PACKAGING",
-                    "Compiling JNI ELF, Android entry point, resources and DEX; signing with development key",
-                )
-                pending = work / ARTIFACT
-                identity = build_apk(
-                    work / "package",
-                    pending,
-                    program.machine_code,
-                    self.report["application"],
-                    icon,
-                    assets,
-                    self.report,
-                    tools,
-                    key or Path(__file__).resolve().parent.parent / ".local/signing/debug.keystore",
-                    self.log,
-                )
-                self.report["output"] = {**identity, "apk": ARTIFACT}
-                self.transition("VALIDATING", "Independently validating signed APK and native dependencies")
-                validation = validate_apk(
-                    pending, tools, identity["package"], identity["entryPoint"], log=self.log
-                )
-                self.report["validation"] = validation
-                shutil.move(str(pending), self.output / ARTIFACT)
-                self.transition(
-                    "READY",
-                    "Signed standalone native APK passed static validation; device execution is not claimed",
-                )
+                else:
+                    self.transition(
+                        "BLOCKED",
+                        "Complete game conversion is unsupported; refusing to emit an incomplete or placeholder APK.",
+                    )
+                return self.report
         except Exception as exc:
             self.report["error"] = {"type": type(exc).__name__, "message": str(exc)}
             if self.report["state"] not in ("READY", "PARTIAL", "BLOCKED", "FAILED"):

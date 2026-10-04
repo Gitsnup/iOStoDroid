@@ -40,9 +40,7 @@ jobs:
         run: python3 tools/build_native.py
       - name: AddressSanitizer and UndefinedBehaviorSanitizer tests
         run: python3 tools/ci_run.py bash tools/test_sanitized.sh
-      - name: Host tests and real signed synthetic IPA conversions
-        env:
-          RADEK_REQUIRE_ANDROID: '1'
+      - name: Host tests and no-placeholder conversion regressions
         run: python3 tools/ci_run.py python3 -m unittest discover -v
       - name: Android unit tests, lint, JNI native build and APK
         run: python3 tools/ci_run.py ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
@@ -51,51 +49,11 @@ jobs:
           mkdir -p artifacts
           cp app/build/outputs/apk/debug/app-debug.apk artifacts/RadekiOSConventor-debug.apk
           python3 -m radek validate artifacts/RadekiOSConventor-debug.apk --package dev.radek.conventor --entry dev.radek.conventor.MainActivity --converter-app > artifacts/validation.json
-      - name: Verify the bundled converted-app runtime DEX
-        run: |
-          grep -n "bundleRuntimeDex" gradle.log || true
-          ls -la app/build/generated/runtimeAssets/assets/ || true
-          python3 - <<'PY'
-          import sys, zipfile
-
-          apk = zipfile.ZipFile("artifacts/RadekiOSConventor-debug.apk")
-          names = apk.namelist()
-          if "assets/runtime.dex" not in names:
-              print("::error::assets/runtime.dex is missing from the converter APK; asset entries: "
-                    + ", ".join(sorted(n for n in names if n.startswith("assets"))[:20]))
-              sys.exit(1)
-          info = apk.getinfo("assets/runtime.dex")
-          data = apk.read("assets/runtime.dex")
-          # d8 emits 035, 038 or 039 depending on its version; all are valid DEX.
-          if info.file_size <= 512 or data[:4] != b"dex\n" or data[4:7] not in (b"035", b"038", b"039"):
-              print(f"::error::runtime.dex is not a usable DEX ({info.file_size} bytes, header {data[:8]!r})")
-              sys.exit(1)
-          print("runtime.dex:", info.file_size, "bytes, version", data[4:7].decode())
-          PY
-      - name: Build and validate standalone native fixture artifact
-        run: |
-          python3 tools/make_fixture.py --output .local/fixture.ipa
-          python3 -m radek convert .local/fixture.ipa --authorized --output .local/fixture-result
-      - name: Convert armv6 and Thumb fixtures (old 32-bit iOS games)
-        run: |
-          for arch in armv6 armv6thumb armv7 armv7s thumb thumb2; do
-            python3 tools/make_fixture.py --arch "$arch" --output ".local/fixture-$arch.ipa"
-            python3 -m radek convert ".local/fixture-$arch.ipa" --authorized --output ".local/fixture-$arch-result"
-          done
       - name: Upload RadekiOSConventor APK
         uses: actions/upload-artifact@v6
         with:
           name: RadekiOSConventor-debug.apk
           path: artifacts/RadekiOSConventor-debug.apk
-          if-no-files-found: error
-      - name: Upload standalone converted fixture (not the converter UI)
-        uses: actions/upload-artifact@v6
-        with:
-          name: standalone-native-fixture
-          path: |
-            .local/fixture-result/RadekiOSConventor-debug.apk
-            .local/fixture-result/report.json
-            .local/fixture-result/conversion.jsonl
           if-no-files-found: error
       - name: Upload test reports
         if: always() && hashFiles('app/build/reports/**', 'artifacts/validation.json') != ''

@@ -1,68 +1,56 @@
 # RadekiOSConventor
 
-An **offline native-reconstruction workbench**, not an iOS emulator. Kotlin Android importer + C++ Mach-O analyzer + Python host conversion/SDK packaging pipeline.
+An **offline IPA inspection and native-reconstruction workbench**, not an iOS emulator or a general game converter. It includes an Android importer/analyzer, a C++ Mach-O parser, and Python reconstruction tools.
 
-> **Important: this is NOT a general IPA/game converter.** Native conversion re-emits a
-> *proved* closed integer entry leaf as Android ARM64 machine code: straight-line entry code
-> with no reachable imports or framework calls, memory access, address references or
-> unsupported runtime semantics. Linked-but-unused dylib and import records can be omitted
-> only after that entry is proven; **no no-op framework stubs are ever generated**. Anything
-> outside the proven subset is reported honestly, and ARM64e (PAC) has no backend.
-> Dependency lines are no longer simply "BLOCKED": every iOS framework and imported symbol is
-> mapped to the real Android implementation that provides it (identical C ABIs such as
-> OpenGL ES/EGL/iconv/SQLite, or platform APIs such as AAudio, MediaPlayer, Choreographer,
-> `android.view`, Canvas, sockets), and the app reports the resulting provider coverage.
-> APIs with no Android contract (StoreKit, GameKit, AdSupport, MapKit, CoreLocation ...) stay
-> blocked and say why. An importer APK is not proof those apps can be converted.
+> **No game APKs are currently produced.** This repository does not implement complete iOS-to-Android game translation, actual framework/API replacement, or an Android lifecycle/runtime for converted games. API-name matches and semantic mappings are analysis candidates only. The narrow closed-integer entry experiment is not a game conversion; packaging it as an installable app has been disabled. Unsupported or incomplete conversions end in `BLOCKED` and emit no APK.
 
-## Offline reconstruction before conversion
+## Offline reconstruction
 
-Every import is analyzed before any conversion decision is made:
+Authorized imports are analyzed before compatibility is assessed:
 
-- Mach-O images (executable, embedded dylibs/frameworks): headers, load commands,
+- Mach-O images (main executable and embedded dylibs/frameworks): headers, load commands,
   segments/sections, symbols, relocations, exports/imports, dependencies and fixups.
 - Disassembly and function discovery with basic-block CFGs (ARM64/ARM64e, ARMv6/ARMv7/Thumb/Thumb-2),
-  register/constant/reference tracking and pseudocode listings.
-- Objective-C classes, categories, protocols, ivars, properties, selectors, message-send
-  targets; Swift type/field metadata and demangling.
-- Reachability: which imported symbols are actually called, by which reconstructed functions,
-  which linked frameworks are weak/optional, and which APIs are natively implementable on
-  Android, need compatibility code, or are genuinely unsupported.
+  register/constant/reference tracking and reconstructed pseudocode listings.
+- Objective-C classes, categories, protocols, ivars, properties, selectors and message-send
+  targets; Swift type/field metadata and symbol demangling.
+- Reachability: which imported symbols appear to be called, by which reconstructed functions,
+  and which linked frameworks or APIs remain unsupported.
 
 Results are written as `reconstruction.json` and `reconstruction.md` beside `report.json`.
-A dependency that is merely linked is **never** reported as blocked: only reachable APIs are.
-The reconstruction is an engineering artifact and is never claimed to be original source;
-reconstructed code is never executed.
+Reconstruction is an engineering artifact, not original source; uncertain instructions and
+control flow are marked, and imported code is never executed.
 
-## Two distinct APKs
+## APK output policy
 
-1. **Converter/importer app:** the Actions artifact `RadekiOSConventor-debug.apk` contains the
-   Android library/import UI, the native analyzer **and the on-device converter**. It converts
-   an imported IPA to a signed, installable APK without any host toolchain:
-   `Ir.kt` proves the entry leaf and emits Android ARM64, `Elf.kt` builds a loadable ELF64
-   image, `Axml.kt` writes a binary manifest, and `ApkBuilder`/`ApkSign` produce a ZIP signed
-   with both JAR (v1) and APK Signature Scheme v2 using a key generated and kept on the device.
-   A red **Force convert to .apk** button builds the APK even when coverage is incomplete or
-   the entry leaf is unproven, and records `forced=true` in the report.
-2. **Standalone converted program:** `python3 -m radek convert ...` produces a separate
-   `RadekiOSConventor-debug.apk` with the same layout from the host CLI. Neither variant ships
-   the IPA, the Mach-O executable, an emulator, an interpreter, a runtime translator or the
-   converter. The supported entry contract returns an integer; the Android entry activity
-   shows that result plus the conversion provenance. It does **not** recreate an iOS UI.
+- CI builds **only the RadekiOSConventor importer/analyzer APK** (`RadekiOSConventor-debug.apk`).
+- Importing an IPA runs analysis only. It does not automatically create a game APK, icon APK,
+  placeholder, or stub. The red **Force convert to .apk** action explains when complete conversion
+  is unsupported; it never bypasses the conversion checks or opens an installer for a placeholder.
+- A host APK can be attached only if its metadata declares the `complete-game-v1` contract and
+  passes source-identity, complete reachable-code/API/resource, ABI, packaging and provenance
+  checks. The current host CLI has **no producer** for that contract, so the repository currently
+  has no path for attaching a game APK.
+- The original IPA is retained only in private analysis storage until the library entry is deleted;
+  it is never packaged into an APK. Recovered icons are shown in the analysis library, not used to
+  brand a placeholder.
 
-CI uploads the second APK separately as `standalone-native-fixture` to avoid confusing the products.
+The host's ARM assessment prefers `arm64-v8a` when an IPA contains both ARM32 and ARM64. A
+supported ARM32-only input is assessed for `armeabi-v7a`. These ABI choices describe analysis and
+future conversion targeting; they do not imply that an APK was generated.
 
-## Conversion percentage
+## Android API status
 
-The library and detail screens show the real build progress (each pipeline stage reports its
-own percentage, 100% = the signed APK is written and verified). Support is reported separately
-as **Android provider coverage**: the share of the slice's dependencies and imported symbols
-with a real Android provider. The APK is built either way; 100% coverage means nothing in the
-converted slice needs an unmapped Darwin API.
+The Android mapper reports same-named NDK symbols and semantic rewrite targets (for example,
+`UIView` → `android.view.View`) as **candidates only**. It has not generated, linked, or tested
+replacement implementations. The report separately records zero generated API replacements and
+zero complete runnable game code. UIKit, Foundation ABI, Swift, Objective-C dispatch, graphics,
+audio, input, game lifecycle and general resource APIs remain unsupported when required.
 
-## Build, test, edit
+## Build and test
 
-See [Build instructions](docs/BUILD.md), [support matrix and conversion contract](docs/SUPPORT.md), [architecture](docs/ARCHITECTURE.md), and [security](docs/SECURITY.md).
+See [Build instructions](docs/BUILD.md), [support matrix](docs/SUPPORT.md),
+[architecture](docs/ARCHITECTURE.md), and [security](docs/SECURITY.md).
 
 ```sh
 python3 tools/build_native.py
@@ -70,44 +58,35 @@ python3 -m unittest discover -v
 ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-Java 17, Python 3.10+, C++17, Android platform 35, build-tools 35.0.0, NDK 27.2.12479018, CMake 3.22.1; Gradle wrapper included. No Python packages are required.
+Java 17, Python 3.10+, C++17, Android platform 35, build-tools 35.0.0, NDK 27.2.12479018,
+CMake 3.22.1; the Gradle wrapper is included. No Python packages are required.
 
-### Exercise actual offline conversion
-
-With the documented Linux Android toolchain installed:
+For a synthetic Mach-O input, the host CLI can produce a report and explicitly refuse an
+incomplete game APK:
 
 ```sh
 python3 tools/make_fixture.py --arch arm64 --output .local/fixture.ipa
-python3 -m radek convert .local/fixture.ipa --authorized --output workspace/fixture
-# workspace/fixture/RadekiOSConventor-debug.apk
+python3 -m radek analyze .local/fixture.ipa --authorized --output .local/analysis
+# No game APK is produced.
 ```
 
-`--arch armv6`, `armv6thumb`, `armv4t`, `armv7`, `armv7s`, `thumb`, and `thumb2` exercise
-**offline ARM32 → ARM64 lowering**, including the Thumb-1-only code layout of iPhone OS 2-5
-games. The fixtures are generated synthetic Mach-O programs, not installable signed iOS apps.
-The resulting native routine returns 42. The 32-bit subset covers register moves, ADD/SUB
-(register and immediate), AND/ORR/EOR/BIC, MUL and LSL/LSR/ASR immediates, plus the matching
-Thumb-1 forms; everything else is rejected rather than mistranslated. This does not make
-general ARMv6 games compatible - those commonly depend on UIKit, graphics, audio, input and
-runtime services listed below.
-
-Icons are recovered through a generic fallback chain (Info.plist names, `@2x`/`@3x`/`~ipad`
-variants, compiled `Assets.car` renditions, then other bundle images) with every attempt
-recorded; the recovered icon becomes the generated APK's launcher icon. On device the same
-chain runs on top of `BitmapFactory`, adds Apple `CgBI` PNG repair, rejects fully transparent
-artwork, and finally generates a deterministic icon from the app name — so every library entry
-shows a visible icon instead of a blank tile.
-
-For authorized real IPAs, `analyze` reads actual metadata/dependencies without attempting to decrypt or execute the input:
+To inspect an authorized IPA:
 
 ```sh
 python3 -m radek analyze authorized.ipa --authorized --output workspace/analysis
 ```
 
-A new output directory is required. Reports/logs persist; extraction workspaces are removed. CLI exit codes: `0 READY`, `1 FAILED`, `2 PARTIAL` (analysis-only), `3 BLOCKED`. Nonzero statuses are intentional, not silent successes.
+A new output directory is required. Reports and logs persist; temporary extraction workspaces are
+removed. `analyze` returns `PARTIAL` after a successful inspection. `convert` returns `BLOCKED`
+when the input fits only the experimental leaf subset because it is not a complete game converter.
+`READY` is reserved for a future complete conversion that passes static APK validation.
 
 ## GitHub APK builds
 
-Open **Actions → Build and validate Android APKs → Run workflow**, select the branch containing this implementation. Pushes and pull requests also run the workflow. Download the **RadekiOSConventor-debug.apk** artifact after a successful run. CI installs the pinned toolchain, builds C++ and Android code, runs host/Kotlin tests and real signed synthetic conversions, validates both APK types, and fails on errors.
+Open **Actions → Build and validate Android APKs → Run workflow** and select the branch containing
+this implementation. Pushes and pull requests also run CI. After a successful run, download the
+**RadekiOSConventor-debug.apk** importer artifact. CI runs native, Python and Android importer tests,
+validates the importer APK, and includes no synthetic or placeholder game APK artifact.
 
-Only convert IPAs you own or are authorized to convert. FairPlay/encrypted images are blocked; no protection bypass is provided.
+Only inspect or convert IPAs you own or are authorized to process. Encrypted/FairPlay-protected
+images are blocked; no protection bypass is provided.

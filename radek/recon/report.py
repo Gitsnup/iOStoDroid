@@ -156,9 +156,9 @@ def markdown(reconstruction: dict, application: dict | None = None) -> str:
                     f"unreferenced: {apis_data.get('unusedImportCount', 0)}"
                 )
                 lines.append(
-                    f"- Android-native: {summary.get('native', 0)}; "
-                    f"needs compatibility code: {summary.get('compatibility', 0)}; "
-                    f"blocked: {summary.get('blocked', 0)}"
+                    f"- same-name Android native candidates: {summary.get('native', 0)}; "
+                    f"requires compatibility rewrites: {summary.get('compatibility', 0)}; "
+                    f"unmapped/blocked: {summary.get('blocked', 0)}"
                 )
                 for name, entry in (apis_data.get("linkedFrameworks") or {}).items():
                     lines.append(

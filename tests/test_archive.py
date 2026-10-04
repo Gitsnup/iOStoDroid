@@ -24,6 +24,7 @@ class ArchiveTests(unittest.TestCase):
             info = read_plist(app / "Info.plist")
             self.assertEqual(info["CFBundleExecutable"], "Fixture")
             self.assertEqual(metadata(info, source)["version"], "1.0")
+            self.assertEqual(metadata(info, source)["minimumIOSVersion"], "8.0")
             self.assertEqual(icon_candidates(info, app)[0].name, "AppIcon@2x.png")
 
     def bad_zip(self, name, data=b"x", attr=None):

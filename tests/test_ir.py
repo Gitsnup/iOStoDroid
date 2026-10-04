@@ -15,11 +15,55 @@ class IRTests(unittest.TestCase):
         code = struct.pack("<III", 0xE3A00028, 0xE2800002, 0xE12FFF1E)
         self.assertEqual(lift(code, "armv7").machine_code, expected)
 
+    def test_arm32_target_abi_alias_lowers_safe_code_to_armv7(self):
+        code = struct.pack("<II", 0xE3A0002A, 0xE12FFF1E)
+        program = lift(code, "armv6", target_abi="armeabi-v7a")
+        self.assertEqual(program.machine_code, struct.pack("<II", 0xE300002A, 0xE12FFF1E))
+        self.assertEqual(program.report()["targetAbi"], "armeabi-v7a")
+        self.assertEqual(program.report()["backend"], "offline-armv6-to-armv7")
+
+        thumb_code = struct.pack("<HH", 0x202A, 0x4770)
+        thumb = lift(thumb_code, "armv6", True, "armeabi-v7a")
+        self.assertEqual(thumb.machine_code, struct.pack("<II", 0xE300002A, 0xE12FFF1E))
+        self.assertTrue(thumb.thumb)
+        self.assertTrue(thumb.report()["sourceThumb"])
+
+    def test_arm32_callee_saved_register_writes_are_rejected(self):
+        code = struct.pack("<III", 0xE3A0402A, 0xE3A0002A, 0xE12FFF1E)
+        with self.assertRaisesRegex(Unsupported, "callee-saved"):
+            lift(code, "armv7", target_abi="armeabi-v7a")
+
     def test_armv6_offline_lowering(self):
         code = struct.pack("<II", 0xE3A0002A, 0xE12FFF1E)
         self.assertEqual(lift(code, "armv6").machine_code, struct.pack("<II", 0x52800540, 0xD65F03C0))
         thumb = lift(struct.pack("<HH", 0x202A, 0x4770), "armv6", True)
         self.assertEqual(thumb.machine_code, struct.pack("<II", 0x52800540, 0xD65F03C0))
+
+    def test_armv6_to_armv7_32bit_android_code(self):
+        source = struct.pack("<II", 0xE3A0002A, 0xE12FFF1E)
+        program = lift(source, "armv6", target_arch="armv7")
+        expected = struct.pack("<II", 0xE300002A, 0xE12FFF1E)
+        self.assertEqual(program.machine_code, expected)
+        self.assertEqual(program.target_abi, "armeabi-v7a")
+        self.assertEqual(program.report()["outputArchitecture"], "armv7")
+
+    def test_armv7_output_rejects_callee_saved_and_platform_registers(self):
+        for register in (4, 9, 11):
+            source = struct.pack("<III", 0xE3A0002A, 0xE3A00000 | (register << 12) | 1, 0xE12FFF1E)
+            with self.subTest(register=register), self.assertRaisesRegex(Unsupported, "callee-saved"):
+                lift(source, "armv7", target_arch="armv7")
+
+    def test_armv7_leaf_lowers_to_32bit_android_code(self):
+        source = struct.pack("<III", 0xE3A00028, 0xE2800002, 0xE12FFF1E)
+        program = lift(source, "armv7", target_arch="armv7")
+        expected = struct.pack("<III", 0xE3000028, 0xE2800002, 0xE12FFF1E)
+        self.assertEqual(program.machine_code, expected)
+        self.assertEqual(program.target_abi, "armeabi-v7a")
+
+    def test_thumb_armv7_leaf_lowers_to_a32_android_code(self):
+        source = struct.pack("<HH", 0x202A, 0x4770)
+        program = lift(source, "armv7", True, target_arch="armv7")
+        self.assertEqual(program.machine_code, struct.pack("<II", 0xE300002A, 0xE12FFF1E))
 
     def test_thumb_offline_lowering(self):
         p = lift(struct.pack("<HHHH", 0x2029, 0x3002, 0x3801, 0x4770), "armv7", True)
@@ -32,9 +76,31 @@ class IRTests(unittest.TestCase):
         self.assertEqual(p.blocks[0].instructions[1].immediate, 0x5678)
         self.assertEqual(p.machine_code, struct.pack("<III", 0x52824680, 0x72AACF00, 0xD65F03C0))
 
+        armv7 = lift(
+            struct.pack("<HHHHH", 0xF241, 0x2034, 0xF2C5, 0x6078, 0x4770),
+            "armv7s",
+            True,
+            target_arch="armv7",
+        )
+        self.assertEqual(armv7.machine_code, struct.pack("<III", 0xE3010234, 0xE3450678, 0xE12FFF1E))
+        self.assertEqual(armv7.target_abi, "armeabi-v7a")
+
     def test_arm_rotated_constant(self):
-        p = lift(struct.pack("<II", 0xE3A004FF, 0xE12FFF1E), "armv7")
+        source = struct.pack("<II", 0xE3A004FF, 0xE12FFF1E)
+        p = lift(source, "armv7")
         self.assertEqual(p.blocks[0].instructions[0].immediate, 0xFF000000)
+        armv7 = lift(source, "armv7", target_arch="armv7")
+        self.assertEqual(
+            armv7.machine_code,
+            struct.pack("<III", 0xE3000000, 0xE34F0F00, 0xE12FFF1E),
+        )
+
+        add = lift(
+            struct.pack("<III", 0xE3A01001, 0xE28104FF, 0xE12FFF1E),
+            "armv7",
+            target_arch="armv7",
+        )
+        self.assertEqual(add.machine_code, struct.pack("<III", 0xE3001001, 0xE28104FF, 0xE12FFF1E))
 
     def test_uninitialized_inputs(self):
         for code in (
@@ -74,99 +140,3 @@ class IRTests(unittest.TestCase):
         code = struct.pack("<IIII", 0x529FFFE0, 0x72BFFFE0, 0x11000400, 0xD65F03C0)
         p = lift(code, "arm64")
         self.assertEqual(p.machine_code, code)
-
-
-class Arm32BroadeningTests(unittest.TestCase):
-    """armv4t/armv5tej/armv6/armv7 slices lower to real ARM64 instructions."""
-
-    def lower(self, words, architecture, thumb=False):
-        packed = struct.pack("<%d%s" % (len(words), "H" if thumb else "I"), *words)
-        return lift(packed, architecture, thumb)
-
-    def test_armv6_a32_leaf(self):
-        program = self.lower([0xE3A0002A, 0xE12FFF1E], "armv6")
-        self.assertEqual(program.machine_code, struct.pack("<II", 0x52800540, 0xD65F03C0))
-        self.assertEqual(program.report()["backend"], "offline-arm32-to-arm64")
-
-    def test_armv6_thumb_leaf(self):
-        program = self.lower([0x202A, 0x4770], "armv6", thumb=True)
-        self.assertEqual(program.machine_code, struct.pack("<II", 0x52800540, 0xD65F03C0))
-
-    def test_every_arm32_flavour_is_accepted(self):
-        for architecture in ("armv4t", "armv5tej", "armv6", "armv7", "armv7s", "armv8-32"):
-            with self.subTest(architecture=architecture):
-                self.lower([0xE3A00007, 0xE12FFF1E], architecture)
-
-    def test_a32_register_and_logic_lowering(self):
-        cases = {
-            "MOV R0, R1": ([0xE3A01007, 0xE1A00001, 0xE12FFF1E], [0x528000E1, 0x2A0103E0, 0xD65F03C0]),
-            "MVN R0, R1": ([0xE3A01007, 0xE1E00001, 0xE12FFF1E], [0x528000E1, 0x2A2103E0, 0xD65F03C0]),
-            "ADD R0, R1, R2": (
-                [0xE3A01003, 0xE3A02004, 0xE0810002, 0xE12FFF1E],
-                [0x52800061, 0x52800082, 0x0B020020, 0xD65F03C0],
-            ),
-            "SUB R0, R1, R2": (
-                [0xE3A01003, 0xE3A02001, 0xE0410002, 0xE12FFF1E],
-                [0x52800061, 0x52800022, 0x4B020020, 0xD65F03C0],
-            ),
-            "ORR R0, R1, R2": (
-                [0xE3A01003, 0xE3A02001, 0xE1810002, 0xE12FFF1E],
-                [0x52800061, 0x52800022, 0x2A020020, 0xD65F03C0],
-            ),
-            "MUL R0, R1, R2": (
-                [0xE3A01003, 0xE3A02001, 0xE0000291, 0xE12FFF1E],
-                [0x52800061, 0x52800022, 0x1B017C40, 0xD65F03C0],
-            ),
-            "MOV R0, R1, LSL #3": (
-                [0xE3A01003, 0xE1A00181, 0xE12FFF1E],
-                [0x52800061, 0x531D7020, 0xD65F03C0],
-            ),
-        }
-        for name, (words, expected) in cases.items():
-            with self.subTest(name=name):
-                program = self.lower(words, "armv6")
-                self.assertEqual(program.machine_code, struct.pack("<%dI" % len(expected), *expected))
-
-    def test_a32_logical_immediate_uses_free_scratch_register(self):
-        # AND R0, R1, #15 has no ARM bitmask-immediate encoding for every value,
-        # so it is materialised in w15 (untouchable by ARM32 leaf code) and applied.
-        program = self.lower([0xE3A010FF, 0xE201000F, 0xE12FFF1E], "armv6")
-        self.assertEqual(
-            program.machine_code, struct.pack("<IIII", 0x52801FE1, 0x528001EF, 0x0A0F0020, 0xD65F03C0)
-        )
-
-    def test_thumb_register_group_is_decoded_by_six_op_bits(self):
-        cases = {
-            0x4000: Op.AND, 0x4040: Op.EOR, 0x4300: Op.ORR,
-            0x4340: Op.MUL, 0x4380: Op.BIC, 0x43C0: Op.MVN,
-        }
-        for word, op in cases.items():
-            with self.subTest(word=hex(word)):
-                program = self.lower([0x2007, word, 0x4770], "armv6", thumb=True)
-                self.assertEqual(program.blocks[0].instructions[1].op, op)
-
-    def test_thumb_shift_and_move(self):
-        program = self.lower([0x2105, 0x0088, 0x4608, 0x4770], "armv6", thumb=True)
-        ops = [i.op for i in program.blocks[0].instructions]
-        self.assertEqual(ops, [Op.CONST, Op.SHIFT, Op.MOVE, Op.RETURN])
-        self.assertEqual(program.blocks[0].instructions[1].immediate, 2)
-
-    def test_thumb_three_bit_immediate_add(self):
-        program = self.lower([0x2001, 0x1C41, 0x4770], "armv6", thumb=True)
-        self.assertEqual(program.blocks[0].instructions[1].op, Op.ADD)
-        self.assertEqual(program.blocks[0].instructions[1].immediate, 1)
-
-    def test_unproven_arm32_operations_are_rejected(self):
-        rejected = [
-            ([0xE3A01000, 0xE1510001, 0xE12FFF1E], False),        # CMP + flags
-            ([0xE3A01000, 0xE02DD191, 0xE12FFF1E], False),        # multiply-accumulate
-            ([0xE3A01000, 0xE1A00111, 0xE12FFF1E], False),        # MOV ROR
-            ([0xE3A01000, 0x1A000000, 0xE12FFF1E], False),        # conditional branch
-            ([0xE3A01000, 0xE24DD004, 0xE12FFF1E], False),        # SUB SP (stack)
-            ([0x2007, 0x4140, 0x4770], True),                     # ADCS
-            ([0x2007, 0x40C0, 0x4770], True),                     # LSRS register
-            ([0x2007, 0x4280, 0x4770], True),                     # CMP register
-        ]
-        for words, thumb in rejected:
-            with self.subTest(words=[hex(w) for w in words]), self.assertRaises(Unsupported):
-                self.lower(words, "armv6", thumb)

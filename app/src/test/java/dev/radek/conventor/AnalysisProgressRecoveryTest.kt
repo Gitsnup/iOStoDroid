@@ -1,6 +1,5 @@
 package dev.radek.conventor
 
-import android.app.Application
 import java.io.File
 import java.util.UUID
 import org.json.JSONObject
@@ -17,7 +16,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [28], manifest = Config.NONE)
 class AnalysisProgressRecoveryTest {
     @Test fun interruptedAnalysisKeepsItsLastProgressAndExplainsFailure() {
-        val library = Library(RuntimeEnvironment.getApplication<Application>())
+        val library = Library(RuntimeEnvironment.getApplication())
         val entry = File(library.root, "interrupted-${UUID.randomUUID()}").apply { mkdirs() }
         try {
             File(entry, "source.ipa").writeText("retained authorized source")

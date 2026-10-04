@@ -340,7 +340,7 @@ def decode_arm64(word: int, address: int) -> Instr:
             immediate=imm,
         )
     if op in (0b0101, 0b1101):  # data processing register
-        if (word & 0x7F000000) == 0x0B000000:
+        if (word & 0x1F000000) == 0x0B000000:
             # add/sub (shifted register), including the cmp/cmn aliases (Rd == xzr).
             sf = bool(word & (1 << 31))
             sub = bool(word & (1 << 30))
@@ -370,12 +370,22 @@ def decode_arm64(word: int, address: int) -> Instr:
                 immediate=amount if not shift else None,
                 condition=None,
             )
-        if (word & 0x7F200000) == 0x0A000000:
+        if (word & 0x1F000000) == 0x0A000000:
             names = {0: "and", 1: "bic", 2: "orr", 3: "orn", 4: "eor", 5: "eon", 6: "ands", 7: "bics"}
-            opc = _bits(word, 30, 29) | (_bits(word, 21, 21) << 2)
+            opc = (_bits(word, 30, 29) << 1) | _bits(word, 21, 21)
+            wide = bool(word & (1 << 31))
+            rd, rn, rm = _bits(word, 4, 0), _bits(word, 9, 5), _bits(word, 20, 16)
+            name = names.get(opc, "logical")
+            operands = f"{_reg(rd, wide)}, {_reg(rn, wide)}, {_reg(rm, wide)}"
+            if rn == 31 and opc == 2:                # ORR Wd, WZR, Wm  ==  MOV Wd, Wm
+                name, operands = "mov", f"{_reg(rd, wide)}, {_reg(rm, wide)}"
+            elif rn == 31 and opc == 3:              # ORN Wd, WZR, Wm  ==  MVN Wd, Wm
+                name, operands = "mvn", f"{_reg(rd, wide)}, {_reg(rm, wide)}"
+            if name == "mov":
+                return instr(name, operands, "move", dst=rd, sources=(rm,))
             return instr(
-                names.get(opc, "logical"),
-                f"{_reg(_bits(word, 4, 0), bool(word & (1 << 31)))}, {_reg(_bits(word, 9, 5), bool(word & (1 << 31)))}, {_reg(_bits(word, 20, 16), bool(word & (1 << 31)))}",
+                name,
+                operands,
                 "arith",
                 dst=_bits(word, 4, 0),
                 sources=(_bits(word, 9, 5), _bits(word, 20, 16)),
@@ -442,11 +452,20 @@ def decode_arm64(word: int, address: int) -> Instr:
                 0x80: "smulh",
                 0xC0: "umulh",
             }
+            wide = bool(word & (1 << 31))
             key = (_bits(word, 30, 29) << 5) | _bits(word, 21, 21) << 4 | 0
             name = names.get(key if key in names else _bits(word, 21, 21) * 0x20 + _bits(word, 30, 29), "madd")
+            if _bits(word, 14, 10) == 31 and name == "madd":
+                name = "mul"          # MUL Wd, Wn, Wm == MADD Wd, Wn, Wm, WZR
             return instr(
                 name,
-                f"{_reg(_bits(word, 4, 0))}, {_reg(_bits(word, 9, 5))}, {_reg(_bits(word, 20, 16))}, {_reg(_bits(word, 31, 31) * 31)}",
+                (
+                    f"{_reg(_bits(word, 4, 0), wide)}, {_reg(_bits(word, 9, 5), wide)}, "
+                    f"{_reg(_bits(word, 20, 16), wide)}"
+                    if _bits(word, 14, 10) == 31 and name == "mul"
+                    else f"{_reg(_bits(word, 4, 0), wide)}, {_reg(_bits(word, 9, 5), wide)}, "
+                    f"{_reg(_bits(word, 20, 16), wide)}, {_reg(_bits(word, 14, 10), wide)}"
+                ),
                 "arith",
                 dst=_bits(word, 4, 0),
                 sources=(_bits(word, 9, 5), _bits(word, 20, 16)),

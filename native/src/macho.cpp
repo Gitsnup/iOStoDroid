@@ -99,12 +99,41 @@ Json signedNumber(int64_t value) {
     result.value = std::to_string(value);
     return result;
 }
+// CPU_SUBTYPE_ARM_* from mach/machine.h. Old 32-bit iOS games are usually
+// armv6 (iPhone OS 2-5) or armv7; every subtype is named so the report and the
+// ARM32 -> ARM64 lowering can select a slice instead of discarding it.
 std::string arch(uint64_t c, uint64_t s) {
     s &= 0xffffff;
     if (c == 0x100000c)
         return s == 2 ? "arm64e" : "arm64";
-    if (c == 12)
-        return s == 11 ? "armv7s" : s == 9 ? "armv7" : s == 6 ? "armv6" : "arm32-unknown";
+    if (c == 12) {
+        switch (s) {
+        case 5:
+            return "armv4t";
+        case 6:
+            return "armv6";
+        case 7:
+            return "armv5tej";
+        case 9:
+            return "armv7";
+        case 10:
+            return "armv7f";
+        case 11:
+            return "armv7s";
+        case 12:
+            return "armv7k";
+        case 13:
+            return "armv8-32";
+        case 14:
+            return "armv6m";
+        case 15:
+            return "armv7m";
+        case 16:
+            return "armv7em";
+        default:
+            return "arm32-unknown";
+        }
+    }
     return "unsupported";
 }
 Json relocations(Reader &r, size_t off, size_t n) {
@@ -169,6 +198,8 @@ Json thin(Reader r) {
     j["loadCommands"] = array();
     j["metadata"] = array();
     j["linkedit"] = array();
+    j["fixupAnomalies"] = array();
+    j["fixupStreams"] = array();
     size_t symoff = 0, nsyms = 0, stroff = 0, strsize = 0;
     bool symSeen = false;
     size_t exportOff = 0, exportSize = 0;
@@ -568,11 +599,17 @@ Json thin(Reader r) {
                 j["exports"].push(s);
         }
     }
+    // A malformed, oversized or only partially understood dyld opcode stream is a
+    // fact about the input, not a reason to discard the whole analysis. Every
+    // stream is decoded independently: what is understood is reported, the first
+    // problem stops only that stream, and the reason is recorded so the report
+    // stays honest instead of surfacing as an opaque IOException.
     j["bindDecodingComplete"] = true;
     j["bindDiagnostics"] = array();
     for (auto &b : binds) {
-        try {
-            size_t p = b.off, end = p + b.size;
+        size_t p = b.off, end = p + b.size;
+        uint64_t decoded = 0, threaded = 0;
+        auto decode = [&]() {
             std::string symbol;
             int64_t ordinal = 0, addend = 0;
             uint64_t seg = 0, address = 0, type = 1, flags = 0;
@@ -609,6 +646,7 @@ Json thin(Reader r) {
                 im["flags"] = flags;
                 im["stream"] = b.kind;
                 j["imports"].push(im);
+                decoded++;
             };
             while (p < end) {
                 auto byte = r.u(p++, 1), op = byte & 0xf0, imm = byte & 15;
@@ -686,11 +724,29 @@ Json thin(Reader r) {
                     break;
                 }
                 case 0xd0:
-                    throw std::runtime_error("threaded dyld bind opcode unsupported");
+                    // Chained-fixup images keep the real pointers in
+                    // LC_DYLD_CHAINED_FIXUPS; this stream only carries ordinals.
+                    // Record them instead of discarding the whole analysis.
+                    if (imm == 0) {
+                        auto value = r.leb(p, end);
+                        if (value > uint64_t(std::numeric_limits<int64_t>::max()))
+                            throw std::runtime_error("bind ordinal overflow");
+                        ordinal = int64_t(value);
+                        threaded++;
+                    } else if (imm != 1)
+                        throw std::runtime_error("invalid threaded bind sub-opcode");
+                    break;
                 default:
                     throw std::runtime_error("invalid bind opcode");
                 }
             }
+        };
+        Json stream = object();
+        stream["kind"] = b.kind;
+        stream["bytes"] = uint64_t(b.size);
+        try {
+            decode();
+            stream["status"] = "decoded";
         } catch (const std::exception &e) {
             // Keep load commands, segments and other streams available for analysis,
             // but make an incomplete binding table explicit. Conversion backends must
@@ -702,7 +758,20 @@ Json thin(Reader r) {
             diagnostic["size"] = uint64_t(b.size);
             diagnostic["message"] = e.what();
             j["bindDiagnostics"].push(diagnostic);
+            stream["status"] = "partial";
+            stream["reason"] = e.what();
+            if (j["fixupAnomalies"].items.size() < 64) {
+                Json a = object();
+                a["stream"] = b.kind;
+                a["reason"] = e.what();
+                a["streamOffset"] = uint64_t(p > b.off ? p - b.off : 0);
+                j["fixupAnomalies"].push(a);
+            }
         }
+        stream["decodedBinds"] = decoded;
+        if (threaded)
+            stream["threadedOrdinals"] = threaded;
+        j["fixupStreams"].push(stream);
     }
     if (exportSize) {
         std::set<size_t> active;

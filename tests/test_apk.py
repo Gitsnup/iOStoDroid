@@ -2,6 +2,7 @@ import hashlib
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 from pathlib import Path
 from radek.apk import (
@@ -305,3 +306,211 @@ class NoPlaceholderPackagingTests(unittest.TestCase):
         }]
         with self.assertRaisesRegex(InputError, "path is unsafe"):
             _validate_complete_game_metadata(metadata, metadata["package"], "arm64-v8a")
+
+
+class ExperimentalShellTests(unittest.TestCase):
+    """The experimental shell is an honestly labelled artifact package.
+
+    It must never satisfy the complete-game contract, and its metadata and
+    launcher disclosure are mandatory parts of the validation.
+    """
+
+    @staticmethod
+    def _dex():
+        from tests.test_dex import dex
+
+        return bytes(dex())
+
+    @staticmethod
+    def _metadata(**overrides):
+        from radek.apk import EXPERIMENTAL_SHELL_CONTRACT, EXPERIMENTAL_SHELL_NOTICE
+
+        metadata = {
+            "contract": EXPERIMENTAL_SHELL_CONTRACT,
+            "generator": "RadekiOSConventor",
+            "honestLabeling": True,
+            "containsGameCode": False,
+            "completeGameConversion": False,
+            "disclosure": EXPERIMENTAL_SHELL_NOTICE,
+            "provenance": {},
+            "artifacts": [],
+        }
+        metadata.update(overrides)
+        return metadata
+
+    def _write_shell(self, path: Path, metadata=None, omit=()):
+        import json
+
+        entries = {
+            "AndroidManifest.xml": b"<manifest/>",
+            "classes.dex": self._dex(),
+            "assets/conversion-metadata.json": json.dumps(
+                metadata if metadata is not None else self._metadata()
+            ).encode(),
+        }
+        for name in omit:
+            entries.pop(name, None)
+        with zipfile.ZipFile(path, "w") as package:
+            for name, payload in entries.items():
+                package.writestr(name, payload)
+
+    def test_sources_carry_honest_disclosure_and_never_claim_game(self):
+        from radek.apk import EXPERIMENTAL_SHELL_NOTICE, EXPERIMENTAL_SHELL_PACKAGE, experimental_shell_sources
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = experimental_shell_sources(Path(directory))
+            manifest = (root / "AndroidManifest.xml").read_text()
+            strings = (root / "res" / "values" / "strings.xml").read_text()
+            activity = (root / "src" / "ExperimentalShellActivity.java").read_text()
+        self.assertIn(EXPERIMENTAL_SHELL_PACKAGE, manifest)
+        self.assertIn("shell_notice", strings)
+        self.assertIn("no game code is translated", EXPERIMENTAL_SHELL_NOTICE.lower())
+        self.assertIn("shell_notice", activity)
+        self.assertIn("Radek Experimental Shell", strings)
+        # The launcher source is plain Java: no format-escaping leftovers.
+        self.assertNotIn("{{", activity)
+        self.assertIn("extends Activity {", activity)
+        self.assertEqual(activity.count("{"), activity.count("}"))
+        # aapt2 rejects unescaped apostrophes; the notice contains one (IPA's).
+        self.assertIn("\\'", strings)
+        self.assertNotIn("IPA's", strings)
+
+    def test_valid_shell_zip_passes_sdk_free_checks(self):
+        from radek.apk import validate_experimental_shell
+
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "experimental-shell.apk"
+            self._write_shell(apk)
+            result = validate_experimental_shell(apk)
+        self.assertEqual(result["status"], "VALID")
+        self.assertFalse(result["signatureVerified"])  # no toolchain -> not asserted
+
+    def test_complete_game_contract_cannot_be_claimed_by_shell_metadata(self):
+        from radek.apk import validate_experimental_shell
+
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "shell.apk"
+            self._write_shell(apk, metadata=self._metadata(contract="complete-game-v1"))
+            result = validate_experimental_shell(apk)
+        self.assertEqual(result["status"], "INVALID")
+
+    def test_missing_parts_are_rejected(self):
+        from radek.apk import validate_experimental_shell
+
+        cases = (
+            ("classes.dex",),
+            ("assets/conversion-metadata.json",),
+            ("AndroidManifest.xml",),
+        )
+        for omitted in cases:
+            with self.subTest(omitted=omitted), tempfile.TemporaryDirectory() as directory:
+                apk = Path(directory) / "shell.apk"
+                self._write_shell(apk, omit=omitted)
+                self.assertEqual(validate_experimental_shell(apk)["status"], "INVALID")
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "nope.apk"
+            self.assertEqual(validate_experimental_shell(missing)["status"], "INVALID")
+
+    def test_stripped_disclosure_or_game_claim_is_rejected(self):
+        from radek.apk import validate_experimental_shell
+
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "shell.apk"
+            self._write_shell(apk, metadata=self._metadata(disclosure="everything works"))
+            self.assertEqual(validate_experimental_shell(apk)["status"], "INVALID")
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "shell.apk"
+            self._write_shell(apk, metadata=self._metadata(containsGameCode=True))
+            self.assertEqual(validate_experimental_shell(apk)["status"], "INVALID")
+
+    def test_corrupt_dex_is_rejected(self):
+        from radek.apk import validate_experimental_shell
+
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "shell.apk"
+            broken = bytearray(self._dex())
+            broken[-1] ^= 1
+            with zipfile.ZipFile(apk, "w") as package:
+                package.writestr("AndroidManifest.xml", b"<manifest/>")
+                package.writestr("classes.dex", bytes(broken))
+                import json
+
+                package.writestr(
+                    "assets/conversion-metadata.json", json.dumps(self._metadata())
+                )
+            self.assertEqual(validate_experimental_shell(apk)["status"], "INVALID")
+
+
+class ExperimentalShellBuildSimulationTests(unittest.TestCase):
+    """Exercise the full build_experimental_shell glue with simulated tools.
+
+    Each tool invocation is faked just enough to produce the artifacts the
+    next stage consumes, so the Python-side wiring (aapt2 link output
+    handling, javac/d8 sequencing, zip append, zipalign/apksigner calls and
+    self-validation) runs exactly as in CI.
+    """
+
+    def test_simulated_toolchain_builds_and_self_validates_shell(self):
+        import json
+        import shutil
+
+        from radek import apk as apk_module
+        from radek.apk import Toolchain, build_experimental_shell
+        from tests.test_dex import dex
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk = root / "sdk"
+            build = sdk / "build-tools" / "35.0.0"
+            build.mkdir(parents=True)
+            platform = sdk / "platforms" / "android-35"
+            platform.mkdir(parents=True)
+            (platform / "android.jar").write_bytes(b"fake")
+            for name in ("aapt2", "zipalign", "apksigner", "d8"):
+                (build / name).write_text("#!/bin/sh\nexit 0\n")
+                (build / name).chmod(0o755)
+            tools = Toolchain(sdk, build)
+            calls = []
+
+            def fake_run(args, log=None, timeout=180):
+                calls.append([str(a) for a in args])
+                argv = [str(a) for a in args]
+                tool = Path(argv[0]).name
+                if tool == "aapt2" and "link" in argv:
+                    out = Path(argv[argv.index("-o") + 1])
+                    gen = Path(argv[argv.index("--java") + 1])
+                    with zipfile.ZipFile(out, "w") as package:
+                        package.writestr("AndroidManifest.xml", b"<binary/>")
+                        package.writestr("resources.arsc", b"\x00")
+                    (gen / "dev" / "radek" / "experimental" / "shell").mkdir(parents=True)
+                    (gen / "dev" / "radek" / "experimental" / "shell" / "R.java").write_text(
+                        "package dev.radek.experimental.shell; final class R {}"
+                    )
+                elif tool == "d8":
+                    out = Path(argv[argv.index("--output") + 1])
+                    (out / "classes.dex").write_bytes(bytes(dex()))
+                elif tool == "zipalign":
+                    shutil.copyfile(argv[-2], argv[-1])
+                elif tool == "apksigner" and "sign" in argv:
+                    shutil.copyfile(argv[-1], Path(argv[argv.index("--out") + 1]))
+                elif tool == "apksigner" and "verify" in argv:
+                    pass
+                return ""
+
+            with patch.object(apk_module, "run", side_effect=fake_run):
+                result = build_experimental_shell(
+                    root / "work",
+                    root / "out",
+                    tools,
+                    {"targetAbi": "arm64-v8a"},
+                    {"libtranslated-entry.so": ("native-code", b"\x7fELF-test")},
+                )
+        self.assertEqual(result["status"], "BUILT_NOT_A_GAME")
+        self.assertEqual(result["contract"], "experimental-shell-v1")
+        self.assertTrue(result["validation"]["status"] == "VALID")
+        tool_names = [Path(c[0]).name for c in calls]
+        for expected in ("aapt2", "javac", "d8", "zipalign", "apksigner"):
+            self.assertIn(expected, tool_names)
+        self.assertIn("keytool", tool_names)
+        # keytool runs before apksigner sign
+        self.assertLess(tool_names.index("keytool"), len(tool_names) - 1 - tool_names[::-1].index("apksigner"))

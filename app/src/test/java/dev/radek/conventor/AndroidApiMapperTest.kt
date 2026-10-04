@@ -131,4 +131,76 @@ class AndroidApiMapperTest {
         assertEquals(0, mapping.getInt("generatedTranslationCount"))
         assertEquals(0, mapping.getInt("implementedTranslationCoveragePercent"))
     }
+
+    @Test fun compatStubHandlersAreRegisteredAndNeverCountedAsVerifiedImplementations() {
+        // glDrawArrays and malloc are in the reviewed bionic catalog, so they must
+        // classify as direct candidates and never reach the compat resolver; the two
+        // OpenAL symbols have no other mapping and are the only resolver inputs.
+        val imports = JSONArray()
+            .put(JSONObject().put("name", "_glDrawArrays"))
+            .put(JSONObject().put("name", "_alSourcePlay"))
+            .put(JSONObject().put("name", "_alDeleteSources"))
+            .put(JSONObject().put("name", "_malloc"))
+        val nodes = JSONArray().put(JSONObject().put("analysis", JSONObject()
+            .put("slices", JSONArray().put(JSONObject().put("imports", imports)))))
+        val registered = mutableListOf<String>()
+
+        val mapping = AndroidApiMapper.analyze(
+            nodes,
+            resolveCompatHandler = { symbol ->
+                registered += symbol
+                when (symbol) {
+                    "_alSourcePlay" -> "stubbed:radek_compat_stub_0"
+                    "_alDeleteSources" -> "stubbed:radek_compat_stub_1"
+                    else -> null
+                }
+            },
+        )
+
+        // The resolver is only consulted for symbols with no other mapping.
+        assertEquals(
+            "resolver must see exactly the otherwise-unmapped symbols (got $registered)",
+            listOf("_alDeleteSources", "_alSourcePlay"),
+            registered,
+        )
+        assertEquals("direct bionic candidates", 2, mapping.getInt("mappedNameCandidates"))
+        assertEquals("stub handler count", 2, mapping.getInt("compatStubHandlerCount"))
+        assertEquals("verified handler count", 0, mapping.getInt("compatVerifiedHandlerCount"))
+        assertEquals("handler coverage percent", 50, mapping.getInt("compatHandlerCoveragePercent"))
+        assertEquals(
+            "resolver status",
+            "DYNAMIC_REGISTRY_REGISTRATION",
+            mapping.getString("compatHandlerResolverStatus"),
+        )
+        assertEquals("unmapped after registration", 0, mapping.getInt("unmappedSymbolCount"))
+        // Stubs are triage/resolution coverage, never implementation coverage.
+        assertEquals(0, mapping.getInt("implementedTranslationCount"))
+        assertEquals(0, mapping.getInt("implementedTranslationCoveragePercent"))
+        assertEquals(0, mapping.getInt("generatedTranslationCount"))
+        val items = (0 until mapping.getJSONArray("symbols").length())
+            .map { mapping.getJSONArray("symbols").getJSONObject(it) }
+        val stub = items.single { it.getString("sourceSymbol") == "_alDeleteSources" }
+        assertEquals("stub classification", "COMPAT_STUB_HANDLER_REGISTERED", stub.getString("classification"))
+        assertEquals("stub target library", "libioscompat.so", stub.getString("targetLibrary"))
+        assertEquals("stub target symbol", "radek_compat_stub_1", stub.getString("targetSymbol"))
+        assertFalse("stub must not claim implementation", stub.getBoolean("implementationCodePresent"))
+        assertFalse("stub must not claim linking", stub.getBoolean("linkedOrRewritten"))
+        assertTrue("stub reason states non-implementation", stub.getString("reason").contains("does not implement"))
+        val direct = items.single { it.getString("sourceSymbol") == "_glDrawArrays" }
+        assertEquals("catalog symbol keeps direct classification", "BIONIC_SYMBOL_CANDIDATE", direct.getString("classification"))
+        assertEquals("catalog symbol target library", "libGLESv2.so", direct.getString("targetLibrary"))
+    }
+
+    @Test fun compatResolverExceptionsFallBackToUnmapped() {
+        val imports = JSONArray().put(JSONObject().put("name", "_someDarwinApi"))
+        val nodes = JSONArray().put(JSONObject().put("analysis", JSONObject()
+            .put("slices", JSONArray().put(JSONObject().put("imports", imports)))))
+        val mapping = AndroidApiMapper.analyze(
+            nodes,
+            resolveCompatHandler = { throw UnsatisfiedLinkError("native not loaded") },
+        )
+        assertEquals(1, mapping.getInt("unmappedSymbolCount"))
+        assertEquals(0, mapping.getInt("compatStubHandlerCount"))
+        assertEquals("NOT_RUN", mapping.getString("runtimeNdkResolverStatus"))
+    }
 }

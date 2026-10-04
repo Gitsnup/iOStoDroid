@@ -42,6 +42,55 @@ jobs:
         run: python3 tools/ci_run.py bash tools/test_sanitized.sh
       - name: Host tests and placeholder/complete-game separation regressions
         run: python3 tools/ci_run.py python3 -m unittest discover -v
+      - name: Convert committed sample IPA with the host CLI
+        run: |
+          set -e
+          test -f tests/data/sample-leaf.ipa
+          set +e
+          python3 -m radek convert tests/data/sample-leaf.ipa --authorized --output .local/sample-conversion
+          code=$?
+          set -e
+          echo "convert exit code: $code (3 = BLOCKED, the expected honest state)"
+          # Surface the report before asserting so any failure is diagnosable.
+          test "$code" -eq 3  # BLOCKED: honest state, complete-game conversion unsupported
+          test -f .local/sample-conversion/libtranslated-entry.so
+          test -f .local/sample-conversion/translated-entry.c
+          test -f .local/sample-conversion/ioscompat/libioscompat.cpp
+          test -f .local/sample-conversion/ioscompat/registry.json
+          python3 - <<'EOF'
+          import json, pathlib, sys
+          path = pathlib.Path(".local/sample-conversion/report.json")
+          if not path.is_file():
+              print("::error::sample conversion report.json was not written")
+              sys.exit(1)
+          report = json.load(path.open())
+          keys = ("state", "portProgress", "compatRegistry", "experimentalShell",
+                  "conversionProgress", "error")
+          diagnostic = {k: report.get(k) for k in keys}
+          print(json.dumps(diagnostic, indent=2))
+          checks = (
+              ("state is BLOCKED", report["state"] == "BLOCKED"),
+              ("translated-byte progress > 0", report["portProgress"]["percent"] > 0),
+              ("1 verified shim", report["compatRegistry"]["verifiedImplementations"] == 1),
+              ("2 stubbed handlers", report["compatRegistry"]["stubbedHandlers"] == 2),
+              ("0 unresolved imports", report["compatRegistry"]["unresolvedImports"] == 0),
+              ("experimental shell built and labelled",
+               report["experimentalShell"]["status"] == "BUILT_NOT_A_GAME"),
+              ("shell never claims game conversion",
+               report["experimentalShell"].get("completeGameConversion") is False),
+              ("complete-game progress stays NOT_BUILT",
+               report["conversionProgress"]["status"] == "NOT_BUILT"),
+          )
+          failed = [label for label, ok in checks if not ok]
+          if failed:
+              shell = report.get("experimentalShell") or {}
+              message = "; ".join(failed) + " | experimentalShell=" + json.dumps(shell)[:1500]
+              print("::error title=sample conversion check failed::" + message)
+              sys.exit(1)
+          print("sample conversion honest-status checks passed")
+          EOF
+      - name: Validate the labelled experimental shell APK
+        run: python3 -m radek validate-shell .local/sample-conversion/experimental-shell.apk
       - name: Android unit tests, lint, JNI native build and APK
         run: python3 tools/ci_run.py ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
       - name: Validate converter application APK
@@ -55,6 +104,20 @@ jobs:
           name: RadekiOSConventor-debug.apk
           path: artifacts/RadekiOSConventor-debug.apk
           if-no-files-found: error
+      - name: Collect sample conversion artifacts
+        if: always() && hashFiles('.local/sample-conversion/**') != ''
+        run: |
+          mkdir -p artifacts/sample-conversion
+          cp .local/sample-conversion/report.json artifacts/sample-conversion/ || true
+          cp .local/sample-conversion/experimental-shell.apk artifacts/sample-conversion/ || true
+          cp -r .local/sample-conversion/ioscompat artifacts/sample-conversion/ || true
+      - name: Upload sample conversion artifacts
+        if: always() && hashFiles('artifacts/sample-conversion/**') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: sample-conversion-artifacts
+          path: artifacts/sample-conversion/
+          if-no-files-found: warn
       - name: Upload test reports
         if: always() && hashFiles('app/build/reports/**', 'artifacts/validation.json') != ''
         uses: actions/upload-artifact@v6

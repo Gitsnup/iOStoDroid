@@ -5,7 +5,7 @@ import android.graphics.Color
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.GZIPInputStream
+import java.util.zip.GZIPInputStream
 import java.nio.charset.Charset
 import java.util.ArrayDeque
 import java.util.zip.DataFormatException

@@ -14,13 +14,14 @@ internal class PlaceholderApkBuilder(private val context: Context) {
     companion object {
         private const val MAX_TEMPLATE_ENTRY_BYTES = 32L * 1024 * 1024
         private const val MAX_ICON_BYTES = 16L * 1024 * 1024
+        private val DEX_NAME_REGEX = Regex("""classes[0-9]+\.dex""")
         private val PNG_SIGNATURE = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
     }
 
     private data class TemplateEntries(
         val manifest: ByteArray,
         val resources: ByteArray,
-        val dex: ByteArray,
+        val dexes: List<Pair<String, ByteArray>>,
         val fallbackIcon: ByteArray,
         val iconEntryPath: String,
     )
@@ -65,34 +66,35 @@ internal class PlaceholderApkBuilder(private val context: Context) {
         }
         unsignedFile.delete(); signedFile.delete(); finalPending.delete()
         try {
-            setProgress(3, "BUILDING", "Preparing an installable placeholder. iOS game code is not translated.")
+            setProgress(3, "BUILDING", "Preparing an installable preview shell. iOS game code is not translated.")
             val identity = PlaceholderSigningIdentity.loadOrCreate(
                 File(context.noBackupFilesDir, "placeholder-apk-signing-identity.bin"),
             )
             val certificateHash = sha256(identity.certificate.encoded)
             val packageName = "dev.radek.placeholder.p${sourceHash.take(24)}${certificateHash.take(8)}"
             require(packageName.length <= 127)
-            setProgress(12, "BUILDING", "Loading the Android placeholder shell and installation signer")
-            setProgress(18, "BUILDING", "Reading the bundled Android placeholder resources")
+            setProgress(12, "BUILDING", "Loading the Android preview shell and installation signer")
+            setProgress(18, "BUILDING", "Reading the bundled Android preview resources")
             val templateEntries = TemplateEntries(
                 manifest = readAsset("placeholder-template/AndroidManifest.xml", 2L * 1024 * 1024),
                 resources = readAsset("placeholder-template/resources.arsc", MAX_TEMPLATE_ENTRY_BYTES),
-                dex = readAsset("placeholder-template/classes.dex", MAX_TEMPLATE_ENTRY_BYTES),
+                dexes = readTemplateDexes("placeholder-template"),
                 fallbackIcon = readAsset("placeholder-template/fallback-icon.png", MAX_ICON_BYTES),
                 iconEntryPath = readAsset("placeholder-template/icon-entry-path.txt", 1024).toString(Charsets.UTF_8),
             )
             val manifest = templateEntries.manifest
             val resourceTable = templateEntries.resources
-            val dex = templateEntries.dex
             val templateFallbackIcon = templateEntries.fallbackIcon
-            require(validDex(dex) && templateFallbackIcon.size >= PNG_SIGNATURE.size &&
+            require(templateEntries.dexes.isNotEmpty() &&
+                templateEntries.dexes.all { (_, bytes) -> validDex(bytes) } &&
+                templateFallbackIcon.size >= PNG_SIGNATURE.size &&
                 templateFallbackIcon.copyOfRange(0, PNG_SIGNATURE.size).contentEquals(PNG_SIGNATURE) && validPng(templateFallbackIcon)) {
-                "placeholder template is missing a valid launcher DEX or fallback icon"
+                "preview template is missing a valid launcher DEX or fallback icon"
             }
             val iconEntryPath = SafeZip.validateName(templateEntries.iconEntryPath)
             require(iconEntryPath == templateEntries.iconEntryPath && iconEntryPath.startsWith("res/") &&
                 iconEntryPath.substringAfterLast('/') == "generated_placeholder_icon.png") {
-                "placeholder template icon resource path is invalid"
+                "preview template icon resource path is invalid"
             }
             val appName = sanitizeLabel(name)
             val customizedManifest = BinaryXmlManifest.customize(manifest, packageName, appName)
@@ -145,37 +147,37 @@ internal class PlaceholderApkBuilder(private val context: Context) {
                 .put("gameCodeIncluded", false)
                 .toString().toByteArray(Charsets.UTF_8)
 
-            setProgress(52, "BUILDING", "Packaging aligned Android resources and an honest non-playable placeholder screen")
+            setProgress(52, "BUILDING", "Packaging aligned Android resources and an honest non-playable preview screen")
+            val dexNames = templateEntries.dexes.map { it.first }.toSet()
             val expectedEntries = setOf(
                 "AndroidManifest.xml",
-                "classes.dex",
                 "resources.arsc",
                 iconEntryPath,
                 "assets/ipa-icon.png",
                 "assets/placeholder-info.json",
-            )
-            val alignedEntries = setOf(
-                "AndroidManifest.xml",
-                "classes.dex",
-                "resources.arsc",
-                iconEntryPath,
-                "assets/ipa-icon.png",
-            )
+            ) + dexNames
+            val alignedEntries = buildMap<String, Int> {
+                put("AndroidManifest.xml", AlignedApkZip.ALIGNMENT)
+                put("resources.arsc", AlignedApkZip.ALIGNMENT)
+                put(iconEntryPath, AlignedApkZip.ALIGNMENT)
+                put("assets/ipa-icon.png", AlignedApkZip.ALIGNMENT)
+                dexNames.forEach { put(it, AlignedApkZip.ALIGNMENT) }
+            }
             AlignedApkZip.write(
                 unsignedFile,
-                listOf(
-                    AlignedApkZip.Entry("AndroidManifest.xml", customizedManifest),
-                    AlignedApkZip.Entry("classes.dex", dex),
-                    AlignedApkZip.Entry("resources.arsc", customizedResources),
-                    AlignedApkZip.Entry(iconEntryPath, iconBytes),
-                    AlignedApkZip.Entry("assets/ipa-icon.png", iconBytes),
-                    AlignedApkZip.Entry("assets/placeholder-info.json", infoJson, compressed = true),
-                ),
+                listOf(AlignedApkZip.Entry("AndroidManifest.xml", customizedManifest)) +
+                    templateEntries.dexes.map { (dexName, dexBytes) -> AlignedApkZip.Entry(dexName, dexBytes) } +
+                    listOf(
+                        AlignedApkZip.Entry("resources.arsc", customizedResources),
+                        AlignedApkZip.Entry(iconEntryPath, iconBytes),
+                        AlignedApkZip.Entry("assets/ipa-icon.png", iconBytes),
+                        AlignedApkZip.Entry("assets/placeholder-info.json", infoJson, compressed = true),
+                    ),
             )
             require(unsignedFile.isFile && unsignedFile.length() > 0) { "could not assemble placeholder package" }
             AlignedApkZip.verify(unsignedFile, expectedEntries, alignedEntries)
 
-            setProgress(68, "SIGNING", "Signing the placeholder APK for Android installation")
+            setProgress(68, "SIGNING", "Signing the preview APK for Android installation")
             val signerConfig = ApkSigner.SignerConfig.Builder(
                 "RadekiOS placeholder",
                 identity.privateKey,
@@ -252,12 +254,12 @@ internal class PlaceholderApkBuilder(private val context: Context) {
             report.put("placeholderBuildProgress", JSONObject()
                 .put("percent", 100)
                 .put("status", "GENERATED")
-                .put("message", "Installable placeholder APK generated. It contains no translated game code and is not playable.")
+                .put("message", "Installable preview APK generated. It contains no translated game code and is not playable.")
                 .put("updatedAt", java.time.Instant.now().toString()))
             reportContext.save(dir, report)
             finalized = true
             backupFile.delete()
-            progress(100, "Installable placeholder ready; game code was not translated and the game will not run")
+            progress(100, "Installable preview ready; game code was not translated and the game will not run")
             return conversion
         } catch (error: Exception) {
             if (!finalized) {
@@ -320,6 +322,19 @@ internal class PlaceholderApkBuilder(private val context: Context) {
         }
         require(total > 0) { "bundled placeholder asset is empty: $name" }
         output.toByteArray()
+    }
+
+    /** Reads every launcher DEX listed by the embed task's manifest, classes.dex first. */
+    private fun readTemplateDexes(assetDirectory: String): List<Pair<String, ByteArray>> {
+        val names = readAsset("$assetDirectory/template-dex-entries.txt", 16 * 1024)
+            .toString(Charsets.UTF_8).lineSequence().map { it.trim() }.filter { it.isNotBlank() }
+            .map { it.substringBefore(':') }
+            .filter { it == "classes.dex" || DEX_NAME_REGEX.matches(it) }
+            .sortedWith(compareBy<String>({ it != "classes.dex" }, { it.length }, { it }))
+            .distinct()
+            .toList()
+        require(names.firstOrNull() == "classes.dex") { "$assetDirectory DEX manifest is missing classes.dex" }
+        return names.map { name -> name to readAsset("$assetDirectory/$name", MAX_TEMPLATE_ENTRY_BYTES) }
     }
 
     private fun sha256(file: File): String = file.inputStream().use { input ->

@@ -84,8 +84,11 @@ future conversion targeting; they do not imply that an APK was generated.
 ## Android API status
 
 The Android mapper reports same-named NDK symbols and semantic rewrite targets (for example,
-`UIView` → `android.view.View`) as **candidates only**. A name resolving at runtime does not prove
-Darwin/Android ABI compatibility or link the imported code. `libioscompat.so` contains host-tested
+`UIView` → `android.view.View`) as **candidates only**. Direct-candidate coverage is measured over all
+imports; device `dlsym` export verification is shown both as a fraction of those candidates and as a
+fraction of all imports (167/264 is 63%, not 65%). This is evidence for the current device/API only.
+A name resolving at runtime does not prove Darwin/Android ABI compatibility or link the imported code.
+`libioscompat.so` contains host-tested
 C/time/POSIX compatibility functions and a limited CoreFoundation C object/collection/run-loop
 subset, alongside the four Darwin time APIs (`_CFAbsoluteTimeGetCurrent`, `_CACurrentMediaTime`,
 `_mach_absolute_time`, and `_mach_timebase_info`). Host source generation selects implementations

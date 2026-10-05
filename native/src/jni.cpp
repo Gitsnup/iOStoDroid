@@ -18,7 +18,8 @@ constexpr const char *kPublicNdkLibraries[] = {
     "libandroid.so",    "libz.so",          "libEGL.so",        "libGLESv1_CM.so",
     "libGLESv2.so",     "libaaudio.so",     "libmediandk.so",   "libvulkan.so",
     "libOpenSLES.so",   "libOpenMAXAL.so",  "libjnigraphics.so", "libbinder_ndk.so",
-    "libamidi.so",      "libcamera2ndk.so", "libc++_shared.so",
+    "libamidi.so",      "libcamera2ndk.so", "libc++_shared.so",  "libnativewindow.so",
+    "libneuralnetworks.so", "libsync.so",
 };
 
 struct LibraryCache {

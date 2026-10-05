@@ -16,7 +16,8 @@ internal object AndroidApiMapper {
         "libc.so", "libm.so", "libdl.so", "liblog.so", "libandroid.so", "libz.so", "libEGL.so",
         "libGLESv1_CM.so", "libGLESv2.so", "libaaudio.so", "libmediandk.so", "libvulkan.so",
         "libOpenSLES.so", "libOpenMAXAL.so", "libjnigraphics.so", "libbinder_ndk.so", "libamidi.so",
-        "libcamera2ndk.so", "libc++_shared.so",
+        "libcamera2ndk.so", "libc++_shared.so", "libnativewindow.so", "libneuralnetworks.so",
+        "libsync.so",
     )
 
     private val bionicLibraries = mapOf(
@@ -419,13 +420,20 @@ internal object AndroidApiMapper {
         val total = symbols.size
         val compatHandlers = compatStubHandlers + compatVerifiedHandlers
         val classificationComplete = !truncated && result.length() == total
+        val runtimeVerifiedImportCoveragePercent = coveragePercent(runtimeVerifiedCandidates, total)
+        val runtimeVerifiedCandidateCoveragePercent = if (resolveNdkLibrary == null) 0
+            else coveragePercent(runtimeVerifiedCandidates, directCandidates)
         return JSONObject()
-            .put("schemaVersion", 6)
-            .put("measure", "Direct candidates are same-named Android NDK/system or shared C++ runtime symbols from the reviewed catalog or exact runtime export lookup. Compiler-rt/libunwind names are toolchain candidates, not a libgcc_s.so alias or completed link. Runtime compatibility-shim counts identify concrete exports in libioscompat.so, but none proves IPA callsite rewriting or game linking. Caller ABI compatibility, relocation and linking remain separate. Classification coverage is triage, not implementation coverage; no count represents playable Android code. Registered compat stub handlers are explicit unimplemented resolution targets; only verified handlers identify tested implementation bodies.")
+            .put("schemaVersion", 7)
+            .put("measure", "Direct NDK name candidates count same-named public NDK/system or shared C++ runtime exports found in the reviewed catalog or current-device lookup. Candidate coverage is divided by all distinct imports; exact runtime export verification is reported both against candidate names and against all imports, with separate denominators. A current-device dlsym hit proves only that the public-library export resolves on this device/API level, not that the iOS caller ABI, relocation, callsite rewrite, or game link is compatible. Compiler-rt/libunwind names are toolchain candidates, not a libgcc_s.so alias or completed link. Runtime compatibility-shim counts identify concrete exports in libioscompat.so, but none proves IPA callsite rewriting or game linking. Classification coverage is triage, not implementation coverage; no count represents playable Android code. Registered compat stub handlers are explicit unimplemented resolution targets; only verified handlers identify tested implementation bodies.")
             .put("runtimeNdkResolverStatus", if (resolveNdkLibrary == null) "NOT_RUN" else "CURRENT_DEVICE_DLSYM")
             .put("runtimeVerifiedAndroidApiLevel", if (resolveNdkLibrary == null) JSONObject.NULL else (runtimeApiLevel ?: JSONObject.NULL))
             .put("runtimeVerifiedNdkCandidates", runtimeVerifiedCandidates)
-            .put("runtimeVerifiedCoveragePercent", if (total == 0) 0 else runtimeVerifiedCandidates * 100 / total)
+            .put("runtimeVerifiedCandidateCount", directCandidates)
+            .put("runtimeVerifiedCandidateCoveragePercent", runtimeVerifiedCandidateCoveragePercent)
+            .put("runtimeVerifiedImportCoveragePercent", runtimeVerifiedImportCoveragePercent)
+            // Backwards-compatible field: its denominator is all distinct imports.
+            .put("runtimeVerifiedCoveragePercent", runtimeVerifiedImportCoveragePercent)
             .put("runtimeApiReplacementResolverStatus", if (resolveApiReplacement == null) "NOT_RUN" else "CURRENT_DEVICE_COMPAT_DLSYM")
             .put("implementedApiReplacementCount", implementedReplacementCandidates)
             .put("runtimeVerifiedApiReplacementCount", runtimeVerifiedApiReplacements)
@@ -434,11 +442,11 @@ internal object AndroidApiMapper {
             .put("classificationCoveragePercent", if (total == 0 || !classificationComplete) 0 else 100)
             .put("classificationStatus", if (classificationComplete) "COMPLETE" else "TRUNCATED")
             .put("mappedNameCandidates", directCandidates)
-            .put("candidateCoveragePercent", if (total == 0) 0 else directCandidates * 100 / total)
+            .put("candidateCoveragePercent", coveragePercent(directCandidates, total))
             .put("semanticRewriteCandidates", semanticCandidates)
-            .put("semanticRewriteCoveragePercent", if (total == 0) 0 else semanticCandidates * 100 / total)
+            .put("semanticRewriteCoveragePercent", coveragePercent(semanticCandidates, total))
             .put("compilerRuntimeCandidateCount", compilerRuntimeCandidates)
-            .put("compilerRuntimeCandidateCoveragePercent", if (total == 0) 0 else compilerRuntimeCandidates * 100 / total)
+            .put("compilerRuntimeCandidateCoveragePercent", coveragePercent(compilerRuntimeCandidates, total))
             .put("compatStubHandlerCount", compatStubHandlers)
             .put("compatVerifiedHandlerCount", compatVerifiedHandlers)
             .put("compatHandlerCoveragePercent", if (total == 0) 0 else compatHandlers * 100 / total)
@@ -449,6 +457,15 @@ internal object AndroidApiMapper {
             .put("generatedTranslationCount", 0)
             .put("truncated", truncated)
             .put("symbols", result)
+    }
+
+    /** Round a ratio to the nearest whole percent without overflowing Int. */
+    internal fun coveragePercent(numerator: Int, denominator: Int): Int {
+        if (denominator <= 0 || numerator <= 0) return 0
+        val denominatorLong = denominator.toLong()
+        return ((numerator.toLong() * 100L + denominatorLong / 2L) / denominatorLong)
+            .toInt()
+            .coerceIn(0, 100)
     }
 
     internal fun compiledCompatibilityProvider(source: String): String? =

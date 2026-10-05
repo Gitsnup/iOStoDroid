@@ -99,6 +99,43 @@ def dependency_graph(app: Path, main: Path, report: dict) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
+#: Mach-O load commands the entry-only backend understands. Anything else would
+#: require a loader semantic this pipeline does not implement, so it fails closed.
+#: Shared with `radek.ceiling` so the gate assessment and the prover can never
+#: disagree about which images are even loadable.
+ALLOWED_ENTRY_LOAD_COMMANDS = frozenset(
+    {
+        1,
+        0x19,
+        2,
+        0xB,
+        0x1B,
+        0x24,
+        0x25,
+        0x2F,
+        0x30,
+        0x32,
+        0x80000028,
+        0x1D,
+        0x26,
+        0x29,
+        0x21,
+        0x2C,
+        0xC,
+        0xD,
+        0x18,
+        0x20,
+        0x80000018,
+        0x8000001C,
+        0x8000001F,
+        0x80000023,
+        0x22,
+        0x80000022,
+        0x80000033,
+    }
+)
+
+
 def prove_leaf(
     executable: Path,
     report: dict,
@@ -159,35 +196,7 @@ def prove_leaf(
             # in the report but are not copied into this entry-only artifact. A
             # referenced pointer/call/address would have to pass the instruction
             # and entry-section checks below, where it is deliberately rejected.
-            allowed_commands = {
-                1,
-                0x19,
-                2,
-                0xB,
-                0x1B,
-                0x24,
-                0x25,
-                0x2F,
-                0x30,
-                0x32,
-                0x80000028,
-                0x1D,
-                0x26,
-                0x29,
-                0x21,
-                0x2C,
-                0xC,
-                0xD,
-                0x18,
-                0x20,
-                0x80000018,
-                0x8000001C,
-                0x8000001F,
-                0x80000023,
-                0x22,
-                0x80000022,
-                0x80000033,
-            }
+            allowed_commands = ALLOWED_ENTRY_LOAD_COMMANDS
             if any(lc["command"] not in allowed_commands for lc in sl["loadCommands"]):
                 raise Unsupported("load command requires an unsupported loader semantic")
             if "entryOffset" not in sl:

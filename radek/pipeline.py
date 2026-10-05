@@ -19,6 +19,12 @@ from .c_backend import emit as emit_c
 from .compat_layer import generate as generate_compat_registry
 from .elf import inspect as inspect_elf
 from .elf_writer import build_shared_object
+from .ceiling import (
+    assess as assess_ceiling,
+    attach_prover as attach_prover_to_ceiling,
+    finalize_apk as finalize_ceiling_apk,
+    markdown as ceiling_markdown,
+)
 from .icons import extract as extract_icon, launcher as launcher_icon
 from .ir import Unsupported
 from .llvm_ir import emit as emit_llvm_ir, verify as verify_llvm_ir
@@ -406,6 +412,25 @@ class Pipeline:
                     f'implementation(s), {self.report["compatRegistry"].get("stubbedHandlers", 0)} '
                     "explicit unimplemented stub handler(s) generated",
                 )
+                # How far can this input actually be converted? The ledger walks the
+                # same gates as the fail-closed prover and names the first one that
+                # cannot pass, so a BLOCKED report says where it stopped and not only
+                # that it stopped. It never counts triage or stubs as progress.
+                ceiling = assess_ceiling(
+                    mach,
+                    graph,
+                    reconstruction,
+                    target_abi,
+                    executable_data=executable.read_bytes(),
+                )
+                self.report["conversionCeiling"] = ceiling
+                with (self.output / "reconstruction.md").open("a", encoding="utf-8") as handle:
+                    handle.write("\n" + ceiling_markdown(ceiling))
+                self.log(
+                    "ANALYZING",
+                    f'Conversion ceiling: {ceiling["gatesPassed"]}/{ceiling["gatesTotal"]} gate(s) passed'
+                    + (f', halted at {ceiling["ceilingGate"]}' if ceiling["ceilingGate"] else ""),
+                )
                 try:
                     selected, program = prove_leaf(executable, mach, graph, reconstruction, target_abi)
                 except Unsupported as exc:
@@ -427,6 +452,15 @@ class Pipeline:
                             f'{summary.get("usedApis", 0)} used, {summary.get("nativeApis", 0)} same-name native '
                             f'candidates, {summary.get("blockedApis", 0)} without an identified Android target '
                             f'(see reconstruction.md)'
+                        )
+                    self.report["conversionCeiling"] = attach_prover_to_ceiling(
+                        self.report.get("conversionCeiling"), str(exc)
+                    )
+                    if ceiling_gate := (self.report.get("conversionCeiling") or {}).get("ceilingGate"):
+                        self.report["blockers"].append(
+                            f"Conversion ceiling: {ceiling_gate} — "
+                            f'{(self.report.get("conversionCeiling") or {}).get("ceilingReason")} '
+                            "(see the Conversion ceiling section of reconstruction.md)"
                         )
                     self.transition("BLOCKED", str(exc))
                     return self.report
@@ -575,7 +609,20 @@ class Pipeline:
                         work, ipa, program, selected, assessment
                     )
                     if complete is not None:
+                        self.report["conversionCeiling"] = finalize_ceiling_apk(
+                            self.report.get("conversionCeiling"),
+                            "BUILT",
+                            "a signed complete-game-v1 APK was assembled and passed its static validation",
+                        )
                         return self.report
+                    self.report["conversionCeiling"] = finalize_ceiling_apk(
+                        self.report.get("conversionCeiling"),
+                        "MISSING_TOOLCHAIN",
+                        (self.report.get("completeConversion") or {}).get(
+                            "message",
+                            "the bounded subset passed, but no Android SDK build-tools were available to build the APK",
+                        ),
+                    )
                 self.report["conversionProgress"] = {
                     "percent": 0,
                     "stage": "NOT_BUILT",

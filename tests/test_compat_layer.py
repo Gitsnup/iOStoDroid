@@ -75,6 +75,65 @@ class CompatLayerTests(unittest.TestCase):
             self.assertFalse(by_name["_glDrawArrays"]["implementationPresent"])
             self._assert_source_compiles_and_resolves(output / "ioscompat")
 
+    def test_every_observed_import_is_classified_exactly_once(self):
+        imports = [
+            "_CFAbsoluteTimeGetCurrent",
+            "_mach_absolute_time",
+            "_glDrawArrays",
+            "_OBJC_CLASS_$_UIView",
+            "_alcOpenDevice",
+            "_NSLog",
+            "_dispatch_async",
+            "_strlen",
+            "_notify_post",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            report = generate(reconstruction(imports), output)
+            registry = json.loads((output / "ioscompat" / "registry.json").read_text())
+            entries = registry["entries"]
+            observed = collect_imports(reconstruction(imports))
+
+            # Resolution is total: every observed import has exactly one target.
+            names = [entry["sourceSymbol"] for entry in entries]
+            self.assertEqual(sorted(names), sorted(observed))
+            self.assertEqual(len(names), len(set(names)))
+            for entry in entries:
+                self.assertIn(entry["classification"], ("verified", "stubbed-unimplemented"))
+                self.assertEqual(
+                    entry["implementationPresent"], entry["classification"] == "verified"
+                )
+
+            # The accounting balances: implementations + stubs + unresolved == observed.
+            self.assertEqual(
+                registry["verifiedImplementations"]
+                + registry["stubbedHandlers"]
+                + registry["unresolvedImports"],
+                registry["totalObservedImports"],
+            )
+            self.assertEqual(report["handlerResolutionCoveragePercent"], 100)
+
+            # Total resolution coverage is still not implementation coverage: the
+            # host-tested implementations are a minority of the registry and no
+            # stage of this report claims an APK or a linked game.
+            expected_verified = sum(1 for name in observed if classify(name) == "verified")
+            self.assertEqual(report["verifiedImplementations"], expected_verified)
+            self.assertGreater(expected_verified, 0)
+            resolution = report["symbolResolution"]
+            self.assertEqual(resolution["status"], "COMPLETE")
+            self.assertEqual(resolution["verifiedImplementations"], expected_verified)
+            self.assertEqual(
+                resolution["verifiedImplementations"]
+                + resolution["stubbedUnimplemented"]
+                + resolution["unresolved"],
+                resolution["total"],
+            )
+            self.assertEqual(resolution["linkedIntoGame"], 0)
+            self.assertTrue(resolution["resolutionIsNotImplementation"])
+            self.assertLess(report["verifiedImplementations"], registry["totalObservedImports"])
+            self.assertFalse(report["completeGameConversion"])
+            self.assertIn("resolution target", report["message"])
+
     @staticmethod
     def _compile(source_dir: Path, directory: Path) -> Path:
         library = Path(directory) / "libioscompat.so"

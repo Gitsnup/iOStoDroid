@@ -63,6 +63,13 @@
   workspace cleanup. The bounded proven subset can link a translated entry into a signed, statically
   validated `complete-game-v1` APK; inputs outside it remain blocked and may receive only the
   separately labelled experimental shell.
+- `radek/ceiling.py`: the conversion-ceiling ledger. It walks the same gates, in the same order, as
+  the fail-closed prover (`radek.analysis.prove_leaf`) and records one `PASS`, `BLOCKED` or
+  `NOT_REACHED` entry per stage, so `report.json` names the first gate a real game cannot pass
+  (`conversionCeiling.ceilingGate`, with the prover's own statement echoed as evidence) instead of
+  only reporting that it did not convert. Later gates are never estimated, and the ledger explicitly
+  carries `countsAsConversionProgress: false`, so triage, stub handlers and the isolated entry-leaf
+  artifact can never be read as progress.
 - `tests/`, `app/src/test/`, `native/tests/`: synthetic fixtures, negative/security tests, native
   runtime tests and Robolectric importer tests. `tests/data/hello-test.ipa` exercises the smallest
   complete conversion, while `tests/data/simple.ipa` exercises a much longer supported routine;

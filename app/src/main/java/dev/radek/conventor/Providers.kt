@@ -191,13 +191,15 @@ object Providers {
 
     private fun compilerRuntimeCandidate(symbol: String): String? {
         val name = symbol.trimStart('_')
-        if (name.startsWith("Unwind_") || name.startsWith("gcc_personality_v0") ||
-            name.startsWith("gxx_personality_v0")) {
+        val unwind = listOf("Unwind_", "gcc_personality_v0", "gxx_personality_v0", "aeabi_unwind_", "gnu_unwind_")
+        if (unwind.any { prefix -> name.startsWith(prefix) }) {
             return "NDK libunwind/libc++abi (unwind ABI candidate; not linked)"
         }
         val builtins = listOf(
-            "aeabi_", "divti3", "udivti3", "modti3", "umodti3", "multi3", "muloti4",
-            "ashlti3", "ashrti3", "lshrti3", "addvti3", "subvti3", "absvti2", "fix", "float",
+            "aeabi_", "divdi3", "udivdi3", "moddi3", "umoddi3", "muldi3", "ashldi3", "ashrdi3",
+            "lshrdi3", "udivmoddi4", "divti3", "udivti3", "modti3", "umodti3", "multi3", "muloti4",
+            "ashlti3", "ashrti3", "lshrti3", "addvti3", "subvti3", "absvti2", "cmpdi2", "ucmpdi2",
+            "clear_cache", "register_frame", "deregister_frame", "fix", "float",
         )
         return if (builtins.any { prefix -> name.startsWith(prefix) }) {
             "NDK compiler-rt builtins (toolchain link candidate; not linked)"

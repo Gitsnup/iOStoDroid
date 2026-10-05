@@ -308,17 +308,21 @@ class MainActivity : Activity() {
             report.optJSONObject("apiMapping")?.let { mapping ->
                 val mapped = mapping.optInt("mappedNameCandidates", 0)
                 val total = mapping.optInt("distinctImportSymbols", 0)
-                val coverage = mapping.optInt("candidateCoveragePercent", 0)
+                val coverage = AndroidApiMapper.coveragePercent(mapped, total)
                 val semantic = mapping.optInt("semanticRewriteCandidates", 0)
                 val compilerRuntime = mapping.optInt("compilerRuntimeCandidateCount", 0)
                 val classified = mapping.optInt("classifiedImportSymbols", 0)
                 val triage = mapping.optInt("classificationCoveragePercent", 0)
                 val unmapped = mapping.optInt("unmappedSymbolCount", 0)
                 val verified = mapping.optInt("runtimeVerifiedNdkCandidates", 0)
-                val verifiedPercent = mapping.optInt("runtimeVerifiedCoveragePercent", 0)
+                val verifiedPercent = AndroidApiMapper.coveragePercent(verified, total)
+                val verifiedCandidateCount = mapping.optInt("runtimeVerifiedCandidateCount", mapped)
+                val verifiedCandidatePercent = AndroidApiMapper.coveragePercent(verified, verifiedCandidateCount)
                 val runtimeApi = mapping.optInt("runtimeVerifiedAndroidApiLevel", 0)
                 val runtimeStatus = mapping.optString("runtimeNdkResolverStatus", "NOT_RUN")
-                val runtimeSummary = if (runtimeStatus == "CURRENT_DEVICE_DLSYM") "API $runtimeApi exports verified: $verifiedPercent% ($verified/$total)" else "device export check not run"
+                val runtimeSummary = if (runtimeStatus == "CURRENT_DEVICE_DLSYM")
+                    "Android API $runtimeApi exact exports: $verified/$verifiedCandidateCount NDK candidates ($verifiedCandidatePercent%); $verified/$total imports ($verifiedPercent%)"
+                else "device export check not run"
                 val compatStatus = mapping.optString("runtimeApiReplacementResolverStatus", "NOT_RUN")
                 val compatCount = mapping.optInt("runtimeVerifiedApiReplacementCount", 0)
                 val runtimeLinked = report.optJSONObject("apiTranslation")?.optBoolean("runtimeLibraryLinked", false) == true
@@ -330,7 +334,7 @@ class MainActivity : Activity() {
                 val compilerSummary = if (compilerRuntime > 0) " · compiler-rt/libunwind candidates: $compilerRuntime (not linked)" else ""
                 val generated = report.optJSONObject("hostConversion")?.optInt("generatedApiReplacements", 0) ?: 0
                 val stubs = mapping.optInt("compatStubHandlerCount", 0)
-                val stubSummary = if (stubs > 0) "$stubs compat stub handler(s) registered (unimplemented) · " else ""
+                val stubSummary = if (stubs > 0) "$stubs compat stub handlers (unimplemented; not API bodies) · " else ""
                 val summary = if (total == 0) "API symbol triage: N/A (no imported symbols) · $compatSummary$compilerSummary · generated replacements: $generated"
                     else "Symbol triage: $triage% ($classified/$total) · direct NDK candidates: $coverage% ($mapped/$total) · $runtimeSummary · $compatSummary$compilerSummary · $stubSummary$semantic semantic · $unmapped unmapped · generated replacements: $generated"
                 text(summary, 11f, muted, parent = item)
@@ -478,7 +482,7 @@ class MainActivity : Activity() {
         report.optJSONObject("apiMapping")?.let { mapping ->
             val mapped = mapping.optInt("mappedNameCandidates", 0)
             val total = mapping.optInt("distinctImportSymbols", 0)
-            val coverage = mapping.optInt("candidateCoveragePercent", 0)
+            val coverage = AndroidApiMapper.coveragePercent(mapped, total)
             val mappingCard = card()
             val semantic = mapping.optInt("semanticRewriteCandidates", 0)
             val compilerRuntime = mapping.optInt("compilerRuntimeCandidateCount", 0)
@@ -486,10 +490,14 @@ class MainActivity : Activity() {
             val triage = mapping.optInt("classificationCoveragePercent", 0)
             val unmapped = mapping.optInt("unmappedSymbolCount", 0)
             val verified = mapping.optInt("runtimeVerifiedNdkCandidates", 0)
-            val verifiedPercent = mapping.optInt("runtimeVerifiedCoveragePercent", 0)
+            val verifiedPercent = AndroidApiMapper.coveragePercent(verified, total)
+            val verifiedCandidateCount = mapping.optInt("runtimeVerifiedCandidateCount", mapped)
+            val verifiedCandidatePercent = AndroidApiMapper.coveragePercent(verified, verifiedCandidateCount)
             val runtimeApi = mapping.optInt("runtimeVerifiedAndroidApiLevel", 0)
             val runtimeStatus = mapping.optString("runtimeNdkResolverStatus", "NOT_RUN")
-            val runtimeSummary = if (runtimeStatus == "CURRENT_DEVICE_DLSYM") " · Android API $runtimeApi exports verified: $verifiedPercent% ($verified/$total)" else ""
+            val runtimeSummary = if (runtimeStatus == "CURRENT_DEVICE_DLSYM")
+                " · Android API $runtimeApi exact exports: $verified/$verifiedCandidateCount NDK candidates ($verifiedCandidatePercent%); $verified/$total imports ($verifiedPercent%)"
+            else ""
             val compatStatus = mapping.optString("runtimeApiReplacementResolverStatus", "NOT_RUN")
             val implemented = mapping.optInt("runtimeVerifiedApiReplacementCount", 0)
             val runtimeLinked = report.optJSONObject("apiTranslation")?.optBoolean("runtimeLibraryLinked", false) == true
@@ -502,7 +510,7 @@ class MainActivity : Activity() {
             val stubs = mapping.optInt("compatStubHandlerCount", 0)
             val verifiedHandlers = mapping.optInt("compatVerifiedHandlerCount", 0)
             val stubSummary = buildString {
-                if (stubs > 0) append(" · compat stub handlers (unimplemented): $stubs")
+                if (stubs > 0) append(" · compat stub handlers (unimplemented; not API bodies): $stubs")
                 if (verifiedHandlers > 0) append(" · compat verified handlers: $verifiedHandlers")
             }
             val summary = if (total == 0) "Android API candidates: N/A (no imports)$compatSummary$compilerSummary"

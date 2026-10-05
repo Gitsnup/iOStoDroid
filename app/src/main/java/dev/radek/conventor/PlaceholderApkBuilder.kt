@@ -123,20 +123,36 @@ internal class PlaceholderApkBuilder(private val context: Context) {
             val runtimeVerifiedNdkCandidates = apiMapping.optInt("runtimeVerifiedNdkCandidates", 0).coerceAtLeast(0)
             val runtimeVerifiedAndroidApiLevel = apiMapping.optInt("runtimeVerifiedAndroidApiLevel", 0).coerceAtLeast(0)
             val directApiCandidates = apiMapping.optInt("mappedNameCandidates", 0).coerceAtLeast(0)
+            val candidateCoveragePercent = AndroidApiMapper.coveragePercent(directApiCandidates, distinctImportSymbols)
+            val verifiedCandidateCoveragePercent =
+                AndroidApiMapper.coveragePercent(runtimeVerifiedNdkCandidates, directApiCandidates)
+            val verifiedImportCoveragePercent =
+                AndroidApiMapper.coveragePercent(runtimeVerifiedNdkCandidates, distinctImportSymbols)
             val semanticApiCandidates = apiMapping.optInt("semanticRewriteCandidates", 0).coerceAtLeast(0)
             val unmappedApiSymbols = apiMapping.optInt("unmappedSymbolCount", 0).coerceAtLeast(0)
-            val apiLevelNote = if (runtimeVerifiedAndroidApiLevel > 0) " on Android API $runtimeVerifiedAndroidApiLevel" else ""
-            val analysisSummary = "Static analysis only: $classifiedImportSymbols/$distinctImportSymbols symbols triaged ($classificationCoveragePercent%); $directApiCandidates direct-name candidates ($runtimeVerifiedNdkCandidates runtime exports resolved$apiLevelNote), $semanticApiCandidates semantic targets, $unmappedApiSymbols unmapped. No game code or API implementation was translated."
+            val compatStubHandlers = apiMapping.optInt("compatStubHandlerCount", 0).coerceAtLeast(0)
+            val apiLevelNote = if (runtimeVerifiedAndroidApiLevel > 0) {
+                "Android API $runtimeVerifiedAndroidApiLevel exports: $runtimeVerifiedNdkCandidates/$directApiCandidates NDK candidates " +
+                    "($verifiedCandidateCoveragePercent% verified), $runtimeVerifiedNdkCandidates/$distinctImportSymbols imports " +
+                    "($verifiedImportCoveragePercent% overall)"
+            } else "device export check not run"
+            val analysisSummary = "Static analysis only: $classifiedImportSymbols/$distinctImportSymbols symbols triaged ($classificationCoveragePercent%); " +
+                "$candidateCoveragePercent% ($directApiCandidates/$distinctImportSymbols) same-name NDK candidates; $apiLevelNote; $semanticApiCandidates semantic targets; " +
+                "$compatStubHandlers compat stubs (unimplemented); $unmappedApiSymbols unmapped. No game code or API implementation was translated."
             // Static-analysis details stay machine-readable in the artifact but
             // are deliberately not displayed by the generated launcher.
-            val analysisStats = "Static analysis only: $classifiedImportSymbols/$distinctImportSymbols symbols triaged ($classificationCoveragePercent%); $directApiCandidates direct-name candidates ($runtimeVerifiedNdkCandidates runtime exports resolved$apiLevelNote), $semanticApiCandidates semantic targets, $unmappedApiSymbols unmapped."
+            val analysisStats = analysisSummary
             val analysisInfo = JSONObject()
                 .put("distinctImportSymbols", distinctImportSymbols)
                 .put("classifiedImportSymbols", classifiedImportSymbols)
                 .put("classificationCoveragePercent", classificationCoveragePercent)
                 .put("runtimeVerifiedNdkCandidates", runtimeVerifiedNdkCandidates)
+                .put("runtimeVerifiedCandidateCoveragePercent", verifiedCandidateCoveragePercent)
+                .put("runtimeVerifiedImportCoveragePercent", verifiedImportCoveragePercent)
                 .put("runtimeVerifiedAndroidApiLevel", runtimeVerifiedAndroidApiLevel)
+                .put("candidateCoveragePercent", candidateCoveragePercent)
                 .put("directApiCandidates", directApiCandidates)
+                .put("compatStubHandlers", compatStubHandlers)
                 .put("semanticApiCandidates", semanticApiCandidates)
                 .put("unmappedApiSymbols", unmappedApiSymbols)
                 .put("translatedGameFunctions", 0)

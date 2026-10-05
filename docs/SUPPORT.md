@@ -22,6 +22,7 @@ identified, explicitly non-playable preview shell.
 | Compatibility registry source | PARTIAL | `ioscompat/libioscompat.cpp` gives every observed Darwin import a resolution target: host-tested time/C/POSIX/limited CoreFoundation implementations or explicitly unimplemented stub handlers. Stub counts are resolution coverage, never implementation coverage |
 | `libgcc_s.1.dylib` mapping | CANDIDATE ONLY | Compiler helpers are triaged to NDK compiler-rt builtins; unwind/personality symbols to NDK libunwind/libc++abi candidates. Android has no drop-in `libgcc_s.so` alias, and no toolchain link or ABI validation is performed |
 | Dynamic stub hook registration | SUPPORTED (registration only) | `libioscompat.so` registry registers unmapped symbols at runtime and resolves them to counted stub trampolines. Registration is not implementation and rewrites no IPA callsites |
+| Public NDK export lookup | PARTIAL (current-device check) | Uses exact `dlopen`/`dlsym`/`dladdr` checks against the reviewed public NDK library set, including native-window, neural-networks and sync libraries. Counts verify exports visible on the current device only; they do not prove ABI compatibility or link the IPA |
 | Experimental shell APK | SUPPORTED (explicitly non-game) | `convert` builds `experimental-shell.apk` (aapt2/javac/d8/zipalign/apksigner) around the isolated artifacts under `experimental-shell-v1`; launcher and metadata disclose that no game code is translated; it cannot satisfy `complete-game-v1` |
 | FAT ARM64 + ARM32 selection | SUPPORTED (selection only) | Automatic selection prefers ARM64. Explicit 32-bit target is accepted only when an ARM32 slice is present |
 | Supported ARM32-only target | SUPPORTED (selection only) | Selects `armeabi-v7a`; no complete converter currently emits an APK |
@@ -44,16 +45,26 @@ identified, explicitly non-playable preview shell.
 The app may report 100% **symbol classification/triage** when every observed import has been
 categorized as a name candidate, semantic-rewrite candidate, implemented-shim export, compat stub
 handler, or unmapped. That is deliberately separate from direct NDK candidates and actual
-linked-implementation coverage. The compat stub category means a symbol now resolves to an
-explicitly unimplemented handler that records invocations; it is a resolution target for future
-work, not an API implementation, and its count is never added to verified or generated-translation
-numbers.
+linked-implementation coverage. Direct NDK name-candidate coverage is divided by all distinct
+imports; it cannot reach 100% when imports require Apple-only frameworks or Objective-C APIs.
+Current-device `dlopen`/`dlsym` results are reported with two explicit denominators: exact NDK exports
+verified among the NDK name candidates, and verified exports among all imports. For example,
+167/264 imports is 63%, not 65%; if 172 names were candidates, 167/172 would separately be 97% of
+those candidates verified. Android API level in this report is the current device's runtime API,
+not a guarantee for all API 36 devices or lower API levels.
+
+The compat stub category means a symbol now resolves to an explicitly unimplemented handler that
+records invocations; it is a resolution target for future work, not an API implementation, and its
+count is never added to verified or generated-translation numbers. A stub cannot safely substitute
+for an arbitrary function because the missing API's signature and semantics matter. Such symbols
+remain conversion blockers until a tested, ABI-compatible implementation or rewrite exists.
+
 The tested C/time/POSIX and limited CoreFoundation shims have host behavior tests; on Android, the
 mapper uses `dlopen`/`dlsym`/`dladdr` to verify compiled exports in `libioscompat.so`. This only
 proves a compatibility function is available in the analyzer process: no IPA callsite is rewritten
-or linked, and full framework behavior remains unimplemented. A name resolving at runtime does not prove caller ABI compatibility,
-minimum-API availability on other devices, relocation, or game integration. An `UNMAPPED`
-classification is a useful explicit blocker, not a conversion result.
+or linked, and full framework behavior remains unimplemented. A name resolving at runtime does not
+prove caller ABI compatibility, minimum-API availability on other devices, relocation, or game
+integration. An `UNMAPPED` classification is a useful explicit blocker, not a conversion result.
 
 - Some OpenGL ES 1.x/2.x/3.x C entry points have Android equivalents, but each reachable symbol,
   GLES version, context/lifecycle path, and ABI binding still has to be proven and linked. A symbol

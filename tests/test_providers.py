@@ -14,6 +14,8 @@ from radek import providers
 
 ROOT = Path(__file__).resolve().parent.parent
 KOTLIN = ROOT / "app/src/main/java/dev/radek/conventor/Providers.kt"
+API_MAPPER_KOTLIN = ROOT / "app/src/main/java/dev/radek/conventor/AndroidApiMapper.kt"
+NATIVE_JNI = ROOT / "native/src/jni.cpp"
 
 # The dependency lines reported as BLOCKED by the on-device UI.
 REPORTED = (
@@ -163,6 +165,16 @@ class ProviderTests(unittest.TestCase):
                 self.assertEqual(provider.android, android)
                 self.assertEqual("KIND_" + {"native-library": "LIBRARY", "platform-api": "PLATFORM", "runtime": "RUNTIME"}[provider.kind], kind)
                 self.assertEqual("STATUS_" + provider.status.upper(), status)
+
+    def test_runtime_ndk_export_whitelists_match_between_kotlin_and_jni(self):
+        kotlin = API_MAPPER_KOTLIN.read_text()
+        cpp = NATIVE_JNI.read_text()
+        kotlin_block = kotlin.split("private val ndkRuntimeLibraries = setOf(", 1)[1].split(")", 1)[0]
+        cpp_block = cpp.split("kPublicNdkLibraries[] = {", 1)[1].split("};", 1)[0]
+        kotlin_libraries = set(re.findall(r'"(lib[^"]+\.so)"', kotlin_block))
+        cpp_libraries = set(re.findall(r'"(lib[^"]+\.so)"', cpp_block))
+        self.assertEqual(kotlin_libraries, cpp_libraries)
+        self.assertTrue({"libnativewindow.so", "libneuralnetworks.so", "libsync.so"}.issubset(kotlin_libraries))
 
     def test_analysis_edges_carry_provider_fields(self):
         edge = providers.classify("/System/Library/Frameworks/UIKit.framework/UIKit")

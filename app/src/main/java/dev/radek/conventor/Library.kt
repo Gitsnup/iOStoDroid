@@ -403,6 +403,12 @@ class Library(private val context: Context) {
             report.put("machO", JSONObject().put("slices", compactSlices(macho.optJSONArray("slices")))
                 .put("sliceCount", macho.optJSONArray("slices")?.length() ?: 0))
             val verifiedApiReplacements = apiMapping.optInt("runtimeVerifiedApiReplacementCount", 0)
+            val importSymbolCount = apiMapping.optInt("distinctImportSymbols", 0)
+            val ndkNameCandidateCount = apiMapping.optInt("mappedNameCandidates", 0)
+            val verifiedNdkExportCount = apiMapping.optInt("runtimeVerifiedNdkCandidates", 0)
+            val verifiedNdkCandidatePercent = apiMapping.optInt("runtimeVerifiedCandidateCoveragePercent", 0)
+            val verifiedNdkImportPercent = apiMapping.optInt("runtimeVerifiedImportCoveragePercent", 0)
+            val unimplementedCompatStubCount = apiMapping.optInt("compatStubHandlerCount", 0)
             report.put("apiTranslation", JSONObject()
                 .put("status", if (verifiedApiReplacements > 0) "RUNTIME_IMPLEMENTATION_AVAILABLE_NOT_LINKED" else "NO_API_REPLACEMENT_LINKED")
                 .put("attempted", false)
@@ -431,12 +437,15 @@ class Library(private val context: Context) {
                     .put("basis", "On-device importer analyzed the IPA but emitted no Android executable code; this is actual output progress, not a stability prediction."))
             }
             log(ConversionState.ANALYZING,
-                "Inventoried ${apiMapping.getInt("distinctImportSymbols")} API symbols; ${apiMapping.getInt("mappedNameCandidates")} direct NDK names (${apiMapping.getInt("runtimeVerifiedNdkCandidates")} runtime exports resolved), ${apiMapping.getInt("runtimeVerifiedApiReplacementCount")} concrete compatibility exports verified but not linked, and ${apiMapping.getInt("semanticRewriteCandidates")} semantic rewrite candidates.", 50)
+                "Inventoried $importSymbolCount API symbols; $ndkNameCandidateCount direct NDK name candidates, $verifiedNdkExportCount/$ndkNameCandidateCount candidates ($verifiedNdkCandidatePercent%) verified by device export lookup and $verifiedNdkExportCount/$importSymbolCount imports ($verifiedNdkImportPercent%) matched. Also found $verifiedApiReplacements concrete compatibility exports (not linked), $unimplementedCompatStubCount unimplemented compat stubs, and ${apiMapping.getInt("semanticRewriteCandidates")} semantic rewrite candidates.", 50)
+            val apiBlocker = if (importSymbolCount > 0) {
+                " API triage found $importSymbolCount imported symbols; $unimplementedCompatStubCount have only explicitly unimplemented compat handlers. Export hits and stubs do not rewrite or link those callsites."
+            } else ""
             val reason = when {
                 encrypted -> "Protected/encrypted Mach-O. Conversion prohibited; no DRM or FairPlay bypass."
                 !hasCandidate -> "No supported ARM64/ARMv7/ARMv6 slice. ARM64e PAC reconstruction is blocked."
-                analysisErrors.length() > 0 -> "This bundle links embedded frameworks or libraries; ${analysisErrors.length()} image(s) could not be decoded on-device, and frameworks, imports or metadata need unsupported compatibility/linker implementations. The analysis itself completed."
-                incompatible -> "Frameworks, imports, incomplete dyld bindings, metadata or embedded code require unsupported compatibility/linker implementations. The analysis itself completed."
+                analysisErrors.length() > 0 -> "This bundle links embedded frameworks or libraries; ${analysisErrors.length()} image(s) could not be decoded on-device, and frameworks, imports or metadata need unsupported compatibility/linker implementations.$apiBlocker The analysis itself completed."
+                incompatible -> "Frameworks, imports, incomplete dyld bindings, metadata or embedded code require unsupported compatibility/linker implementations.$apiBlocker The analysis itself completed."
                 deviceProven -> "The executable is fully covered by the proven closed-integer subset. Force convert builds a real signed APK whose translated entry routine runs through JNI; general games remain unsupported."
                 else -> "Analysis completed, but complete iOS-to-Android game-code translation, API replacement, and packaging are not implemented for this input. Force can build a separate branded preview shell."
             }

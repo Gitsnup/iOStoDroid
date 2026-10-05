@@ -117,6 +117,68 @@ class AndroidApiMapperTest {
         assertFalse(resolved.getBoolean("linkedOrRewritten"))
     }
 
+    @Test fun runtimeExportCoverageUsesCandidateAndAllImportDenominatorsSeparately() {
+        assertEquals("167/264 must round to 63%, not 65%", 63, AndroidApiMapper.coveragePercent(167, 264))
+        assertEquals("172/264 name candidates round to 65%", 65, AndroidApiMapper.coveragePercent(172, 264))
+        assertEquals(0, AndroidApiMapper.coveragePercent(167, 0))
+        val imports = JSONArray()
+        // Five catalog-only candidates model symbols that look like direct NDK
+        // names but are not exported by this device/API level.
+        listOf("_malloc", "_free", "_memcpy", "_sin", "_glDrawArrays")
+            .forEach { imports.put(JSONObject().put("name", it)) }
+        // 167 exact public-library hits plus 92 Apple-only names produce the
+        // reported-size case: 172 name candidates among 264 imports, with 167
+        // current-device exports actually verified.
+        repeat(167) { imports.put(JSONObject().put("name", "_runtime_export_$it")) }
+        repeat(92) { imports.put(JSONObject().put("name", "_apple_only_$it")) }
+        assertEquals(264, imports.length())
+        val nodes = JSONArray().put(JSONObject().put("analysis", JSONObject()
+            .put("slices", JSONArray().put(JSONObject().put("imports", imports)))))
+
+        val mapping = AndroidApiMapper.analyze(
+            nodes,
+            resolveNdkLibrary = { symbol ->
+                if (symbol.startsWith("runtime_export_")) "libnativewindow.so" else null
+            },
+            runtimeApiLevel = 36,
+        )
+
+        assertEquals(172, mapping.getInt("mappedNameCandidates"))
+        assertEquals(65, mapping.getInt("candidateCoveragePercent"))
+        assertEquals(167, mapping.getInt("runtimeVerifiedNdkCandidates"))
+        assertEquals(172, mapping.getInt("runtimeVerifiedCandidateCount"))
+        assertEquals(97, mapping.getInt("runtimeVerifiedCandidateCoveragePercent"))
+        assertEquals(63, mapping.getInt("runtimeVerifiedImportCoveragePercent"))
+        // The legacy field is explicitly retained as the all-import denominator.
+        assertEquals(63, mapping.getInt("runtimeVerifiedCoveragePercent"))
+        assertEquals(36, mapping.getInt("runtimeVerifiedAndroidApiLevel"))
+    }
+
+    @Test fun resolverAcceptsAdditionalPublicNdkLibraries() {
+        val imports = JSONArray()
+            .put(JSONObject().put("name", "_ANativeWindow_lock"))
+            .put(JSONObject().put("name", "_sync_wait"))
+            .put(JSONObject().put("name", "_ANeuralNetworksCompilation_createForDevices"))
+        val nodes = JSONArray().put(JSONObject().put("analysis", JSONObject()
+            .put("slices", JSONArray().put(JSONObject().put("imports", imports)))))
+
+        val mapping = AndroidApiMapper.analyze(
+            nodes,
+            resolveNdkLibrary = { symbol -> when (symbol) {
+                "ANativeWindow_lock" -> "libnativewindow.so"
+                "sync_wait" -> "libsync.so"
+                "ANeuralNetworksCompilation_createForDevices" -> "libneuralnetworks.so"
+                else -> null
+            } },
+            runtimeApiLevel = 36,
+        )
+
+        assertEquals(3, mapping.getInt("mappedNameCandidates"))
+        assertEquals(3, mapping.getInt("runtimeVerifiedNdkCandidates"))
+        assertEquals(100, mapping.getInt("runtimeVerifiedCandidateCoveragePercent"))
+        assertEquals(100, mapping.getInt("runtimeVerifiedImportCoveragePercent"))
+    }
+
     @Test fun realTimeApiShimExportsAreReportedSeparatelyFromNdkNameCandidates() {
         val imports = JSONArray()
             .put(JSONObject().put("name", "_CFAbsoluteTimeGetCurrent"))

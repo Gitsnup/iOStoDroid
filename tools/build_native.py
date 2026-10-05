@@ -11,6 +11,7 @@ compiler = os.environ.get("CXX", "g++")
 flags = ["-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(root / "native/include")]
 api_source = root / "native/src/apple_time_compat.cpp"
 shim_source = root / "native/src/radek_ios_shims.cpp"
+display_link_source = root / "native/src/cad_display_link_compat.cpp"
 subprocess.run(
     [
         compiler,
@@ -51,6 +52,7 @@ subprocess.run(
         str(api_source),
         str(shim_source),
         str(registry_source),
+        str(display_link_source),
         "-o",
         str(out / "libioscompat.so"),
     ],
@@ -94,7 +96,19 @@ subprocess.run(
     check=True,
 )
 subprocess.run([str(out / "ios-shims-tests")], check=True)
+subprocess.run(
+    [
+        compiler,
+        *flags,
+        str(root / "native/tests/cad_display_link_compat.cpp"),
+        str(display_link_source),
+        "-o",
+        str(out / "cad-display-link-tests"),
+    ],
+    check=True,
+)
+subprocess.run([str(out / "cad-display-link-tests")], check=True)
 print(
-    "Native analyzer, portable runtime, Apple time API, broad iOS shims, "
-    "and compatibility registry tests passed"
+    "Native analyzer, portable runtime, Apple time API, bounded C/POSIX/CoreFoundation shims, "
+    "CADisplayLink frame bridge, and compatibility registry tests passed"
 )

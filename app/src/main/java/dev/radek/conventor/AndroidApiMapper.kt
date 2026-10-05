@@ -92,17 +92,16 @@ internal object AndroidApiMapper {
         "NSJSONSerialization" to "org.json or kotlinx.serialization",
         "AVAudioPlayer" to "android.media.MediaPlayer or SoundPool",
         "AVAudioSession" to "android.media.AudioManager + AudioAttributes",
-        "CADisplayLink" to "android.view.Choreographer",
+        "CADisplayLink" to "C callback bridge driven by Android Choreographer (not the Objective-C CADisplayLink ABI)",
         "CAAnimation" to "android.animation.Animator",
         "SKScene" to "custom SurfaceView/Canvas renderer (game-loop rewrite required)",
     )
 
-    /** Real, implemented ABI-shaped wrappers built into the analyzer's libioscompat.so. */
     /**
-     * Real, tested implementation bodies exported by libioscompat.so.
+     * Real, host-tested implementation bodies exported by libioscompat.so.
      *
-     * The four time shims live in native/src/apple_time_compat.cpp; every other
-     * entry is generated from RADEK_IOS_SHIM_TABLE in
+     * The four time shims live in native/src/apple_time_compat.cpp; other C,
+     * POSIX and CoreFoundation entries come from RADEK_IOS_SHIM_TABLE in
      * native/include/radek_ios_shims.h, which is also expanded by
      * native/src/ioscompat_registry.cpp and native/src/jni.cpp. A dlsym hit here
      * proves an export exists; it does not rewrite an IPA callsite.
@@ -140,6 +139,12 @@ internal object AndroidApiMapper {
         "_CFDateGetAbsoluteTime" to "radek_compat_CFDateGetAbsoluteTime",
         "_CFDateGetTimeIntervalSinceDate" to "radek_compat_CFDateGetTimeIntervalSinceDate",
         "_CFAbsoluteTimeGetGregorianDate" to "radek_compat_CFAbsoluteTimeGetGregorianDate",
+        "_CFRunLoopGetCurrent" to "radek_compat_CFRunLoopGetCurrent",
+        "_CFRunLoopGetMain" to "radek_compat_CFRunLoopGetMain",
+        "_CFRunLoopRun" to "radek_compat_CFRunLoopRun",
+        "_CFRunLoopRunInMode" to "radek_compat_CFRunLoopRunInMode",
+        "_CFRunLoopStop" to "radek_compat_CFRunLoopStop",
+        "_CFRunLoopWakeUp" to "radek_compat_CFRunLoopWakeUp",
         "_malloc" to "radek_compat_malloc",
         "_calloc" to "radek_compat_calloc",
         "_realloc" to "radek_compat_realloc",
@@ -267,6 +272,7 @@ internal object AndroidApiMapper {
         var implementedReplacementCandidates = 0
         var runtimeVerifiedApiReplacements = 0
         var semanticCandidates = 0
+        var compilerRuntimeCandidates = 0
         var compatStubHandlers = 0
         var compatVerifiedHandlers = 0
         var unmappedSymbols = 0
@@ -285,6 +291,7 @@ internal object AndroidApiMapper {
             }
             val library = resolvedLibrary ?: catalogLibrary
             val semanticTarget = semanticTarget(source)
+            val compilerRuntimeCandidate = compilerRuntimeCandidate(source)
             val replacementTarget = implementedApiReplacements[source]
             val resolvedReplacement = if (replacementTarget == null || resolveApiReplacement == null) null else try {
                 resolveApiReplacement.invoke(source)
@@ -300,7 +307,8 @@ internal object AndroidApiMapper {
             if (verifiedOnDevice) runtimeVerifiedCandidates++
             if (replacementTarget != null) implementedReplacementCandidates++
             if (replacementVerified) runtimeVerifiedApiReplacements++
-            if (!direct && replacementTarget == null && semanticTarget != null) semanticCandidates++
+            if (compilerRuntimeCandidate != null) compilerRuntimeCandidates++
+            if (!direct && compilerRuntimeCandidate == null && replacementTarget == null && semanticTarget != null) semanticCandidates++
 
             val item = JSONObject()
                 .put("sourceSymbol", source)
@@ -326,6 +334,13 @@ internal object AndroidApiMapper {
                         resolveNdkLibrary != null -> "Reviewed same-name NDK candidate in $library, but runtime export resolution did not confirm it on this device; no relinking or code generation was performed."
                         else -> "Reviewed same-name Android NDK candidate in $library; no runtime export check, binary relinking or code generation was performed."
                     })
+                compilerRuntimeCandidate != null -> item
+                    .put("classification", "COMPILER_RUNTIME_CANDIDATE")
+                    .put("targetLibrary", "NDK compiler-rt/libunwind toolchain runtime")
+                    .put("targetSymbol", candidate)
+                    .put("resolutionEvidence", "REVIEWED_TOOLCHAIN_CANDIDATE_NOT_LINKED")
+                    .put("translationStrategy", "static NDK compiler-rt/libunwind integration required; no libgcc_s.so alias or link was generated")
+                    .put("reason", "$compilerRuntimeCandidate. Android NDK does not provide a drop-in libgcc_s.so; symbol ABI and exception personality must be validated before a link can be claimed.")
                 replacementTarget != null -> item
                     .put("classification", "IMPLEMENTED_API_REPLACEMENT_AVAILABLE")
                     .put("targetLibrary", "libioscompat.so")
@@ -338,7 +353,7 @@ internal object AndroidApiMapper {
                         resolveApiReplacement != null -> "COMPAT_SOURCE_PRESENT_RUNTIME_NOT_RESOLVED"
                         else -> "COMPILED_COMPATIBILITY_RUNTIME"
                     })
-                    .put("translationStrategy", "real Bionic-backed time shim exists; Mach-O callsite rewrite and game linking are not implemented")
+                    .put("translationStrategy", "concrete compatibility shim exists; Mach-O callsite rewrite and game linking are not implemented")
                     .put("reason", when {
                         replacementVerified -> "The concrete implementation export $replacementTarget was resolved from libioscompat.so on this device; the IPA callsite was not rewritten or linked."
                         resolveApiReplacement != null -> "A concrete implementation is built into the analyzer runtime, but its export was not resolved on this device; no IPA callsite rewrite or game link was performed."
@@ -406,7 +421,7 @@ internal object AndroidApiMapper {
         val classificationComplete = !truncated && result.length() == total
         return JSONObject()
             .put("schemaVersion", 6)
-            .put("measure", "Direct candidates are same-named Android NDK/system or shared C++ runtime symbols from the reviewed catalog or exact runtime export lookup. Runtime time-shim counts identify real exports in libioscompat.so, but none proves IPA callsite rewriting or game linking. Caller ABI compatibility, relocation and linking remain separate. Classification coverage is triage, not implementation coverage; no count represents playable Android code. Registered compat stub handlers are explicit unimplemented resolution targets; only verified handlers identify tested implementation bodies.")
+            .put("measure", "Direct candidates are same-named Android NDK/system or shared C++ runtime symbols from the reviewed catalog or exact runtime export lookup. Compiler-rt/libunwind names are toolchain candidates, not a libgcc_s.so alias or completed link. Runtime compatibility-shim counts identify concrete exports in libioscompat.so, but none proves IPA callsite rewriting or game linking. Caller ABI compatibility, relocation and linking remain separate. Classification coverage is triage, not implementation coverage; no count represents playable Android code. Registered compat stub handlers are explicit unimplemented resolution targets; only verified handlers identify tested implementation bodies.")
             .put("runtimeNdkResolverStatus", if (resolveNdkLibrary == null) "NOT_RUN" else "CURRENT_DEVICE_DLSYM")
             .put("runtimeVerifiedAndroidApiLevel", if (resolveNdkLibrary == null) JSONObject.NULL else (runtimeApiLevel ?: JSONObject.NULL))
             .put("runtimeVerifiedNdkCandidates", runtimeVerifiedCandidates)
@@ -422,6 +437,8 @@ internal object AndroidApiMapper {
             .put("candidateCoveragePercent", if (total == 0) 0 else directCandidates * 100 / total)
             .put("semanticRewriteCandidates", semanticCandidates)
             .put("semanticRewriteCoveragePercent", if (total == 0) 0 else semanticCandidates * 100 / total)
+            .put("compilerRuntimeCandidateCount", compilerRuntimeCandidates)
+            .put("compilerRuntimeCandidateCoveragePercent", if (total == 0) 0 else compilerRuntimeCandidates * 100 / total)
             .put("compatStubHandlerCount", compatStubHandlers)
             .put("compatVerifiedHandlerCount", compatVerifiedHandlers)
             .put("compatHandlerCoveragePercent", if (total == 0) 0 else compatHandlers * 100 / total)
@@ -432,6 +449,27 @@ internal object AndroidApiMapper {
             .put("generatedTranslationCount", 0)
             .put("truncated", truncated)
             .put("symbols", result)
+    }
+
+    internal fun compiledCompatibilityProvider(source: String): String? =
+        implementedApiReplacements[source]?.let { "libioscompat.so:$it" }
+
+    private fun compilerRuntimeCandidate(source: String): String? {
+        val name = source.trimStart('_')
+        if (name.startsWith("Unwind_") || name.startsWith("gcc_personality_v0") ||
+            name.startsWith("gxx_personality_v0") || name.startsWith("aeabi_unwind_") ||
+            name.startsWith("gnu_unwind_")) {
+            return "NDK libunwind/libc++abi (unwind ABI candidate; not linked)"
+        }
+        val builtins = listOf(
+            "aeabi_", "divdi3", "udivdi3", "moddi3", "umoddi3", "muldi3", "ashldi3", "ashrdi3",
+            "lshrdi3", "udivmoddi4", "divti3", "udivti3", "modti3", "umodti3", "multi3", "muloti4",
+            "ashlti3", "ashrti3", "lshrti3", "addvti3", "subvti3", "absvti2", "cmpdi2", "ucmpdi2",
+            "clear_cache", "register_frame", "deregister_frame", "fix", "float",
+        )
+        return if (builtins.any { prefix -> name.startsWith(prefix) }) {
+            "NDK compiler-rt builtins (toolchain link candidate; not linked)"
+        } else null
     }
 
     private fun semanticTarget(source: String): String? {

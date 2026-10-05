@@ -90,6 +90,11 @@ public final class GeneratedPlaceholderActivity extends Activity {
             root.addView(label(bundleId, 13, Color.rgb(160, 178, 199), false),
                     new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         }
+        root.addView(label("Preview shell started", 14, Color.rgb(92, 227, 181), false),
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(label("No translated iOS executable is included in this preview.",
+                        12, Color.rgb(160, 178, 199), false),
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         setContentView(root);
         try {
             setTaskDescription(new ActivityManager.TaskDescription(gameName, iconBitmap, Color.rgb(11, 16, 29)));

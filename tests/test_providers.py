@@ -31,6 +31,7 @@ REPORTED = (
     "/System/Library/Frameworks/CoreMedia.framework/CoreMedia",
     "/System/Library/Frameworks/CoreVideo.framework/CoreVideo",
     "/usr/lib/libiconv.2.dylib",
+    "/usr/lib/libgcc_s.1.dylib",
 )
 
 
@@ -58,6 +59,21 @@ class ProviderTests(unittest.TestCase):
                 self.assertEqual(providers.STATUS_PROVIDED, provider.status)
                 self.assertEqual(providers.KIND_LIBRARY, provider.kind)
                 self.assertIn(expected, provider.android)
+
+    def test_legacy_libgcc_install_name_maps_only_to_symbol_level_ndk_candidates(self):
+        provider = providers.for_install_name("/usr/lib/libgcc_s.1.dylib")
+        self.assertIsNotNone(provider)
+        self.assertEqual("libgcc_s", provider.framework)
+        self.assertEqual(providers.KIND_RUNTIME, provider.kind)
+        self.assertEqual(providers.STATUS_COMPATIBILITY, provider.status)
+        self.assertIn("compiler-rt", provider.android)
+        self.assertIn("libunwind", provider.android)
+        self.assertIn("not a loadable-library alias", provider.detail)
+        self.assertIn("NDK compiler-rt builtins", providers.for_symbol("___aeabi_uidiv"))
+        self.assertIn("NDK libunwind", providers.for_symbol("__Unwind_Resume"))
+        self.assertIn("NDK compiler-rt builtins", providers.for_symbol("___divti3"))
+        self.assertIn("NDK compiler-rt builtins", providers.for_symbol("___divdi3"))
+        self.assertIn("NDK libunwind", providers.for_symbol("__aeabi_unwind_cpp_pr0"))
 
     def test_platform_apis_map_onto_real_android_classes(self):
         for install_name, expected in (
@@ -101,7 +117,7 @@ class ProviderTests(unittest.TestCase):
             ("_CFAbsoluteTimeGetCurrent", "CFAbsoluteTimeGetCurrent"),
             ("_CACurrentMediaTime", "CACurrentMediaTime"),
             ("_mach_timebase_info", "mach_timebase_info"),
-            ("_malloc", "bionic"),
+            ("_malloc", "libioscompat.so:radek_compat_malloc"),
         ):
             with self.subTest(symbol=symbol):
                 provider = providers.for_symbol(symbol)

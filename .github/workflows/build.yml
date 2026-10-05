@@ -124,6 +124,40 @@ jobs:
           python3 -m radek validate .local/hello-conversion/hello-test.apk \
             --package "$PKG" \
             --entry dev.radek.generated.MainActivity
+      - name: Convert IPA (simple.ipa exercises a longer translated routine)
+        run: |
+          set -e
+          test -f tests/data/simple.ipa
+          python3 -m radek convert tests/data/simple.ipa --authorized --output .local/simple-conversion
+          python3 - <<'EOF'
+          import json, pathlib, sys
+          report = json.load(open(".local/simple-conversion/report.json"))
+          conversion = report["conversionProgress"]
+          complete = report["completeConversion"]
+          checks = (
+              ("state is READY", report["state"] == "READY"),
+              ("complete-game progress 100", conversion["percent"] == 100),
+              ("complete conversion status COMPLETE", complete["status"] == "COMPLETE"),
+              ("completeGameConversion true", complete["completeGameConversion"] is True),
+              ("artifact simple.apk", complete["artifact"] == "simple.apk"),
+              ("translated reachable function count is 1", complete["translatedReachableFunctions"] == 1),
+              ("untranslated reachable function count is 0", complete["untranslatedReachableFunctions"] == 0),
+              ("translated native entry exists", pathlib.Path(".local/simple-conversion/libtranslated-entry.so").is_file()),
+          )
+          failed = [label for label, ok in checks if not ok]
+          if failed:
+              print("::error title=simple IPA conversion failed::" + "; ".join(failed))
+              print(json.dumps({"conversionProgress": conversion, "completeConversion": complete}, indent=2))
+              sys.exit(1)
+          print("simple.ipa converted end-to-end:", complete["artifact"], "· package", complete["package"])
+          EOF
+      - name: Validate simple converted APK
+        run: |
+          set -e
+          PKG="dev.radek.converted.p$(python3 -c "import hashlib; print(hashlib.sha256(open('tests/data/simple.ipa','rb').read()).hexdigest()[:20])")"
+          python3 -m radek validate .local/simple-conversion/simple.apk \
+            --package "$PKG" \
+            --entry dev.radek.generated.MainActivity
       - name: Android unit tests, lint, JNI native build and APK
         run: python3 tools/ci_run.py ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
       - name: Validate converter application APK
@@ -163,6 +197,19 @@ jobs:
         with:
           name: hello-conversion-artifacts
           path: artifacts/hello-conversion/
+          if-no-files-found: warn
+      - name: Collect simple conversion artifacts
+        if: always() && hashFiles('.local/simple-conversion/**') != ''
+        run: |
+          mkdir -p artifacts/simple-conversion
+          cp .local/simple-conversion/report.json artifacts/simple-conversion/ || true
+          cp .local/simple-conversion/simple.apk artifacts/simple-conversion/ || true
+      - name: Upload simple conversion artifacts
+        if: always() && hashFiles('artifacts/simple-conversion/**') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: simple-conversion-artifacts
+          path: artifacts/simple-conversion/
           if-no-files-found: warn
       - name: Upload test reports
         if: always() && hashFiles('app/build/reports/**', 'artifacts/validation.json') != ''

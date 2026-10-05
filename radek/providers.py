@@ -5,7 +5,7 @@ Providers.kt``; ``tests/test_providers.py`` asserts the two tables agree, so the
 CLI report and the on-device report never diverge.
 
 This inventory separates known Android libraries, platform targets, compatibility plans, and
-four exact compiled time shims. A provider/candidate entry is not proof that a converted game has
+compiled C/time/CoreFoundation compatibility exports. A provider/candidate entry is not proof that a converted game has
 been rewritten or linked to it. ``STATUS_PROVIDED`` denotes an Android system library; broad
 framework targets remain compatibility candidates until their ABI and behavior are implemented.
 
@@ -15,6 +15,8 @@ framework targets remain compatibility candidates until their ABI and behavior a
 """
 
 from __future__ import annotations
+
+from .api_translation import _SUPPORTED as _COMPILED_COMPAT_IMPORTS
 
 KIND_LIBRARY = "native-library"
 KIND_PLATFORM = "platform-api"
@@ -83,6 +85,9 @@ TABLE: tuple[Provider, ...] = (
              KIND_LIBRARY, STATUS_PROVIDED, "C++ ABI support is part of the NDK runtime."),
     Provider("libstdc++.6.dylib", "libstdc++", "libc++_shared.so (NDK)",
              KIND_LIBRARY, STATUS_PROVIDED, "C++ standard library calls are served by the NDK runtime."),
+    Provider("libgcc_s.1.dylib", "libgcc_s", "NDK compiler-rt builtins · NDK libunwind/libc++abi",
+             KIND_RUNTIME, STATUS_COMPATIBILITY,
+             "Android NDK does not ship a drop-in libgcc_s.so. Compiler helper symbols need toolchain compiler-rt builtins; unwind/personality symbols need per-symbol NDK libunwind/libc++abi validation. The install-name mapping is a candidate, not a loadable-library alias or completed link."),
     Provider("libz.1.dylib", "libz", "libz.so deflate · inflate · crc32",
              KIND_LIBRARY, STATUS_PROVIDED, "zlib is part of the Android platform."),
     Provider("libresolv.9.dylib", "libresolv", "bionic getaddrinfo · res_*",
@@ -96,8 +101,8 @@ TABLE: tuple[Provider, ...] = (
              "NSObject/NSString/NSData/NSArray/NSDictionary/NSNotificationCenter/NSUserDefaults over JVM objects, "
              "SharedPreferences and java.time."),
     Provider("CoreFoundation.framework/CoreFoundation", "CoreFoundation",
-             "libioscompat.so (CFAbsoluteTimeGetCurrent, mach_absolute_time, mach_timebase_info)", KIND_RUNTIME, STATUS_COMPATIBILITY,
-             "Concrete Bionic-backed clock shims only; CoreFoundation object, collection, and run-loop ABI is not implemented."),
+             "libioscompat.so (CFString/CFData/CFArray/CFDictionary/CFNumber/CFDate + CFRunLoop subset)", KIND_RUNTIME, STATUS_COMPATIBILITY,
+             "A small host-tested opaque CF object/collection model and queued C-callback run-loop subset are implemented. It is not the complete CoreFoundation ABI: Apple callbacks/Blocks, run-loop sources/timers, toll-free bridging and the Objective-C runtime remain unsupported."),
     Provider("libobjc.A.dylib", "libobjc", "libioscompat.so message dispatch",
              KIND_RUNTIME, STATUS_COMPATIBILITY,
              "Class registration, selector interning, IMP lookup, inheritance and autorelease pools."),
@@ -110,8 +115,9 @@ TABLE: tuple[Provider, ...] = (
              KIND_PLATFORM, STATUS_COMPATIBILITY,
              "CGAffineTransform/CGPoint/CGRect math is native; drawing goes to a real Android Canvas."),
     Provider("QuartzCore.framework/QuartzCore", "QuartzCore",
-             "libioscompat.so CACurrentMediaTime · android.view.Choreographer (candidate)", KIND_PLATFORM, STATUS_COMPATIBILITY,
-             "CACurrentMediaTime has a concrete CLOCK_MONOTONIC shim; CADisplayLink and the QuartzCore object ABI are not linked or implemented."),
+             "libioscompat.so C frame-link callback API · android.view.Choreographer",
+             KIND_PLATFORM, STATUS_COMPATIBILITY,
+             "libioscompat.so implements a native C frame-link callback service driven by Choreographer in the bounded converted launcher. It is not the Objective-C CADisplayLink class/selector ABI; CAAnimation, CALayer and callsite rewriting remain unsupported."),
     Provider("OpenAL.framework/OpenAL", "OpenAL", "libaaudio.so software mixer",
              KIND_PLATFORM, STATUS_COMPATIBILITY,
              "al*/alc* buffers and sources are mixed into a real AAudio low-latency output stream."),
@@ -187,13 +193,11 @@ TABLE: tuple[Provider, ...] = (
              KIND_PLATFORM, STATUS_BLOCKED, "Bluetooth LE needs its own permission and GATT stack binding."),
 )
 
-#: Exact time-API shims with compiled Android implementations. These functions
-#: are available in libioscompat.so; they are not yet linked into converted games.
+#: Exact compiled compatibility exports. The canonical symbol list is shared with
+#: the host source generator and mirrored by the Android mapper.
 IMPLEMENTED_C_API_SHIMS = {
-    "_CFAbsoluteTimeGetCurrent": "libioscompat.so:CFAbsoluteTimeGetCurrent",
-    "_CACurrentMediaTime": "libioscompat.so:CACurrentMediaTime",
-    "_mach_absolute_time": "libioscompat.so:mach_absolute_time",
-    "_mach_timebase_info": "libioscompat.so:mach_timebase_info",
+    symbol: f"libioscompat.so:{implementation}"
+    for symbol, (implementation, _selection_macro) in _COMPILED_COMPAT_IMPORTS.items()
 }
 
 #: Exact reviewed libc/libm/libdl name candidates. A same-name candidate is not
@@ -220,7 +224,7 @@ SYMBOL_PROVIDERS: tuple[tuple[str, str], ...] = (
     ("Audio", "AudioToolbox/CoreAudio over AAudio"),
     ("ExtAudio", "ExtAudioFile over MediaExtractor"),
     ("CG", "CoreGraphics over android.graphics"),
-    ("CA", "QuartzCore over Choreographer"),
+    ("CA", "QuartzCore; partial C frame-clock bridge only"),
     ("CM", "CoreMedia over MediaCodec"),
     ("CV", "CoreVideo over AHardwareBuffer"),
     ("CF", "CoreFoundation over the runtime"),
@@ -241,6 +245,27 @@ SYMBOL_PROVIDERS: tuple[tuple[str, str], ...] = (
 )
 
 
+def compiler_runtime_candidate(symbol: str) -> str | None:
+    """Classify known GCC/compiler-rt imports without claiming a dynamic alias.
+
+    The NDK's builtins are primarily toolchain static archives; unwind exports
+    also require an ABI check. This table is useful for planning the eventual
+    link, not evidence that a callsite resolves today.
+    """
+    name = symbol.lstrip("_")
+    if name.startswith(("Unwind_", "gcc_personality_v0", "gxx_personality_v0", "aeabi_unwind_", "gnu_unwind_")):
+        return "NDK libunwind/libc++abi (unwind ABI candidate; not linked)"
+    builtins = (
+        "aeabi_", "divdi3", "udivdi3", "moddi3", "umoddi3", "muldi3", "ashldi3", "ashrdi3",
+        "lshrdi3", "udivmoddi4", "divti3", "udivti3", "modti3", "umodti3", "multi3", "muloti4",
+        "ashlti3", "ashrti3", "lshrti3", "addvti3", "subvti3", "absvti2", "cmpdi2", "ucmpdi2",
+        "clear_cache", "register_frame", "deregister_frame", "fix", "float",
+    )
+    if name.startswith(builtins):
+        return "NDK compiler-rt builtins (toolchain link candidate; not linked)"
+    return None
+
+
 def for_install_name(path: str) -> Provider | None:
     """Longest-suffix match, so ``UIKit.framework/UIKit`` wins over a prefix."""
     best: Provider | None = None
@@ -255,6 +280,8 @@ def for_symbol(symbol: str) -> str | None:
     """Return an exact shim or triage hint; unknown lower-case names stay unknown."""
     if symbol in IMPLEMENTED_C_API_SHIMS:
         return IMPLEMENTED_C_API_SHIMS[symbol]
+    if runtime_candidate := compiler_runtime_candidate(symbol):
+        return runtime_candidate
     name = symbol.lstrip("_")
     for prefix, provider in SYMBOL_PROVIDERS:
         if name.startswith(prefix):

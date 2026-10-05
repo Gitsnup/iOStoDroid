@@ -5,8 +5,8 @@
  *
  * Every Darwin/iOS import known to the converter resolves to exactly one of:
  *
- *  - Kind::Verified : a real, host-tested implementation body (currently the
- *    four Bionic-backed time shims in apple_time_compat.cpp), or
+ *  - Kind::Verified : a real, host-tested implementation body (the time shims
+ *    and selected C/POSIX/CoreFoundation shims), or
  *  - Kind::Stub     : an explicitly unimplemented resolution handler. A stub
  *    owns a stable function address that records invocations and returns a
  *    documented safe default. A stub is a resolution target only; it is never

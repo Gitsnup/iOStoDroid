@@ -8,6 +8,7 @@ local.properties
 # The committed synthetic sample fixtures are byte-reproducible and authorized by design.
 !tests/data/sample-leaf.ipa
 !tests/data/hello-test.ipa
+!tests/data/simple.ipa
 *.apk
 *.keystore
 *.jks

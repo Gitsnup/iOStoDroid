@@ -154,6 +154,79 @@ class AndroidApiMapperTest {
         assertFalse(time.getBoolean("codeGenerated"))
     }
 
+    @Test fun providersExposeConcreteCompatibilityExportsWithoutClaimingLinkage() {
+        assertEquals("libioscompat.so:radek_compat_CFRunLoopGetMain", Providers.forSymbol("_CFRunLoopGetMain"))
+        assertEquals("libioscompat.so:radek_compat_malloc", Providers.forSymbol("_malloc"))
+        assertTrue(Providers.forSymbol("___divdi3")!!.contains("not linked"))
+    }
+
+    @Test fun coreFoundationRunLoopExportsAreConcreteBodiesButNotGeneratedOrLinked() {
+        val imports = JSONArray()
+            .put(JSONObject().put("name", "_CFRunLoopGetCurrent"))
+            .put(JSONObject().put("name", "_CFRunLoopRunInMode"))
+            .put(JSONObject().put("name", "_CFRunLoopStop"))
+        val nodes = JSONArray().put(JSONObject().put("analysis", JSONObject()
+            .put("slices", JSONArray().put(JSONObject().put("imports", imports)))))
+
+        val mapping = AndroidApiMapper.analyze(nodes)
+        val items = mapping.getJSONArray("symbols")
+
+        assertEquals(3, mapping.getInt("implementedApiReplacementCount"))
+        for (index in 0 until items.length()) {
+            val item = items.getJSONObject(index)
+            assertEquals("IMPLEMENTED_API_REPLACEMENT_AVAILABLE", item.getString("classification"))
+            assertEquals("libioscompat.so", item.getString("targetLibrary"))
+            assertFalse(item.getBoolean("linkedOrRewritten"))
+            assertFalse(item.getBoolean("codeGenerated"))
+        }
+    }
+
+    @Test fun compilerRuntimeImportsAreToolchainCandidatesNotDirectSharedLibraryLinks() {
+        val imports = JSONArray()
+            .put(JSONObject().put("name", "__Unwind_Resume"))
+            .put(JSONObject().put("name", "___aeabi_uidiv"))
+            .put(JSONObject().put("name", "___divti3"))
+            .put(JSONObject().put("name", "___divdi3"))
+            .put(JSONObject().put("name", "__aeabi_unwind_cpp_pr0"))
+        val nodes = JSONArray().put(JSONObject().put("analysis", JSONObject()
+            .put("slices", JSONArray().put(JSONObject().put("imports", imports)))))
+
+        val mapping = AndroidApiMapper.analyze(nodes)
+        val items = mapping.getJSONArray("symbols")
+        val decoded = (0 until items.length()).map { items.getJSONObject(it) }
+
+        assertEquals(0, mapping.getInt("mappedNameCandidates"))
+        assertEquals(5, mapping.getInt("compilerRuntimeCandidateCount"))
+        assertEquals(0, mapping.getInt("unmappedSymbolCount"))
+        assertEquals(100, mapping.getInt("classificationCoveragePercent"))
+        assertTrue(decoded.all { it.getString("classification") == "COMPILER_RUNTIME_CANDIDATE" })
+        assertTrue(decoded.all { !it.getBoolean("linkedOrRewritten") && !it.getBoolean("codeGenerated") })
+        assertTrue(decoded.any { it.getString("reason").contains("does not provide a drop-in libgcc_s.so") })
+    }
+
+    @Test fun libgccInstallNameAndSymbolHintsStayExplicitlyUnlinked() {
+        val mapping = Providers.classify("/usr/lib/libgcc_s.1.dylib")
+        assertEquals(Providers.STATUS_COMPATIBILITY, mapping.getString("status"))
+        assertEquals("libgcc_s", mapping.getString("framework"))
+        assertTrue(mapping.getString("provider").contains("compiler-rt"))
+        assertTrue(mapping.getString("reason").contains("not a loadable-library alias"))
+        assertTrue(Providers.forSymbol("___divti3")!!.contains("not linked"))
+    }
+
+    @Test fun displayLinkSemanticHintStatesTheObjectiveCAbiIsNotImplemented() {
+        val symbol = "_OBJC_CLASS_" + '$' + "_CADisplayLink"
+        val imports = JSONArray().put(JSONObject().put("name", symbol))
+        val slice = JSONObject().put("imports", imports)
+        val nodes = JSONArray().put(JSONObject().put("analysis", JSONObject()
+            .put("slices", JSONArray().put(slice))))
+
+        val item = AndroidApiMapper.analyze(nodes).getJSONArray("symbols").getJSONObject(0)
+
+        assertEquals("SEMANTIC_REWRITE_CANDIDATE", item.getString("classification"))
+        assertTrue(item.getString("targetApi").contains("not the Objective-C CADisplayLink ABI"))
+        assertFalse(item.getBoolean("codeGenerated"))
+    }
+
     @Test fun emptyImportSetDoesNotClaimPerfectCoverage() {
         val mapping = AndroidApiMapper.analyze(JSONArray())
         assertEquals(0, mapping.getInt("candidateCoveragePercent"))

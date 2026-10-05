@@ -1,12 +1,13 @@
 """Bounded complete-game conversion backend tests.
 
-The hello-test IPA is the single committed input inside the convertible
-subset; everything else must stay honestly blocked. The Android toolchain is
-simulated where SDK tools would run, so the Python wiring (source generation,
+The hello-test and simple IPAs are committed inputs inside the bounded
+convertible subset; everything else must stay honestly blocked. The Android
+toolchain is simulated where SDK tools would run, so the Python wiring (source generation,
 metadata, ELF/JNI packaging, zip append, alignment/signing calls and strict
 self-validation) is exercised even on machines without an SDK.
 """
 
+import importlib.util
 import json
 import shutil
 import tempfile
@@ -30,6 +31,14 @@ from radek.pipeline import Pipeline
 from tests.fixtures import ipa, macho
 
 HELLO_PATH = Path(__file__).resolve().parent.parent / "tests" / "data" / "hello-test.ipa"
+SIMPLE_PATH = Path(__file__).resolve().parent.parent / "tests" / "data" / "simple.ipa"
+_SIMPLE_TOOL = Path(__file__).resolve().parent.parent / "tools" / "make_simple_ipa.py"
+_SIMPLE_SPEC = importlib.util.spec_from_file_location("make_simple_ipa", _SIMPLE_TOOL)
+_SIMPLE_MODULE = importlib.util.module_from_spec(_SIMPLE_SPEC)
+_SIMPLE_SPEC.loader.exec_module(_SIMPLE_MODULE)
+SIMPLE_CODE = _SIMPLE_MODULE.CODE
+SIMPLE_RETURN_VALUE = _SIMPLE_MODULE.RETURN_VALUE
+SIMPLE_LAUNCH_MESSAGE = _SIMPLE_MODULE.LAUNCH_MESSAGE
 
 
 def _fake_toolchain(root: Path):
@@ -184,6 +193,23 @@ class HelloIpaEligibilityTests(unittest.TestCase):
         self.assertTrue(any("import" in reason for reason in assessment["reasons"]))
 
 
+class SimpleIpaFixtureTests(unittest.TestCase):
+    def test_committed_fixture_regenerates_deterministically_and_is_substantially_larger(self):
+        self.assertTrue(SIMPLE_PATH.is_file(), "committed simple.ipa fixture is missing")
+        self.assertEqual(len(SIMPLE_CODE), 1072)
+        self.assertGreater(len(SIMPLE_CODE), 80 * 12)  # hello-test has a 12-byte entry.
+        self.assertEqual(SIMPLE_LAUNCH_MESSAGE, "Simple IPA: 128 integer operations translated")
+        with tempfile.TemporaryDirectory() as directory:
+            regenerated = ipa(
+                Path(directory) / "simple.ipa",
+                macho(SIMPLE_CODE, cstring=SIMPLE_LAUNCH_MESSAGE.encode("ascii") + bytes([0])),
+                icon=False,
+                display_name="Simple IPA",
+                bundle_id="dev.radek.simpleipa",
+            )
+            self.assertEqual(SIMPLE_PATH.read_bytes(), regenerated.read_bytes())
+
+
 class CompleteGameMetadataTests(unittest.TestCase):
     def test_metadata_satisfies_strict_validator(self):
         metadata = complete_game_metadata(
@@ -263,6 +289,33 @@ class CompleteGameBuildSimulationTests(unittest.TestCase):
         for expected in ("aapt2", "javac", "d8", "zipalign", "apksigner", "keytool"):
             self.assertIn(expected, tool_names)
 
+    def test_simulated_toolchain_converts_simple_ipa_to_ready(self):
+        self.assertTrue(SIMPLE_PATH.is_file(), "committed simple.ipa fixture is missing")
+        calls: list = []
+        tools = _fake_toolchain(self.root)
+        fake_run = _fake_run_factory(calls)
+        with patch.object(apk_module, "run", side_effect=fake_run), patch.object(
+            gamepack_module, "run", side_effect=fake_run
+        ), patch.object(apk_module.Toolchain, "discover", return_value=tools):
+            report = Pipeline(self.root / "simple-conversion").run(SIMPLE_PATH, True, analyze_only=False)
+
+        self.assertEqual(report["state"], "READY", report.get("error"))
+        self.assertEqual(report["conversionProgress"]["percent"], 100)
+        complete = report["completeConversion"]
+        self.assertEqual(complete["status"], "COMPLETE")
+        self.assertEqual(complete["artifact"], "simple.apk")
+        self.assertEqual(complete["launchMessage"], SIMPLE_LAUNCH_MESSAGE)
+        apk = self.root / "simple-conversion" / "simple.apk"
+        self.assertTrue(apk.is_file())
+        with zipfile.ZipFile(apk) as package:
+            metadata = json.loads(package.read("assets/conversion.json"))
+            library = inspect_elf(package.read("lib/arm64-v8a/libconverted.so"))
+        export = library["exports"][COMPLETE_GAME_JNI_SYMBOL]
+        self.assertEqual(metadata["conversion"]["outputBytes"], len(SIMPLE_CODE))
+        self.assertEqual(export["size"], len(SIMPLE_CODE))
+        self.assertEqual(export["sha256"], metadata["conversion"]["machineCodeSha256"])
+        self.assertEqual(metadata["launchMessage"], SIMPLE_LAUNCH_MESSAGE)
+
     def test_convert_without_toolchain_stays_blocked_honestly(self):
         def no_toolchain():
             raise RuntimeError("no sdk")
@@ -333,6 +386,46 @@ class NativeTrivialProverTests(unittest.TestCase):
         machine_code = base64.b64decode(result["machineCode"])
         self.assertEqual(machine_code, payload[0x1000 : 0x1000 + 12])
         self.assertEqual(len(machine_code), result["sourceBytes"])
+
+    def test_simple_ipa_has_a_long_proven_entry_and_matching_host_semantics(self):
+        import base64
+        import ctypes
+        import hashlib
+        import os
+        import subprocess
+        from radek.c_backend import emit
+        from radek.ir import lift
+
+        self.assertTrue(SIMPLE_PATH.is_file(), "committed simple.ipa fixture is missing")
+        with zipfile.ZipFile(SIMPLE_PATH) as archive:
+            payload = archive.read("Payload/Fixture.app/Fixture")
+        result = self._run(payload)
+        self.assertEqual(result["status"], "PROVEN", result.get("reason"))
+        self.assertEqual(result["sourceBytes"], len(SIMPLE_CODE))
+        self.assertEqual(result["textBytes"], len(SIMPLE_CODE))
+        self.assertEqual(result["coveragePercent"], 100)
+        self.assertEqual(result["functionCount"], 1)
+        self.assertIn(SIMPLE_LAUNCH_MESSAGE, result["strings"])
+        machine_code = base64.b64decode(result["machineCode"])
+        self.assertEqual(machine_code, payload[0x1000:0x1000 + len(SIMPLE_CODE)])
+        self.assertEqual(hashlib.sha256(machine_code).hexdigest(), lift(SIMPLE_CODE, "arm64").report()["machineCodeSha256"])
+
+        if not shutil.which(os.environ.get("CXX", "g++")):
+            self.skipTest("C++ compiler unavailable for host semantic execution")
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "simple.c"
+            library = Path(directory) / "simple.so"
+            source.write_text(emit(lift(SIMPLE_CODE, "arm64")), encoding="utf-8")
+            subprocess.run(
+                [os.environ.get("CXX", "g++"), "-std=c++17", "-x", "c++", "-shared", "-fPIC",
+                 "-Wall", "-Wextra", "-Werror", str(source), "-o", str(library)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            translated = ctypes.CDLL(str(library)).radek_translated_entry
+            translated.restype = ctypes.c_uint32
+            self.assertEqual(translated(), SIMPLE_RETURN_VALUE)
 
     def test_sample_leaf_executable_is_rejected_for_full_coverage(self):
         import struct

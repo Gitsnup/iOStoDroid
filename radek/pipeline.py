@@ -62,7 +62,7 @@ class Pipeline:
                 "linkedApiReplacements": 0,
                 "codeGenerated": False,
                 "completeGameConversion": False,
-                "message": "The bounded time-API replacement subset has not been checked against entry-reachable imports.",
+                "message": "The bounded compiled-compatibility subset has not been checked against entry-reachable imports.",
             },
             "llvmLift": {
                 "status": "NOT_ATTEMPTED",

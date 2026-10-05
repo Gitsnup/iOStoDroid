@@ -413,9 +413,9 @@ class Library(private val context: Context) {
                 .put("linkedIntoGame", false)
                 .put("completeGameConversion", false)
                 .put("message", if (verifiedApiReplacements > 0)
-                    "$verifiedApiReplacements concrete time-API implementation export(s) were verified in libioscompat.so; no IPA callsite was rewritten and none was linked into a game."
+                    "$verifiedApiReplacements concrete compatibility export(s) were verified in libioscompat.so; no IPA callsite was rewritten and none was linked into a game."
                 else
-                    "The analyzer runtime contains a narrow time-API shim, but no matching import was verified on this device and no game API replacement was linked."))
+                    "The analyzer runtime contains concrete compatibility exports, but no matching import was verified on this device and no game API replacement was linked."))
             if (deviceProven) {
                 report.put("portProgress", JSONObject()
                     .put("percent", deviceTranslation.optInt("coveragePercent", 100))
@@ -431,7 +431,7 @@ class Library(private val context: Context) {
                     .put("basis", "On-device importer analyzed the IPA but emitted no Android executable code; this is actual output progress, not a stability prediction."))
             }
             log(ConversionState.ANALYZING,
-                "Inventoried ${apiMapping.getInt("distinctImportSymbols")} API symbols; ${apiMapping.getInt("mappedNameCandidates")} direct NDK names (${apiMapping.getInt("runtimeVerifiedNdkCandidates")} runtime exports resolved), ${apiMapping.getInt("runtimeVerifiedApiReplacementCount")} concrete time-shim exports verified but not linked, and ${apiMapping.getInt("semanticRewriteCandidates")} semantic rewrite candidates.", 50)
+                "Inventoried ${apiMapping.getInt("distinctImportSymbols")} API symbols; ${apiMapping.getInt("mappedNameCandidates")} direct NDK names (${apiMapping.getInt("runtimeVerifiedNdkCandidates")} runtime exports resolved), ${apiMapping.getInt("runtimeVerifiedApiReplacementCount")} concrete compatibility exports verified but not linked, and ${apiMapping.getInt("semanticRewriteCandidates")} semantic rewrite candidates.", 50)
             val reason = when {
                 encrypted -> "Protected/encrypted Mach-O. Conversion prohibited; no DRM or FairPlay bypass."
                 !hasCandidate -> "No supported ARM64/ARMv7/ARMv6 slice. ARM64e PAC reconstruction is blocked."

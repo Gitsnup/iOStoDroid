@@ -36,7 +36,7 @@ source IPA is stored in private app storage until the library entry is deleted. 
 bounded extraction and inspection, then removes its temporary extracted tree. It does not create a
 game APK. Details include bundle name/version/identifier, declared `MinimumOSVersion` (not inferred),
 recovered icon when decodable (including supported compiled `Assets.car` renditions), architectures,
-API candidates, current-device time-shim export checks, blockers, the raw JSON report and analysis logs.
+API candidates, current-device compatibility-export checks, blockers, the raw JSON report and analysis logs.
 
 The analysis progress bar measures input copying and extraction; when the bounded conversion proof
 applies, the same import job continues into the packaging stages and builds the signed APK
@@ -45,9 +45,10 @@ conversion is attached under the strict contract. Proven IPAs become a signed AP
 entry routine runs through JNI and displays the message recovered from the IPA, with no extra user
 action. Everything else can be turned, via the red **Force convert to .apk** action, into a
 separately named, installable preview shell from the bundled Android template that uses the IPA app
-name, recovered icon and static-analysis statistics where available but contains no translated game
-code or gameplay. Its launcher screen makes no conversion claim in either direction; the honest
-record stays in the artifact's machine-readable metadata and in the app's library entry. The runtime
+name and recovered icon where available but contains no translated game code or gameplay. Its
+launcher visibly states that the preview started and no translated executable is included, without
+converter branding or static-analysis details. The detailed record stays in machine-readable
+metadata and the app's library entry. The runtime
 packager reads either UTF-8 or UTF-16 Android binary-XML string pools, patches or inserts
 `<uses-sdk>` so the manifest can never default to SDK 1, then checks its exact ZIP entry set,
 uncompressed/aligned manifest, DEX, resource table and icon payloads before signing and verifying
@@ -58,8 +59,10 @@ conflicts) so a problem is reported instead of collapsing into Android's "app no
 A host APK attachment must match the IPA's SHA-256/package identity and safe IPA-derived basename,
 carry `complete-game-v1` metadata, account for every reachable function and API implementation,
 claim complete resources/lifecycle support, contain no original IPA or Apple executable, and pass
-Android package/signature checks. This repository's host CLI currently emits no APK that satisfies
-that contract. Restricted native-entry experiment APKs are rejected.
+Android package/signature checks. The host CLI produces this contract only for the bounded subset
+(whole executable equals one proven closed-integer routine with no imports, dependencies, fixups or
+runtime metadata); `tests/data/hello-test.ipa` and the longer `tests/data/simple.ipa` are regression
+fixtures for that path. Restricted native-entry experiment APKs are rejected.
 
 ## Host IPA inspection
 
@@ -77,29 +80,31 @@ object exporting `radek_translated_entry`, and supplementary `leaf-experiment.ll
 checks the ELF architecture, symbol size/hash, and lack of undefined symbols; C is compiled and run
 against representative IR cases in the unit tests. No Android device load test is performed.
 
-If resolved reconstructed internal calls establish a path from the selected entry to one of four
-supported time imports, the host also emits the selected Bionic-backed implementation source under
-`api-replacements/`. The source is compiled and
-behavior-tested on the host, but is not linked to the translated host entry. The on-device bounded
+If resolved reconstructed internal calls establish a path from the selected entry to a supported
+compiled compatibility import, the host also emits its selected implementation source under
+`api-replacements/`. These sources are behavior-tested on the host, but are not linked to the
+translated host entry. The on-device bounded
 APK builder packages its prebuilt ARM64 `libioscompat.so` and declares `DT_NEEDED`; it still rewrites
-no individual imports because the accepted executable has none. The report records
-one function's source instruction bytes divided by the selected slice's executable `__text` bytes as
-partial machine-code progress; `conversionProgress` remains `NOT_BUILT` unless the stricter bounded
-complete-conversion gate (whole `__text` equals the proven routine, zero `__text` relocations, imports and metadata) applies
-and a signed APK is built. If `convert` is invoked on an input that passes only this restricted
-proof, it returns `BLOCKED`, retains any isolated native artifact, and produces no game APK. The
-experiment does not translate all game code, APIs, resources, or lifecycle.
+no individual imports because the accepted executable has none. Reports distinguish partial
+source instruction-byte progress from complete-game progress. Only when the whole executable
+`__text` equals the proven routine, and imports, dependencies, fixups, relocations and runtime
+metadata are absent, does `convert` attempt complete-game packaging. A successful signed and
+statically validated APK reaches `READY`; unsupported inputs or missing build tools never receive
+that status. This bounded path does not translate arbitrary game code, APIs, resources or lifecycle.
 
 ARM selection for the analysis is deterministic: automatic selection prefers ARM64 in a FAT IPA
 containing both ARM32 and ARM64; supported ARM32-only inputs target 32-bit Android ARMv7 (`armeabi-v7a`).
 This target selection is not evidence that an APK was built. Explicit `--target-abi` overrides must
 have a matching input slice.
 
-The API mapper treats general symbol/semantic matches as candidates. Four narrow time API
-implementations exist in `libioscompat.so`, and an import may be selected for source generation only
-if a resolved reconstructed call path connects the selected entry to it. The mapper does not rewrite
-Mach-O bindings or link the shim to the standalone entry; unsupported entry-reachable APIs remain
-blockers and no playable conversion is claimed.
+The API mapper treats general symbol/semantic matches as candidates. `libioscompat.so` contains
+host-tested C/time/POSIX functions and a limited CoreFoundation object/collection/run-loop subset;
+source generation selects these only when a resolved reconstructed call path connects the selected
+entry to a supported import. The mapper does not rewrite Mach-O bindings or link the shim to the
+standalone entry. The native C frame-clock service is driven by the converted launcher's Android
+Choreographer bridge, but it is not the Objective-C `CADisplayLink` ABI and has no IPA callsite.
+`libgcc_s.1.dylib` is only triaged to compiler-rt/libunwind candidates, not a library alias or link;
+unsupported entry-reachable APIs remain blockers, and no general playable conversion is claimed.
 
 ## Validation and status codes
 
@@ -116,11 +121,12 @@ For future converted results, validation requires the complete-game evidence con
 `closed-integer-entry-v1` wrapper no longer qualifies. Runtime execution remains `NOT_TESTED` unless
 separate device tests are supplied.
 
-- `0 READY`: reserved for a future complete conversion that passed static validation; not currently
-  produced by the IPA pipeline.
+- `0 READY`: the bounded complete-game conversion produced a signed APK and passed static checks;
+  this does not mean device execution or gameplay was tested.
 - `1 FAILED`: malformed input, tool failure or interrupted work.
 - `2 PARTIAL`: inspection completed without a complete conversion.
-- `3 BLOCKED`: requested conversion is unsupported or incomplete; no APK was emitted.
+- `3 BLOCKED`: no complete-game APK was built; a separately labelled experimental shell may still
+  exist and is never reported as a game conversion.
 
 ## Development signing and CI
 
@@ -131,10 +137,10 @@ IPAs, the bounded conversion APK; signing is an install requirement, not a gamep
 CI publishes no imported-IPA preview APK.
 
 `.github/workflows/build.yml` runs native/Python/Android tests, builds and validates the importer,
-converts `tests/data/hello-test.ipa` end to end, validates the resulting bounded conversion APK,
-and uploads `RadekiOSConventor-debug.apk` plus validation/test reports and diagnostic conversion
-artifacts. CI does not publish a synthetic or unproven game APK. No iOS executable is run by tests,
-and there is no device/emulator runtime smoke test at present.
+converts both `tests/data/hello-test.ipa` and the longer `tests/data/simple.ipa` end to end, validates
+the resulting bounded conversion APKs, and uploads `RadekiOSConventor-debug.apk` plus validation,
+test and diagnostic conversion artifacts. CI does not publish a synthetic or unproven game APK. No
+iOS executable is run by tests, and there is no device/emulator runtime smoke test at present.
 
 ## Optional source formatting
 

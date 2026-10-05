@@ -7,12 +7,11 @@ import org.json.JSONObject
  * iOS install names and external symbols mapped to the Android implementation
  * that actually provides them.
  *
- * Every entry is a real provider, never a stub: either the identical C ABI that
- * Android already ships ([KIND_LIBRARY], e.g. OpenGL ES, EGL, iconv, sqlite3),
- * the platform API it maps onto ([KIND_PLATFORM], e.g. `AudioToolbox` to
- * `AAudio`/`AudioTrack`), or the generated runtime that carries the semantics
- * ([KIND_RUNTIME], e.g. `UIKit` to the Android view hierarchy). Only APIs with
- * no Android contract at all stay [STATUS_BLOCKED] and are reported as such.
+ * Entries are provider candidates, not universal support claims. A [KIND_LIBRARY]
+ * entry can name an Android system ABI; [KIND_PLATFORM] and [KIND_RUNTIME] entries
+ * are triage hints until an ABI-safe adapter is compiled and wired into generated
+ * output. Only individually tested compatibility exports are verified; unimplemented
+ * imports remain explicit blockers or stubs.
  */
 object Providers {
     const val KIND_LIBRARY = "native-library"
@@ -56,6 +55,9 @@ object Providers {
             KIND_LIBRARY, STATUS_PROVIDED, "C++ ABI support is part of the NDK runtime."),
         Provider("libstdc++.6.dylib", "libstdc++", "libc++_shared.so (NDK)",
             KIND_LIBRARY, STATUS_PROVIDED, "C++ standard library calls are served by the NDK runtime."),
+        Provider("libgcc_s.1.dylib", "libgcc_s", "NDK compiler-rt builtins · NDK libunwind/libc++abi",
+            KIND_RUNTIME, STATUS_COMPATIBILITY,
+            "Android NDK does not ship a drop-in libgcc_s.so. Compiler helper symbols need toolchain compiler-rt builtins; unwind/personality symbols need per-symbol NDK libunwind/libc++abi validation. The install-name mapping is a candidate, not a loadable-library alias or completed link."),
         Provider("libz.1.dylib", "libz", "libz.so deflate · inflate · crc32",
             KIND_LIBRARY, STATUS_PROVIDED, "zlib is part of the Android platform."),
         Provider("libresolv.9.dylib", "libresolv", "bionic getaddrinfo · res_*",
@@ -67,8 +69,8 @@ object Providers {
             "dev.radek.runtime.Foundation · libioscompat.so", KIND_RUNTIME, STATUS_COMPATIBILITY,
             "NSObject/NSString/NSData/NSArray/NSDictionary/NSNotificationCenter/NSUserDefaults over JVM objects, SharedPreferences and java.time."),
         Provider("CoreFoundation.framework/CoreFoundation", "CoreFoundation",
-            "libioscompat.so (CFAbsoluteTimeGetCurrent, mach_absolute_time, mach_timebase_info)", KIND_RUNTIME, STATUS_COMPATIBILITY,
-            "Concrete Bionic-backed clock shims only; CoreFoundation object, collection, and run-loop ABI is not implemented."),
+            "libioscompat.so (CFString/CFData/CFArray/CFDictionary/CFNumber/CFDate + CFRunLoop subset)", KIND_RUNTIME, STATUS_COMPATIBILITY,
+            "A small host-tested opaque CF object/collection model and queued C-callback run-loop subset are implemented. It is not the complete CoreFoundation ABI: Apple callbacks/Blocks, run-loop sources/timers, toll-free bridging and the Objective-C runtime remain unsupported."),
         Provider("libobjc.A.dylib", "libobjc", "libioscompat.so message dispatch",
             KIND_RUNTIME, STATUS_COMPATIBILITY, "Class registration, selector interning, IMP lookup, inheritance and autorelease pools."),
         Provider("UIKit.framework/UIKit", "UIKit",
@@ -80,8 +82,8 @@ object Providers {
             KIND_PLATFORM, STATUS_COMPATIBILITY,
             "CGAffineTransform/CGPoint/CGRect math is native; drawing goes to a real Android Canvas."),
         Provider("QuartzCore.framework/QuartzCore", "QuartzCore",
-            "libioscompat.so CACurrentMediaTime · android.view.Choreographer (candidate)", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "CACurrentMediaTime has a concrete CLOCK_MONOTONIC shim; CADisplayLink and the QuartzCore object ABI are not linked or implemented."),
+            "libioscompat.so C frame-link callback API · android.view.Choreographer", KIND_PLATFORM, STATUS_COMPATIBILITY,
+            "libioscompat.so implements a native C frame-link callback service driven by Choreographer in the bounded converted launcher. It is not the Objective-C CADisplayLink class/selector ABI; CAAnimation, CALayer and callsite rewriting remain unsupported."),
         Provider("OpenAL.framework/OpenAL", "OpenAL", "libaaudio.so software mixer",
             KIND_PLATFORM, STATUS_COMPATIBILITY,
             "al*/alc* buffers and sources are mixed into a real AAudio low-latency output stream."),
@@ -156,7 +158,8 @@ object Providers {
 
     /**
      * Broad symbol-family triage hints only; these are not proof of generated or linked code.
-     * The narrow compiled time shims are tracked separately by AndroidApiMapper.
+     * Concrete compiled compatibility exports are tracked separately by AndroidApiMapper; broad
+     * framework-family labels remain candidates.
      */
     private val SYMBOL_PROVIDERS = listOf(
         "gl" to "OpenGL ES (libGLESv2.so/libGLESv3.so)",
@@ -166,7 +169,7 @@ object Providers {
         "Audio" to "AudioToolbox/CoreAudio over AAudio",
         "ExtAudio" to "ExtAudioFile over MediaExtractor",
         "CG" to "CoreGraphics over android.graphics",
-        "CA" to "QuartzCore over Choreographer",
+        "CA" to "QuartzCore; partial C frame-clock bridge only",
         "CM" to "CoreMedia over MediaCodec",
         "CV" to "CoreVideo over AHardwareBuffer",
         "CF" to "CoreFoundation over the runtime",
@@ -186,6 +189,23 @@ object Providers {
         "uncompress" to "libz.so"
     )
 
+    private fun compilerRuntimeCandidate(symbol: String): String? {
+        val name = symbol.trimStart('_')
+        val unwind = listOf("Unwind_", "gcc_personality_v0", "gxx_personality_v0", "aeabi_unwind_", "gnu_unwind_")
+        if (unwind.any { prefix -> name.startsWith(prefix) }) {
+            return "NDK libunwind/libc++abi (unwind ABI candidate; not linked)"
+        }
+        val builtins = listOf(
+            "aeabi_", "divdi3", "udivdi3", "moddi3", "umoddi3", "muldi3", "ashldi3", "ashrdi3",
+            "lshrdi3", "udivmoddi4", "divti3", "udivti3", "modti3", "umodti3", "multi3", "muloti4",
+            "ashlti3", "ashrti3", "lshrti3", "addvti3", "subvti3", "absvti2", "cmpdi2", "ucmpdi2",
+            "clear_cache", "register_frame", "deregister_frame", "fix", "float",
+        )
+        return if (builtins.any { prefix -> name.startsWith(prefix) }) {
+            "NDK compiler-rt builtins (toolchain link candidate; not linked)"
+        } else null
+    }
+
     fun forInstallName(path: String): Provider? {
         val trimmed = path.trim()
         var best: Provider? = null
@@ -199,9 +219,12 @@ object Providers {
 
     /** Provider for an imported symbol name, or null when nothing maps it. */
     fun forSymbol(symbol: String): String? {
-        for ((prefix, provider) in SYMBOL_PROVIDERS) if (symbol.startsWith(prefix)) return provider
+        AndroidApiMapper.compiledCompatibilityProvider(symbol)?.let { return it }
+        compilerRuntimeCandidate(symbol)?.let { return it }
+        val candidate = symbol.trimStart('_')
+        for ((prefix, provider) in SYMBOL_PROVIDERS) if (candidate.startsWith(prefix)) return provider
         // libc/libm/pthread entry points are provided by bionic directly.
-        if (symbol.startsWith("_") && symbol.length > 1 && symbol[1].isLowerCase()) return "bionic libc/libm"
+        if (candidate.isNotEmpty() && candidate[0].isLowerCase()) return "bionic libc/libm"
         return null
     }
 
@@ -226,9 +249,9 @@ object Providers {
     }
 
     /**
-     * Honest support score: the share of externally visible requirements that a
-     * real Android provider covers. 100 means every dependency and every imported
-     * symbol of the chosen slice has a working Android implementation wired in.
+     * Candidate-catalog coverage only. A non-null candidate does not prove ABI
+     * compatibility or that its code is linked; callers must keep this separate
+     * from verified exports and generated/linked implementation counts.
      */
     fun coverage(dependencies: JSONArray, imports: JSONArray): Int {
         val total = dependencies.length() + imports.length()

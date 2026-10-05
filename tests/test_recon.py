@@ -288,6 +288,38 @@ class ReconstructionTests(Base):
             self.assertEqual(feasibility, "compatibility")
             self.assertEqual(kind, "function")
 
+    def test_common_darwin_game_dylibs_get_named_attribution(self):
+        # Framework/dylib names are attribution labels, not implementation claims.
+        from radek.recon.apis import framework_of
+
+        self.assertEqual(framework_of("/usr/lib/libsqlite3.dylib"), "SQLite")
+        self.assertEqual(framework_of("/usr/lib/libz.1.dylib"), "zlib")
+        self.assertEqual(framework_of("/usr/lib/libxml2.2.dylib"), "libxml2")
+        self.assertEqual(framework_of("/usr/lib/libbz2.1.0.dylib"), "libbz2")
+        self.assertEqual(framework_of("/usr/lib/libiconv.2.dylib"), "iconv")
+        self.assertEqual(framework_of("/usr/lib/libresolv.9.dylib"), "DNS resolver")
+        self.assertEqual(framework_of("/usr/lib/libicucore.A.dylib"), "ICU")
+        self.assertEqual(framework_of("/usr/lib/libc++abi.dylib"), "C++ ABI runtime")
+        self.assertEqual(
+            framework_of("/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore"),
+            "JavaScriptCore",
+        )
+
+    def test_broadened_families_classify_with_their_area(self):
+        expected = {
+            "_iconv_open": ("iconv", "text", "compatibility"),
+            "BZ2_bzRead": ("libbz2", "compression", "compatibility"),
+            "archive_read_new": ("libarchive", "filesystem", "compatibility"),
+            "_compression_encode_buffer": ("libcompression", "compression", "compatibility"),
+            "_xmlReadMemory": ("libxml2", "text", "compatibility"),
+            "_res_9_query": ("DNS resolver", "network", "native"),
+            "ucnv_open": ("ICU", "text", "compatibility"),
+            "_JSGlobalContextCreate": ("JavaScriptCore", "language", "blocked"),
+            "_nw_connection_create": ("libnetwork", "network", "compatibility"),
+        }
+        for symbol, (framework, area, feasibility) in expected.items():
+            self.assertEqual(classify_import(symbol), (framework, area, feasibility, "function"))
+
     def test_swift_metadata_and_demangling(self):
         builder, meta = objc_image()
         path, info = self.analyze(builder.build())

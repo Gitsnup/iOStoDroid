@@ -328,6 +328,19 @@ def generate(reconstruction: dict, output: Path) -> dict:
         "unresolvedImports": len(imports) - len(selected),
         "rejectedUnsafeNames": rejected,
         "handlerResolutionCoveragePercent": coverage,
+        # Resolution is total by construction: every observed import ends up with
+        # exactly one target. That says nothing about how many targets implement the
+        # API, so the two numbers are reported side by side and never added together.
+        "symbolResolution": {
+            "status": "COMPLETE" if coverage == 100.0 else "PARTIAL",
+            "contract": "every observed import has exactly one resolution target",
+            "verifiedImplementations": len(verified),
+            "stubbedUnimplemented": len(stubbed),
+            "unresolved": len(imports) - len(selected),
+            "total": len(imports),
+            "linkedIntoGame": 0,
+            "resolutionIsNotImplementation": True,
+        },
         "truncated": truncated,
         "sourcePath": "ioscompat/libioscompat.cpp",
         "headerPath": "ioscompat/apple_time_compat.h",

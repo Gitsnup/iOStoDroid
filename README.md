@@ -17,13 +17,26 @@ Authorized imports are analyzed before compatibility is assessed:
 - Static API-call attribution: which reconstructed functions directly reference imports and, more
   conservatively, which such calls lie on resolved internal call paths from the selected entry.
 
-Results are written as `reconstruction.json` and `reconstruction.md` beside `report.json`.
+Results are written as `reconstruction.json` and `reconstruction.md` beside `report.json`. Every
+run also records a **conversion ceiling** (`report.json` → `conversionCeiling`, plus a
+“Conversion ceiling” section in `reconstruction.md`): an ordered gate ledger over target ABI,
+protection, container, slice format, loader metadata, the entry-routine proof, reachable-code
+translation, API linking, resources, lifecycle and APK packaging. The first gate that cannot pass
+is named with the fail-closed prover's own statement as evidence, and every later gate is
+`NOT_REACHED` — never estimated. For a real game this typically reports
+`ENTRY_ROUTINE`/`API_LINKING` with the concrete first obstacle (for example an instruction outside
+the proven subset, or *import symbols declared and not linked*), which is the honest answer to
+“how far can this be converted”. The ledger carries `countsAsConversionProgress: false`: it is an
+assessment, not translated code, and it never counts symbol triage or stub handlers as progress.
 Analysis also writes an `ioscompat/` directory containing the generated compatibility-registry
 source (`libioscompat.cpp`), copied compatibility headers and a `registry.json` classification of
 every observed Darwin import as `verified` (tested implementation) or `stubbed-unimplemented`
 (explicit resolution handler). Stubs record invocations and return a documented safe default;
 they are resolution targets for a future linker, not API implementations, and the report counts
-them separately from verified shims.
+them separately from verified shims. `compatRegistry.symbolResolution` states this split
+explicitly (verified / stubbed-unimplemented / unresolved, `linkedIntoGame: 0`,
+`resolutionIsNotImplementation: true`), so a 100% resolution figure is never read as 100%
+implementation, translation or gameplay coverage.
 When (and only when) the entry routine passes the closed-integer proof, the host writes:
 
 - `translated-entry.bin`: lowered ARM64/ARMv7 function bytes;

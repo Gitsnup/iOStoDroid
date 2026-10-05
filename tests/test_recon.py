@@ -8,6 +8,7 @@ from pathlib import Path
 from radek.analysis import analyze
 from radek.recon import reconstruct
 from radek.recon import objc as objc_mod
+from radek.recon.apis import classify as classify_import
 from radek.recon import swift as swift_mod
 from radek.recon.disasm import decode_arm64
 from radek.recon.image import load
@@ -272,6 +273,20 @@ class ReconstructionTests(Base):
         self.assertIn("UIKit", apis["linkedFrameworks"])
         self.assertGreaterEqual(apis["linkedFrameworks"]["UIKit"]["symbolsUsed"], 1)
         self.assertIn("byFeasibility", apis)
+
+    def test_compiler_runtime_symbols_are_candidates_not_plain_libc(self):
+        for symbol in (
+            "__Unwind_Resume",
+            "___aeabi_uidiv",
+            "___divti3",
+            "___divdi3",
+            "__aeabi_unwind_cpp_pr0",
+        ):
+            framework, area, feasibility, kind = classify_import(symbol)
+            self.assertEqual(framework, "GCC/LLVM compiler runtime")
+            self.assertEqual(area, "language")
+            self.assertEqual(feasibility, "compatibility")
+            self.assertEqual(kind, "function")
 
     def test_swift_metadata_and_demangling(self):
         builder, meta = objc_image()

@@ -310,6 +310,7 @@ class MainActivity : Activity() {
                 val total = mapping.optInt("distinctImportSymbols", 0)
                 val coverage = mapping.optInt("candidateCoveragePercent", 0)
                 val semantic = mapping.optInt("semanticRewriteCandidates", 0)
+                val compilerRuntime = mapping.optInt("compilerRuntimeCandidateCount", 0)
                 val classified = mapping.optInt("classifiedImportSymbols", 0)
                 val triage = mapping.optInt("classificationCoveragePercent", 0)
                 val unmapped = mapping.optInt("unmappedSymbolCount", 0)
@@ -323,14 +324,15 @@ class MainActivity : Activity() {
                 val runtimeLinked = report.optJSONObject("apiTranslation")?.optBoolean("runtimeLibraryLinked", false) == true
                 val compatSummary = when {
                     runtimeLinked -> "libioscompat.so runtime linked; individual IPA callsites were not rewritten"
-                    compatStatus == "CURRENT_DEVICE_COMPAT_DLSYM" -> "$compatCount implemented time-API shim(s) verified; APK linking has not run"
-                    else -> "time-shim export check not run"
+                    compatStatus == "CURRENT_DEVICE_COMPAT_DLSYM" -> "$compatCount compiled compatibility implementation(s) verified; APK linking has not run"
+                    else -> "compatibility export check not run"
                 }
+                val compilerSummary = if (compilerRuntime > 0) " · compiler-rt/libunwind candidates: $compilerRuntime (not linked)" else ""
                 val generated = report.optJSONObject("hostConversion")?.optInt("generatedApiReplacements", 0) ?: 0
                 val stubs = mapping.optInt("compatStubHandlerCount", 0)
                 val stubSummary = if (stubs > 0) "$stubs compat stub handler(s) registered (unimplemented) · " else ""
-                val summary = if (total == 0) "API symbol triage: N/A (no imported symbols) · $compatSummary · generated replacements: $generated"
-                    else "Symbol triage: $triage% ($classified/$total) · direct NDK candidates: $coverage% ($mapped/$total) · $runtimeSummary · $compatSummary · $stubSummary$semantic semantic · $unmapped unmapped · generated replacements: $generated"
+                val summary = if (total == 0) "API symbol triage: N/A (no imported symbols) · $compatSummary$compilerSummary · generated replacements: $generated"
+                    else "Symbol triage: $triage% ($classified/$total) · direct NDK candidates: $coverage% ($mapped/$total) · $runtimeSummary · $compatSummary$compilerSummary · $stubSummary$semantic semantic · $unmapped unmapped · generated replacements: $generated"
                 text(summary, 11f, muted, parent = item)
             }
             report.optJSONObject("hostConversion")?.takeIf { it.optString("status") == "ATTACHED" }?.let { host ->
@@ -479,6 +481,7 @@ class MainActivity : Activity() {
             val coverage = mapping.optInt("candidateCoveragePercent", 0)
             val mappingCard = card()
             val semantic = mapping.optInt("semanticRewriteCandidates", 0)
+            val compilerRuntime = mapping.optInt("compilerRuntimeCandidateCount", 0)
             val classified = mapping.optInt("classifiedImportSymbols", 0)
             val triage = mapping.optInt("classificationCoveragePercent", 0)
             val unmapped = mapping.optInt("unmappedSymbolCount", 0)
@@ -492,17 +495,18 @@ class MainActivity : Activity() {
             val runtimeLinked = report.optJSONObject("apiTranslation")?.optBoolean("runtimeLibraryLinked", false) == true
             val compatSummary = when {
                 runtimeLinked -> " · libioscompat.so runtime linked; no individual IPA callsites rewritten"
-                compatStatus == "CURRENT_DEVICE_COMPAT_DLSYM" -> " · $implemented implemented time-API shim(s) verified; APK linking has not run"
+                compatStatus == "CURRENT_DEVICE_COMPAT_DLSYM" -> " · $implemented compiled compatibility implementation(s) verified; APK linking has not run"
                 else -> ""
             }
+            val compilerSummary = if (compilerRuntime > 0) " · compiler-rt/libunwind candidates (not linked): $compilerRuntime" else ""
             val stubs = mapping.optInt("compatStubHandlerCount", 0)
             val verifiedHandlers = mapping.optInt("compatVerifiedHandlerCount", 0)
             val stubSummary = buildString {
                 if (stubs > 0) append(" · compat stub handlers (unimplemented): $stubs")
                 if (verifiedHandlers > 0) append(" · compat verified handlers: $verifiedHandlers")
             }
-            val summary = if (total == 0) "Android API candidates: N/A (no imports)$compatSummary"
-                else "Symbol triage: $triage% ($classified/$total) · direct NDK name candidates: $coverage% ($mapped/$total)$runtimeSummary$compatSummary$stubSummary · semantic rewrites: $semantic · unmapped: $unmapped"
+            val summary = if (total == 0) "Android API candidates: N/A (no imports)$compatSummary$compilerSummary"
+                else "Symbol triage: $triage% ($classified/$total) · direct NDK name candidates: $coverage% ($mapped/$total)$runtimeSummary$compatSummary$compilerSummary$stubSummary · semantic rewrites: $semantic · unmapped: $unmapped"
             text(summary, 16f, textColor, true, mappingCard)
             val generated = report.optJSONObject("hostConversion")?.optInt("generatedApiReplacements", 0) ?: 0
             val triageNote = if (mapping.optString("classificationStatus") == "COMPLETE" && total > 0)
@@ -511,8 +515,8 @@ class MainActivity : Activity() {
             val mappingDisclosure = when {
                 generated > 0 -> "The on-device mapper generated no per-game code; an attached complete-game host conversion reports $generated generated API replacement(s). Runtime behavior is not device-tested. $triageNote"
                 runtimeLinked -> "$triageNote The packaged libioscompat.so runtime is linked through DT_NEEDED. The proven executable has no imports, so no individual IPA API callsite was rewritten or counted as a linked replacement. Other candidates are not implementations."
-                implemented > 0 -> "$triageNote $implemented imported time API(s) resolve to concrete libioscompat.so implementations on this device, but no IPA callsite was rewritten or linked into a game APK. Other candidates are not implementations."
-                else -> "$triageNote A narrow time-API implementation is built into the analyzer runtime, but no matching export was verified for this IPA; no per-game replacement was linked. Other candidates do not predict gameplay compatibility or stability."
+                implemented > 0 -> "$triageNote $implemented imported API symbol(s) resolve to concrete libioscompat.so compatibility exports on this device, but no IPA callsite was rewritten or linked into a game APK. Other candidates are not implementations."
+                else -> "$triageNote The analyzer runtime contains concrete compatibility exports, but no matching export was verified for this IPA; no per-game replacement was linked. Other candidates do not predict gameplay compatibility or stability."
             }
             text(mapping.optString("measure") + " $mappingDisclosure", 13f, muted, parent = mappingCard)
         }

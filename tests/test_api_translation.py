@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from radek.api_translation import generate
+from radek.api_translation import _SUPPORTED, generate
 
 
 class MachTimebaseInfo(ctypes.Structure):
@@ -40,7 +40,7 @@ class ApiTranslationTests(unittest.TestCase):
             ]
         }
 
-    def test_generates_only_reachable_implemented_time_api_wrappers(self):
+    def test_generates_only_reachable_compiled_compatibility_implementations(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             report = generate(
@@ -243,6 +243,15 @@ class ApiTranslationTests(unittest.TestCase):
             length.restype = ctypes.c_long
             self.assertEqual(length(ctypes.c_void_p(text)), 5)
             library.radek_compat_CFRelease(ctypes.c_void_p(text))
+
+    def test_android_mapper_table_matches_the_host_compiled_compatibility_table(self):
+        kotlin_path = Path(__file__).parents[1] / "app/src/main/java/dev/radek/conventor/AndroidApiMapper.kt"
+        source = kotlin_path.read_text(encoding="utf-8")
+        start = source.index("private val implementedApiReplacements = mapOf(")
+        end = source.index("\n    )", start)
+        actual = dict(re.findall(r'"([^"]+)"\s+to\s+"([^"]+)"', source[start:end]))
+        expected = {symbol: implementation for symbol, (implementation, _macro) in _SUPPORTED.items()}
+        self.assertEqual(expected, actual)
 
     def test_shim_table_matches_the_native_header_macro(self):
         """The Python table must equal RADEK_IOS_SHIM_TABLE in the C++ header.

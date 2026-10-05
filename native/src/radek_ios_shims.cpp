@@ -1,7 +1,7 @@
 #include "radek_ios_shims.h"
 
 /*
- * Broad, host-tested iOS/Darwin compatibility shims.
+ * Bounded, host-tested C/POSIX/CoreFoundation compatibility shims.
  *
  * Every function in this file is a real implementation with a tested body
  * (native/tests/radek_ios_shims.cpp). None of them is a stub. Being registered
@@ -32,8 +32,16 @@
 
 #ifdef RADEK_CF_RUNTIME
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
+#include <deque>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -43,6 +51,21 @@
  * helpers are `static inline` so a build that selects no CoreFoundation shim
  * never trips an unused-function warning.
  */
+struct RadekCFRunLoopTask {
+    std::string mode;
+    radek_CFRunLoopPerformCallback callback = nullptr;
+    void *context = nullptr;
+};
+
+struct RadekCFRunLoopState {
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::deque<RadekCFRunLoopTask> tasks;
+    bool stopRequested = false;
+    bool wakeRequested = false;
+    unsigned runDepth = 0;
+};
+
 enum class RadekCFKind : uint32_t {
     Allocator = 1,
     String = 2,
@@ -51,6 +74,7 @@ enum class RadekCFKind : uint32_t {
     Dictionary = 5,
     Number = 6,
     Date = 7,
+    RunLoop = 8,
 };
 
 struct radek_CFRuntime {
@@ -64,12 +88,16 @@ struct radek_CFRuntime {
     std::vector<std::pair<const radek_CFRuntime *, const radek_CFRuntime *>> pairs;
     double number = 0.0;        // Number
     double absoluteTime = 0.0;  // Date
+    std::unique_ptr<RadekCFRunLoopState> runLoop; // RunLoop
 
     ~radek_CFRuntime();
 };
 
 static inline void radekCfReleaseInternal(const radek_CFRuntime *object);
 static inline void radekCfRetainInternal(const radek_CFRuntime *object);
+
+/* The C++ runtime initializes this during library startup on its loading thread. */
+static const std::thread::id g_RadekCFMainThreadId = std::this_thread::get_id();
 
 radek_CFRuntime::~radek_CFRuntime() {
     magic = 0;
@@ -108,13 +136,118 @@ radek_CFRuntime *radekCfDefaultAllocator() {
     return &allocator;
 }
 
+radek_CFRuntime *radekCfMainRunLoop();
+
+radek_CFRuntime *radekCfCurrentRunLoop() {
+    if (std::this_thread::get_id() == g_RadekCFMainThreadId) return radekCfMainRunLoop();
+    static thread_local radek_CFRuntime loop;
+    static thread_local bool initialized = false;
+    if (!initialized) {
+        loop.kind = RadekCFKind::RunLoop;
+        loop.retainCount.store(1);
+        loop.runLoop = std::make_unique<RadekCFRunLoopState>();
+        initialized = true;
+    }
+    return &loop;
+}
+
+radek_CFRuntime *radekCfMainRunLoop() {
+    static radek_CFRuntime loop;
+    static const bool initialized = [] {
+        loop.kind = RadekCFKind::RunLoop;
+        loop.retainCount.store(1);
+        loop.runLoop = std::make_unique<RadekCFRunLoopState>();
+        return true;
+    }();
+    (void)initialized;
+    return &loop;
+}
+
+static inline RadekCFRunLoopState *radekCfRunLoopState(radek_CFRunLoopRef reference) {
+    auto *object = radekCfMutable(const_cast<radek_CFRuntime *>(reference));
+    return object != nullptr && object->kind == RadekCFKind::RunLoop ? object->runLoop.get() : nullptr;
+}
+
+static inline bool radekCfRunLoopMode(radek_CFStringRef reference, std::string &mode) {
+    if (reference == nullptr) {
+        mode.clear();
+        return true;
+    }
+    const radek_CFRuntime *object = radekCfConst(reference);
+    if (!radekCfIsKind(object, RadekCFKind::String)) return false;
+    mode = object->text;
+    return true;
+}
+
+static inline bool radekCfRunLoopHasTask(const RadekCFRunLoopState &state, const std::string &mode) {
+    return std::any_of(state.tasks.begin(), state.tasks.end(), [&mode](const RadekCFRunLoopTask &task) {
+        return task.mode.empty() || mode.empty() || task.mode == mode;
+    });
+}
+
+static inline radek_CFRunLoopRunResult radekCfRunLoopRunModeImpl(RadekCFRunLoopState &state,
+                                                            const std::string &mode,
+                                                            double seconds,
+                                                            bool returnAfterSourceHandled,
+                                                            bool forceInfinite) {
+    using Clock = std::chrono::steady_clock;
+    const bool infinite = forceInfinite || !std::isfinite(seconds) || seconds > 31536000.0;
+    const double timeoutSeconds = std::max(0.0, seconds);
+    const auto deadline = infinite
+                              ? Clock::time_point::max()
+                              : Clock::now() + std::chrono::duration_cast<Clock::duration>(
+                                                   std::chrono::duration<double>(timeoutSeconds));
+    std::unique_lock<std::mutex> lock(state.mutex);
+    ++state.runDepth;
+    const auto finish = [&state](radek_CFRunLoopRunResult result) {
+        --state.runDepth;
+        return result;
+    };
+
+    while (true) {
+        if (state.stopRequested) {
+            state.stopRequested = false;
+            state.wakeRequested = false;
+            return finish(RADEK_KCFRUNLOOPRUNSTOPPED);
+        }
+
+        auto task = std::find_if(state.tasks.begin(), state.tasks.end(), [&mode](const RadekCFRunLoopTask &entry) {
+            return entry.mode.empty() || mode.empty() || entry.mode == mode;
+        });
+        if (task != state.tasks.end()) {
+            const RadekCFRunLoopTask ready = *task;
+            state.tasks.erase(task);
+            lock.unlock();
+            try {
+                ready.callback(ready.context);
+            } catch (...) {
+                // A callback cannot unwind through this C ABI boundary.
+            }
+            lock.lock();
+            if (returnAfterSourceHandled) return finish(RADEK_KCFRUNLOOPRUNHANDLEDSOURCE);
+            continue;
+        }
+
+        state.wakeRequested = false;
+        if (!infinite && seconds == 0.0) return finish(RADEK_KCFRUNLOOPRUNTIMEDOUT);
+        const auto ready = [&state, &mode] {
+            return state.stopRequested || state.wakeRequested || radekCfRunLoopHasTask(state, mode);
+        };
+        if (infinite) {
+            state.condition.wait(lock, ready);
+        } else if (!state.condition.wait_until(lock, deadline, ready)) {
+            return finish(RADEK_KCFRUNLOOPRUNTIMEDOUT);
+        }
+    }
+}
+
 static inline void radekCfRetainInternal(const radek_CFRuntime *object) {
-    if (object == nullptr || object->kind == RadekCFKind::Allocator) return;
+    if (object == nullptr || object->kind == RadekCFKind::Allocator || object->kind == RadekCFKind::RunLoop) return;
     const_cast<radek_CFRuntime *>(object)->retainCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 static inline void radekCfReleaseInternal(const radek_CFRuntime *object) {
-    if (object == nullptr || object->kind == RadekCFKind::Allocator) return;
+    if (object == nullptr || object->kind == RadekCFKind::Allocator || object->kind == RadekCFKind::RunLoop) return;
     auto *mutableObject = const_cast<radek_CFRuntime *>(object);
     if (mutableObject->retainCount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
         delete mutableObject;
@@ -491,6 +624,80 @@ extern "C" radek_CFGregorianDate radek_compat_CFAbsoluteTimeGetGregorianDate(rad
     result.minute = static_cast<int8_t>(broken.tm_min);
     result.second = static_cast<double>(broken.tm_sec) + (unixSeconds - static_cast<double>(whole));
     return result;
+}
+#endif
+
+#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_radek_compat_CFRunLoopGetCurrent)
+extern "C" radek_CFRunLoopRef radek_compat_CFRunLoopGetCurrent(void) {
+    return radekCfCurrentRunLoop();
+}
+#endif
+
+#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_radek_compat_CFRunLoopGetMain)
+extern "C" radek_CFRunLoopRef radek_compat_CFRunLoopGetMain(void) {
+    return radekCfMainRunLoop();
+}
+#endif
+
+#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_radek_compat_CFRunLoopRun)
+extern "C" void radek_compat_CFRunLoopRun(void) {
+    auto *loop = radekCfCurrentRunLoop();
+    radekCfRunLoopRunModeImpl(*loop->runLoop, std::string(), -1.0, false, true);
+}
+#endif
+
+#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_radek_compat_CFRunLoopRunInMode)
+extern "C" radek_CFRunLoopRunResult radek_compat_CFRunLoopRunInMode(
+    radek_CFStringRef mode, radek_CFTimeInterval seconds, radek_Boolean returnAfterSourceHandled) {
+    std::string modeValue;
+    if (!radekCfRunLoopMode(mode, modeValue)) return RADEK_KCFRUNLOOPRUNTIMEDOUT;
+    auto *loop = radekCfCurrentRunLoop();
+    return radekCfRunLoopRunModeImpl(*loop->runLoop, modeValue, seconds,
+                                     returnAfterSourceHandled != 0, false);
+}
+#endif
+
+#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_radek_compat_CFRunLoopStop)
+extern "C" void radek_compat_CFRunLoopStop(radek_CFRunLoopRef runLoop) {
+    RadekCFRunLoopState *state = radekCfRunLoopState(runLoop);
+    if (state == nullptr) return;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->stopRequested = true;
+        state->wakeRequested = true;
+    }
+    state->condition.notify_all();
+}
+#endif
+
+#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_radek_compat_CFRunLoopWakeUp)
+extern "C" void radek_compat_CFRunLoopWakeUp(radek_CFRunLoopRef runLoop) {
+    RadekCFRunLoopState *state = radekCfRunLoopState(runLoop);
+    if (state == nullptr) return;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->wakeRequested = true;
+    }
+    state->condition.notify_all();
+}
+#endif
+
+#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_NEEDS_CF_RUNTIME)
+extern "C" radek_Boolean radek_compat_CFRunLoopPerform(
+    radek_CFRunLoopRef runLoop, radek_CFStringRef mode,
+    radek_CFRunLoopPerformCallback callback, void *context) {
+    if (callback == nullptr) return 0;
+    RadekCFRunLoopState *state = radekCfRunLoopState(runLoop);
+    if (state == nullptr) return 0;
+    std::string modeValue;
+    if (!radekCfRunLoopMode(mode, modeValue)) return 0;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->tasks.push_back(RadekCFRunLoopTask{std::move(modeValue), callback, context});
+        state->wakeRequested = true;
+    }
+    state->condition.notify_one();
+    return 1;
 }
 #endif
 

@@ -1,4 +1,4 @@
-// Host tests for the broad iOS/Darwin compatibility shims.
+// Host tests for the bounded C/POSIX/CoreFoundation compatibility shims.
 //
 // Everything exercised here is a real implementation body, not a resolution
 // stub. The test is also run under ASan/UBSan, so it must stay leak-free:
@@ -188,6 +188,72 @@ void testPthread() {
     CHECK(radek_compat_pthread_mutex_destroy(&mutex) == 0);
 }
 
+struct RunLoopCall {
+    std::atomic<unsigned> count{0};
+    radek_CFRunLoopRef loop = nullptr;
+    bool stop = false;
+};
+
+void incrementRunLoopCall(void *opaque) {
+    auto *call = static_cast<RunLoopCall *>(opaque);
+    call->count.fetch_add(1, std::memory_order_relaxed);
+    if (call->stop) radek_compat_CFRunLoopStop(call->loop);
+}
+
+void testCoreFoundationRunLoop() {
+    const radek_CFRunLoopRef current = radek_compat_CFRunLoopGetCurrent();
+    CHECK(current != nullptr);
+    CHECK(current == radek_compat_CFRunLoopGetCurrent());
+    CHECK(current == radek_compat_CFRunLoopGetMain());
+    CHECK(radek_compat_CFRunLoopGetMain() == radek_compat_CFRunLoopGetMain());
+    CHECK(radek_compat_CFRetain(current) == current);
+    radek_compat_CFRelease(current); // current/main loops have process/thread lifetime
+
+    const radek_CFAllocatorRef allocator = radek_compat_CFAllocatorGetDefault();
+    const radek_CFStringRef defaultMode =
+        radek_compat_CFStringCreateWithCString(allocator, "default", RADEK_KCFSTRINGENCODINGUTF8);
+    const radek_CFStringRef otherMode =
+        radek_compat_CFStringCreateWithCString(allocator, "other", RADEK_KCFSTRINGENCODINGUTF8);
+    CHECK(defaultMode != nullptr && otherMode != nullptr);
+
+    RunLoopCall call;
+    call.loop = current;
+    CHECK(radek_compat_CFRunLoopPerform(current, defaultMode, incrementRunLoopCall, &call) == 1);
+    CHECK(radek_compat_CFRunLoopRunInMode(defaultMode, 1.0, 1) == RADEK_KCFRUNLOOPRUNHANDLEDSOURCE);
+    CHECK(call.count.load(std::memory_order_relaxed) == 1);
+
+    CHECK(radek_compat_CFRunLoopPerform(current, otherMode, incrementRunLoopCall, &call) == 1);
+    CHECK(radek_compat_CFRunLoopRunInMode(defaultMode, 0.005, 0) == RADEK_KCFRUNLOOPRUNTIMEDOUT);
+    CHECK(call.count.load(std::memory_order_relaxed) == 1);
+    CHECK(radek_compat_CFRunLoopRunInMode(otherMode, 1.0, 1) == RADEK_KCFRUNLOOPRUNHANDLEDSOURCE);
+    CHECK(call.count.load(std::memory_order_relaxed) == 2);
+
+    std::atomic<radek_Boolean> queued{0};
+    std::thread producer([&] {
+        queued.store(radek_compat_CFRunLoopPerform(current, defaultMode, incrementRunLoopCall, &call),
+                     std::memory_order_release);
+    });
+    CHECK(radek_compat_CFRunLoopRunInMode(defaultMode, 1.0, 1) == RADEK_KCFRUNLOOPRUNHANDLEDSOURCE);
+    producer.join();
+    CHECK(queued.load(std::memory_order_acquire) == 1);
+    CHECK(call.count.load(std::memory_order_relaxed) == 3);
+
+    call.stop = true;
+    CHECK(radek_compat_CFRunLoopPerform(current, defaultMode, incrementRunLoopCall, &call) == 1);
+    CHECK(radek_compat_CFRunLoopRunInMode(defaultMode, 1.0, 0) == RADEK_KCFRUNLOOPRUNSTOPPED);
+    CHECK(call.count.load(std::memory_order_relaxed) == 4);
+    radek_compat_CFRunLoopWakeUp(current);
+    std::thread stopper([current] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        radek_compat_CFRunLoopStop(current);
+    });
+    radek_compat_CFRunLoopRun();
+    stopper.join();
+
+    radek_compat_CFRelease(defaultMode);
+    radek_compat_CFRelease(otherMode);
+}
+
 void testCoreFoundationObjects() {
     radek_CFAllocatorRef allocator = radek_compat_CFAllocatorGetDefault();
     CHECK(allocator != nullptr);
@@ -313,6 +379,7 @@ int main() {
     testTime();
     testPthread();
     testCoreFoundationObjects();
-    std::cout << "Broad iOS compatibility shims passed\n";
+    testCoreFoundationRunLoop();
+    std::cout << "Bounded C/POSIX/CoreFoundation compatibility shims passed\n";
     return 0;
 }

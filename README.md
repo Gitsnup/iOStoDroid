@@ -2,7 +2,7 @@
 
 An **offline IPA inspection and bounded native-reconstruction workbench**, not an iOS emulator or a general game converter. It includes an Android importer/analyzer, a C++ Mach-O parser, and Python reconstruction tools.
 
-> **One bounded subset converts for real; everything else stays honestly unbuilt.** When an IPA's whole executable is statically proven to be exactly one closed-integer ARM entry routine (MOV-immediate, MOVK, register MOV, immediate ADD/SUB, RET) with no imports, dependencies, fixups or runtime metadata, both the host CLI and the on-device app convert it end to end into a signed, installable APK (`complete-game-v1`) — on Android this happens automatically during import, no extra button needed: the translated entry is packaged as `libconverted.so` and runs through JNI when the launcher opens, showing the message recovered from the IPA. See `tests/data/hello-test.ipa`, which converts to an APK that displays `hello test succesfull`. Outside that proven subset nothing is translated: the host can still lower the entry routine into a standalone shared object and report compatibility registries, and on the `convert` path it packages those artifacts into a signed, explicitly labelled **experimental shell** APK (`experimental-shell-v1`) that states on screen that no game code is translated. The Android app can separately build an explicitly labelled, signed, installable preview shell for unconvertible IPAs; it contains no translated game code and cannot run the IPA's game. Device execution and gameplay of bounded conversions are never claimed as tested.
+> **One bounded subset converts for real; everything else stays honestly unbuilt.** When an IPA's whole executable is statically proven to be exactly one closed-integer ARM entry routine (MOV-immediate, MOVK, register MOV, immediate ADD/SUB, RET) with no imports, dependencies, fixups or runtime metadata, both the host CLI and the on-device app convert it end to end into a signed, installable APK (`complete-game-v1`) — on Android this happens automatically during import, no extra button needed: the translated entry is packaged as `libconverted.so` and runs through JNI when the launcher opens, showing the message recovered from the IPA. The three-instruction `tests/data/hello-test.ipa` displays `hello test succesfull`; `tests/data/simple.ipa` adds a deterministic 128-operation ARM64 routine and also converts through the same path. Outside that proven subset nothing is translated: the host can still lower the entry routine into a standalone shared object and report compatibility registries, and on the `convert` path it packages those artifacts into a signed, explicitly labelled **experimental shell** APK (`experimental-shell-v1`) that states on screen that no game code is translated. The Android app can separately build an explicitly labelled, signed, installable preview shell for unconvertible IPAs; it contains no translated game code and cannot run the IPA's game. Device execution and gameplay of bounded conversions are never claimed as tested.
 
 ## Offline reconstruction
 
@@ -19,7 +19,7 @@ Authorized imports are analyzed before compatibility is assessed:
 
 Results are written as `reconstruction.json` and `reconstruction.md` beside `report.json`.
 Analysis also writes an `ioscompat/` directory containing the generated compatibility-registry
-source (`libioscompat.cpp`), the copied time-shim header and a `registry.json` classification of
+source (`libioscompat.cpp`), copied compatibility headers and a `registry.json` classification of
 every observed Darwin import as `verified` (tested implementation) or `stubbed-unimplemented`
 (explicit resolution handler). Stubs record invocations and return a documented safe default;
 they are resolution targets for a future linker, not API implementations, and the report counts
@@ -53,16 +53,15 @@ pointer slots when statically readable.
 ## APK output policy
 
 - CI builds **only the RadekiOSConventor importer/analyzer APK** (`RadekiOSConventor-debug.apk`),
-  plus the hello-test bounded conversion used to exercise the complete-game pipeline.
+  plus the hello-test and longer simple-test bounded conversions used to exercise the complete-game pipeline.
 - Importing an IPA runs analysis and — when the executable passes the bounded conversion proof —
   automatically finishes the conversion into a signed, installable APK; no separate action is
   needed for proven inputs. Everything outside the proven subset creates nothing on import; there,
   the red **Force convert to .apk** action builds a separately named, signed and installable
-  preview shell branded with the IPA app name, recovered icon and static-analysis statistics. The
-  preview shell contains no iOS executable, translated game code or gameplay, and its launcher
-  screen carries no conversion claim either way; the honest record lives in the artifact's
-  machine-readable metadata and in the app's own library entry. Preview-shell creation does not
-  count as code-translation or complete-game progress.
+  preview shell using the IPA app name and recovered icon where available. The preview shell
+  contains no iOS executable, translated game code or gameplay; its launcher visibly says that the
+  preview started and no translated executable is included. Preview-shell creation does not count
+  as code-translation or complete-game progress.
 - A host APK can be attached only if its metadata declares the `complete-game-v1` contract and
   passes source-identity, complete reachable-code/API/resource, ABI, packaging and provenance
   checks. Preview-shell APK metadata and provider paths are separate; a preview shell can never
@@ -86,26 +85,31 @@ future conversion targeting; they do not imply that an APK was generated.
 
 The Android mapper reports same-named NDK symbols and semantic rewrite targets (for example,
 `UIView` → `android.view.View`) as **candidates only**. A name resolving at runtime does not prove
-Darwin/Android ABI compatibility or link the imported code. Separately, `libioscompat.so` contains
-four tested C ABI shims: `_CFAbsoluteTimeGetCurrent`, `_CACurrentMediaTime`, `_mach_absolute_time`,
-and `_mach_timebase_info`. The host emits their C++ implementation source only when a reconstructed
-call graph establishes a path from the selected entry to one of those imports; the generated shim
-source is not linked into the host-translated entry. On-device `dlsym` checks can verify that
-the compiled shim exports are present, but do not rewrite IPA callsites. The bounded on-device APK
-also packages `libioscompat.so` and declares it through `DT_NEEDED`; because that converter accepts
-only a zero-import executable, this runtime dependency does not claim any individual API callsite
-was rewritten or linked.
+Darwin/Android ABI compatibility or link the imported code. `libioscompat.so` contains host-tested
+C/time/POSIX compatibility functions and a limited CoreFoundation C object/collection/run-loop
+subset, alongside the four Darwin time APIs (`_CFAbsoluteTimeGetCurrent`, `_CACurrentMediaTime`,
+`_mach_absolute_time`, and `_mach_timebase_info`). Host source generation selects implementations
+only when reconstructed call paths reach supported imports. `dlopen`/`dlsym` checks can verify
+runtime exports, but do not rewrite IPA callsites or prove the imported caller ABI. The bounded
+on-device APK packages `libioscompat.so` through `DT_NEEDED`; its accepted zero-import executable
+still claims no per-callsite API replacement.
 
-`libioscompat.so` also carries a dynamic symbol-resolution registry: the four verified shims plus a
-pool of individually counted stub trampolines. Symbols that would otherwise stay unmapped can be
-registered at runtime (`radek_compat_register_stub` / `NativeBridge.compatRegisterStub`) and then
-resolve to an explicit stub handler instead of nothing. The on-device triage reports those as
+A native C frame-callback service is driven by Android `Choreographer` in the bounded launcher's
+lifecycle. It is not the Objective-C `CADisplayLink` class/selector ABI, and no game callsite uses
+it yet. The `libgcc_s.1.dylib` mapping is only triage: Android has no drop-in `libgcc_s.so`; compiler
+helpers and unwind/personality symbols need NDK compiler-rt/libunwind toolchain integration and ABI
+validation before a link can be claimed.
+
+`libioscompat.so` also carries a dynamic symbol-resolution registry: individually verified
+implementation entries plus a pool of stub trampolines. Symbols that would otherwise stay unmapped
+can be registered at runtime (`radek_compat_register_stub` / `NativeBridge.compatRegisterStub`) and
+then resolve to an explicit stub handler instead of nothing. The on-device triage reports those as
 `compat stub handler(s) registered (unimplemented)` — a resolution category that is never counted
 toward verified implementations or generated translations. The host likewise generates a per-IPA
 registry source in which every observed import is classified exactly as `verified` or
 `stubbed-unimplemented`. Symbol-triage percentages describe categorization, not translation
-coverage. UIKit, the general Foundation/CoreFoundation object ABI, Swift, Objective-C dispatch,
-graphics, audio, input, game lifecycle and general resource APIs remain unsupported when required.
+coverage. The full Foundation/CoreFoundation and Objective-C ABIs, UIKit, graphics, audio, input,
+game lifecycle and general resource APIs remain unsupported when required.
 
 ## Build and test
 
@@ -133,6 +137,16 @@ python3 -m radek convert tests/data/sample-leaf.ipa --authorized --output .local
 # Android toolchain is installed — experimental-shell.apk. State is BLOCKED: no game APK.
 ```
 
+A longer end-to-end regression fixture is also committed. It contains a deterministic 128-operation
+ARM64 entry (over eighty times the hello fixture's code bytes), with no imports or unresolved
+runtime dependencies, and is inside the same narrow translation subset:
+
+```sh
+python3 tools/make_simple_ipa.py  # deterministically regenerates tests/data/simple.ipa
+python3 -m radek convert tests/data/simple.ipa --authorized --output .local/simple-conversion
+# With an Android SDK/NDK toolchain, this reaches READY and writes simple.apk.
+```
+
 For other synthetic Mach-O inputs, `tools/make_fixture.py` produces variants:
 
 ```sh
@@ -150,10 +164,11 @@ python3 -m radek analyze authorized.ipa --authorized --output workspace/analysis
 
 A new output directory is required. Reports and logs persist; temporary extraction workspaces are
 removed. `analyze` returns `PARTIAL` after a successful inspection and may write the isolated code
-artifacts above. `convert` returns `BLOCKED` when only this subset can be translated; it retains the
-native artifact, may build the labelled experimental shell APK around it, but refuses to wrap it as
-an incomplete game APK. `READY` is reserved for a future complete conversion that passes static APK
-validation.
+artifacts above. On `convert`, inputs outside the bounded complete-game subset remain `BLOCKED` and
+may produce only a separately labelled experimental shell. Inputs inside the subset proceed through
+native linking, launcher/APK packaging and static validation: with an Android toolchain they reach
+`READY` and emit a signed `complete-game-v1` APK; without one they remain blocked with an explicit
+missing-toolchain report. Device execution and gameplay are not claimed as tested.
 
 ## GitHub APK builds
 

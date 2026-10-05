@@ -1,6 +1,7 @@
 package dev.radek.conventor
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -23,6 +24,20 @@ class PlaceholderTemplateAssetTest {
         assertEquals(patchedManifest.size.toLong(), u32(patchedManifest, 4))
         assertEquals(resources.size, patchedResources.size)
         assertTrue(patchedManifest.isNotEmpty())
+    }
+
+    @Test fun previewLauncherShowsItsStartStateWithoutConverterBranding() {
+        val assets = RuntimeEnvironment.getApplication().assets
+        val dexNames = assets.open("placeholder-template/template-dex-entries.txt").use { it.readBytes() }
+            .toString(Charsets.UTF_8).lineSequence().map { it.substringBefore(':').trim() }
+            .filter { it == "classes.dex" || Regex("""classes[0-9]+\.dex""").matches(it) }
+            .toList()
+        val dexText = dexNames.joinToString("") { name ->
+            assets.open("placeholder-template/$name").use { String(it.readBytes(), Charsets.ISO_8859_1) }
+        }
+        assertTrue(dexText.contains("Preview shell started"))
+        assertTrue(dexText.contains("No translated iOS executable is included"))
+        assertFalse(dexText.contains("RadekiOSConventor"))
     }
 
     @Test fun convertedTemplateBundlesAPatchableManifestResourceTableAndLauncherDex() {
@@ -61,6 +76,11 @@ class PlaceholderTemplateAssetTest {
             "launcher class descriptor missing from $dexNames",
             dexText.contains("Ldev/radek/generated/MainActivity;"),
         )
+        assertTrue(
+            "Choreographer bridge class missing from $dexNames",
+            dexText.contains("Ldev/radek/generated/FrameClockBridge;"),
+        )
+        assertFalse("generated launcher should not display the converter brand", dexText.contains("RadekiOSConventor"))
         assertTrue(
             "icon entry path is invalid: '$iconPath'",
             iconPath.startsWith("res/") && iconPath.endsWith("generated_converted_icon.png"),

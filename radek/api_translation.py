@@ -1,7 +1,7 @@
-"""Generate a tiny, explicit set of Darwin time-API replacement sources.
+"""Generate an explicit subset of compiled Darwin C compatibility sources.
 
-These wrappers are implemented and host-tested in ``native/src``. This module
-copies only wrappers whose callers are statically reachable from the selected
+These implementations are host-tested in ``native/src``. This module copies
+only implementations whose callers are statically reachable from the selected
 Mach-O entry through reconstructed internal calls. It does not rewrite call
 sites, prove dynamic Objective-C dispatch, link the source into the translated
 entry library, or claim complete APK/game coverage.
@@ -56,6 +56,12 @@ _SUPPORTED = {
     "_CFDateGetAbsoluteTime": ("radek_compat_CFDateGetAbsoluteTime", "RADEK_API_radek_compat_CFDateGetAbsoluteTime"),
     "_CFDateGetTimeIntervalSinceDate": ("radek_compat_CFDateGetTimeIntervalSinceDate", "RADEK_API_radek_compat_CFDateGetTimeIntervalSinceDate"),
     "_CFAbsoluteTimeGetGregorianDate": ("radek_compat_CFAbsoluteTimeGetGregorianDate", "RADEK_API_radek_compat_CFAbsoluteTimeGetGregorianDate"),
+    "_CFRunLoopGetCurrent": ("radek_compat_CFRunLoopGetCurrent", "RADEK_API_radek_compat_CFRunLoopGetCurrent"),
+    "_CFRunLoopGetMain": ("radek_compat_CFRunLoopGetMain", "RADEK_API_radek_compat_CFRunLoopGetMain"),
+    "_CFRunLoopRun": ("radek_compat_CFRunLoopRun", "RADEK_API_radek_compat_CFRunLoopRun"),
+    "_CFRunLoopRunInMode": ("radek_compat_CFRunLoopRunInMode", "RADEK_API_radek_compat_CFRunLoopRunInMode"),
+    "_CFRunLoopStop": ("radek_compat_CFRunLoopStop", "RADEK_API_radek_compat_CFRunLoopStop"),
+    "_CFRunLoopWakeUp": ("radek_compat_CFRunLoopWakeUp", "RADEK_API_radek_compat_CFRunLoopWakeUp"),
     "_malloc": ("radek_compat_malloc", "RADEK_API_radek_compat_malloc"),
     "_calloc": ("radek_compat_calloc", "RADEK_API_radek_compat_calloc"),
     "_realloc": ("radek_compat_realloc", "RADEK_API_radek_compat_realloc"),
@@ -174,6 +180,12 @@ _FAMILY = {
     "_CFDateGetAbsoluteTime": "cf",
     "_CFDateGetTimeIntervalSinceDate": "cf",
     "_CFAbsoluteTimeGetGregorianDate": "cf",
+    "_CFRunLoopGetCurrent": "cf",
+    "_CFRunLoopGetMain": "cf",
+    "_CFRunLoopRun": "cf",
+    "_CFRunLoopRunInMode": "cf",
+    "_CFRunLoopStop": "cf",
+    "_CFRunLoopWakeUp": "cf",
     "_malloc": "libc",
     "_calloc": "libc",
     "_realloc": "libc",
@@ -353,8 +365,8 @@ def generate(reconstruction: dict, output: Path) -> dict:
             "codeGenerated": False,
             "completeGameConversion": False,
             "message": (
-                "No reconstructed call from the selected Mach-O entry reached the small implemented "
-                "time-API subset; name matches and semantic targets remain analysis-only."
+                "No reconstructed call from the selected Mach-O entry reached the compiled compatibility subset; "
+                "name matches and semantic targets remain analysis-only."
             ),
             "replacements": [],
         }
@@ -418,7 +430,7 @@ def generate(reconstruction: dict, output: Path) -> dict:
         ],
         "completeGameConversion": False,
         "message": (
-            f"Generated {len(replacements)} real time-API replacement implementation(s) from entry-reachable "
+            f"Generated {len(replacements)} compiled compatibility implementation(s) from entry-reachable "
             "imports. The sources are not linked into the translated entry library or an APK."
         ),
         "replacements": replacements,

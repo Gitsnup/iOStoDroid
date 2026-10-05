@@ -27,6 +27,7 @@ internal class ConvertedApkBuilder(private val context: Context) {
         private const val MAX_RESOURCE_TOTAL_BYTES = 1024L * 1024 * 1024
         private const val MAX_RESOURCE_FILES = 4096
         private const val ENTRY_CLASS = "dev.radek.generated.MainActivity"
+        private const val FRAME_CLOCK_DESCRIPTOR = "Ldev/radek/generated/FrameClockBridge;"
         private const val JNI_SYMBOL = "Java_dev_radek_generated_MainActivity_runNative"
         private const val ABI = CompatibilityRuntime.ABI
         private const val BACKEND = "radek-device-bounded-v1"
@@ -120,7 +121,7 @@ internal class ConvertedApkBuilder(private val context: Context) {
                     if (candidate.length in 3..512 && candidate.length > launchMessage.length) launchMessage = candidate
                 }
             }
-            if (launchMessage.isEmpty()) launchMessage = "Converted by RadekiOSConventor"
+            if (launchMessage.isEmpty()) launchMessage = "Native entry started."
 
             setProgress(36, "CONVERTING", "Collecting and hashing the bundle resources")
             val inventory = JSONArray()
@@ -192,9 +193,13 @@ internal class ConvertedApkBuilder(private val context: Context) {
                 validPng(templateFallbackIcon)) {
                 "converted template is missing a valid launcher DEX or fallback icon"
             }
-            require(templateDexes.any { (_, bytes) ->
-                String(bytes, Charsets.ISO_8859_1).contains("Ldev/radek/generated/MainActivity;")
-            }) { "converted template DEX files do not define the launcher entry class" }
+            val templateDexText = templateDexes.joinToString("") { (_, bytes) -> String(bytes, Charsets.ISO_8859_1) }
+            require(templateDexText.contains("Ldev/radek/generated/MainActivity;")) {
+                "converted template DEX files do not define the launcher entry class"
+            }
+            require(templateDexText.contains(FRAME_CLOCK_DESCRIPTOR)) {
+                "converted template DEX files do not define the Choreographer frame-clock bridge"
+            }
             require(iconEntryPath.startsWith("res/") &&
                 iconEntryPath.substringAfterLast('/') == "generated_converted_icon.png") {
                 "converted template icon resource path is invalid"

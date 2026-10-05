@@ -88,6 +88,15 @@ typedef struct radek_CFRuntime *radek_CFMutableDictionaryRef;
 typedef const struct radek_CFRuntime *radek_CFNumberRef;
 typedef const struct radek_CFRuntime *radek_CFDateRef;
 typedef const struct radek_CFRuntime *radek_CFTimeZoneRef;
+typedef const struct radek_CFRuntime *radek_CFRunLoopRef;
+typedef int32_t radek_CFRunLoopRunResult;
+typedef void (*radek_CFRunLoopPerformCallback)(void *context);
+
+/* CFRunLoopRunInMode result values from CoreFoundation/CFRunLoop.h. */
+#define RADEK_KCFRUNLOOPRUNFINISHED ((uint32_t)1)
+#define RADEK_KCFRUNLOOPRUNSTOPPED ((uint32_t)2)
+#define RADEK_KCFRUNLOOPRUNTIMEDOUT ((uint32_t)3)
+#define RADEK_KCFRUNLOOPRUNHANDLEDSOURCE ((uint32_t)4)
 
 /*
  * Collection callbacks are accepted and ignored: the collections implemented
@@ -173,6 +182,26 @@ radek_CFTimeInterval radek_compat_CFDateGetTimeIntervalSinceDate(radek_CFDateRef
                                                                  radek_CFDateRef other);
 radek_CFGregorianDate radek_compat_CFAbsoluteTimeGetGregorianDate(radek_CFAbsoluteTime absoluteTime,
                                                                   radek_CFTimeZoneRef timeZone);
+
+/*
+ * CoreFoundation run-loop subset. GetCurrent/GetMain and the Run/RunInMode/
+ * Stop/WakeUp exports have the Darwin C ABI. Perform is an explicit C callback
+ * helper for runtimes that cannot carry Apple Blocks objects across the ABI.
+ * This queue is thread-safe but is not a drop-in implementation of every Apple
+ * run-loop source, observer, timer, or Objective-C block contract.
+ */
+radek_CFRunLoopRef radek_compat_CFRunLoopGetCurrent(void);
+radek_CFRunLoopRef radek_compat_CFRunLoopGetMain(void);
+void radek_compat_CFRunLoopRun(void);
+radek_CFRunLoopRunResult radek_compat_CFRunLoopRunInMode(radek_CFStringRef mode,
+                                                          radek_CFTimeInterval seconds,
+                                                          radek_Boolean returnAfterSourceHandled);
+void radek_compat_CFRunLoopStop(radek_CFRunLoopRef runLoop);
+void radek_compat_CFRunLoopWakeUp(radek_CFRunLoopRef runLoop);
+radek_Boolean radek_compat_CFRunLoopPerform(radek_CFRunLoopRef runLoop,
+                                             radek_CFStringRef mode,
+                                             radek_CFRunLoopPerformCallback callback,
+                                             void *context);
 
 /* --- libc / POSIX forwards (identical C ABI on bionic) -------------------- */
 
@@ -311,6 +340,12 @@ pthread_t radek_compat_pthread_self(void);
     X("_CFDateGetAbsoluteTime", radek_compat_CFDateGetAbsoluteTime)                    \
     X("_CFDateGetTimeIntervalSinceDate", radek_compat_CFDateGetTimeIntervalSinceDate)  \
     X("_CFAbsoluteTimeGetGregorianDate", radek_compat_CFAbsoluteTimeGetGregorianDate)  \
+    X("_CFRunLoopGetCurrent", radek_compat_CFRunLoopGetCurrent)                          \
+    X("_CFRunLoopGetMain", radek_compat_CFRunLoopGetMain)                                \
+    X("_CFRunLoopRun", radek_compat_CFRunLoopRun)                                        \
+    X("_CFRunLoopRunInMode", radek_compat_CFRunLoopRunInMode)                            \
+    X("_CFRunLoopStop", radek_compat_CFRunLoopStop)                                      \
+    X("_CFRunLoopWakeUp", radek_compat_CFRunLoopWakeUp)                                  \
     X("_malloc", radek_compat_malloc)                                                  \
     X("_calloc", radek_compat_calloc)                                                  \
     X("_realloc", radek_compat_realloc)                                                \

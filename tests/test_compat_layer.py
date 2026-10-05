@@ -214,11 +214,18 @@ if __name__ == "__main__":
 
     @unittest.skipUnless(shutil.which(os.environ.get("CXX", "g++")), "C++ compiler unavailable")
     def test_generated_source_builds_and_runs_broad_shims(self):
-        imports = ["_strlen", "_CFStringCreateWithCString", "_CFStringGetLength", "_glDrawArrays"]
+        imports = [
+            "_strlen",
+            "_CFStringCreateWithCString",
+            "_CFStringGetLength",
+            "_CFRunLoopGetCurrent",
+            "_CFRunLoopRunInMode",
+            "_glDrawArrays",
+        ]
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             report = generate(reconstruction(imports), output)
-            self.assertEqual(report["verifiedImplementations"], 3)
+            self.assertEqual(report["verifiedImplementations"], 5)
             self.assertEqual(report["stubbedHandlers"], 1)
             for header in report["headerPaths"]:
                 self.assertTrue((output / header).is_file(), header)
@@ -246,3 +253,25 @@ if __name__ == "__main__":
             self.assertNotEqual(text, None)
             self.assertEqual(length(ctypes.c_void_p(text)), 5)
             library.radek_compat_CFRelease(ctypes.c_void_p(text))
+
+            run_loop = library.radek_compat_CFRunLoopGetCurrent
+            run_loop.restype = ctypes.c_void_p
+            current = run_loop()
+            mode = create(None, b"default", 0x08000100)
+            callback_type = ctypes.CFUNCTYPE(None, ctypes.c_void_p)
+            callback_count = ctypes.c_int(0)
+
+            @callback_type
+            def on_run_loop(context):
+                ctypes.cast(context, ctypes.POINTER(ctypes.c_int)).contents.value += 1
+
+            perform = library.radek_compat_CFRunLoopPerform
+            perform.argtypes = [ctypes.c_void_p, ctypes.c_void_p, callback_type, ctypes.c_void_p]
+            perform.restype = ctypes.c_ubyte
+            self.assertEqual(perform(current, mode, on_run_loop, ctypes.byref(callback_count)), 1)
+            run_in_mode = library.radek_compat_CFRunLoopRunInMode
+            run_in_mode.argtypes = [ctypes.c_void_p, ctypes.c_double, ctypes.c_ubyte]
+            run_in_mode.restype = ctypes.c_int32
+            self.assertEqual(run_in_mode(mode, 1.0, 1), 4)
+            self.assertEqual(callback_count.value, 1)
+            library.radek_compat_CFRelease(ctypes.c_void_p(mode))

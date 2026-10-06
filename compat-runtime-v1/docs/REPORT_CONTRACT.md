@@ -28,7 +28,7 @@ Each symbol record carries the exact symbol name, source stream, dependency name
 - `BLOCKED_ENCRYPTED`: the Mach-O encryption command reports a non-zero `cryptid`; no decryption is attempted.
 - `BLOCKED`: malformed, unsupported, or out-of-range input was rejected.
 
-The top-level runner result remains `not_runnable` for all Session 1 loads. Its execution subreport may explain backend unavailability, a CPU fault, an instruction/time limit, or a return from the entry function, but none of those is a smoke-tested `menu` or `playable` result. The CPU backend enforces both instruction and wall-clock limits; a reached time limit is reported as `TIME_LIMIT`.
+The top-level runner result remains `not_runnable` for all Session 1 loads. Its execution subreport may explain backend unavailability, a CPU/memory fault, a guest exception that was raised but not unwound, an instruction/time limit, or a return from the entry function; none of those is a smoke-tested `menu` or `playable` result. The CPU backend enforces both instruction and wall-clock limits; a reached time limit is reported as `TIME_LIMIT`.
 
 ## Smoke-test statuses
 
@@ -39,6 +39,8 @@ The compatibility database uses only these per-app status values:
 - `menu`
 - `playable`
 
-`compat-runtime-v1/tools/smoke_db.py record` requires an evidence note, preserves run history, imports symbol names from a same-contract JSON report when supplied, and only records a game as unblocked by a shim family when a smoke result is `menu` or `playable` and the family is explicitly named as resolved. These results are evidence records, not a percent-implemented metric. The initial database has no real-app entries.
+`compat-runtime-v1/tools/smoke_db.py record` requires an evidence note, preserves run history, imports symbol names from a same-contract JSON report when supplied, and only records a game as unblocked by a shim family when a smoke result is `menu` or `playable` and the family is explicitly named as resolved. These results are evidence records, not a percent-implemented metric.
+
+`compatibility/database.json` keeps offline evidence in a separate `staticEvidence` ledger. Its Angry Birds entry records partial import rankings, a recovered `_main` callsite, and the host loader's first unresolved import; it explicitly states that guest instructions did not run and has no runtime smoke status. Static evidence must not be inserted into `apps`, `smokeRuns`, or `gamesUnblocked`. The `apps` array remains empty until an evidence-backed runtime smoke is performed.
 
 There is no in-game diagnostic overlay. Import and CPU diagnostics are returned to the host-side caller for storage or display outside the running guest application.

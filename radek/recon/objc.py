@@ -79,7 +79,10 @@ class ObjCClass:
             "swift": self.swift,
             "methods": [m.report() for m in self.methods[:200]],
             "methodCount": len(self.methods),
-            "ivars": [{"name": i.name, "type": i.type, "size": i.size} for i in self.ivars[:100]],
+            "ivars": [
+                {"name": i.name, "type": i.type, "offset": i.offset, "size": i.size}
+                for i in self.ivars[:100]
+            ],
             "properties": [{"name": p.name, "attributes": p.attributes} for p in self.properties[:100]],
             "protocols": self.protocols,
         }
@@ -312,7 +315,7 @@ def _ivars(image: MachOImage, address: int) -> list[ObjCIvar]:
     _flags, count, start = header
     if not count or count > 4096:
         return []
-    stride = 4 * image.pointer_size + 8  # offset, name, type, alignment, size
+    stride = 3 * image.pointer_size + 8  # offset, name, type, alignment, size
     result = []
     for i in range(count):
         entry = start + i * stride
@@ -435,9 +438,10 @@ def recover(image: MachOImage) -> ObjCRuntime:
                 pointer = int.from_bytes(
                     data[i : i + image.pointer_size], "little" if image.little_endian else "big"
                 )
-                if not pointer:
-                    continue
-                label = _class_name_at(image, pointer)
+                symbol = image.external_relocation_symbol(section.address + i)
+                label = _class_name_from_symbol(symbol) if symbol else None
+                if not label and pointer:
+                    label = _class_name_at(image, pointer)
                 if label:
                     bucket = runtime.class_references if name == "__objc_classrefs" else runtime.super_references
                     if label not in bucket:
@@ -480,7 +484,13 @@ def recover(image: MachOImage) -> ObjCRuntime:
                 runtime.notes.append(f"class at 0x{pointer:x} has unreadable class_ro_t")
                 continue
             name = parsed["name"]
-            superclass = _class_name_at(image, image.read_pointer(pointer + image.pointer_size) or 0)
+            superclass_address = pointer + image.pointer_size
+            superclass_symbol = image.external_relocation_symbol(superclass_address)
+            superclass = _class_name_from_symbol(superclass_symbol) if superclass_symbol else None
+            if superclass is None:
+                superclass = _class_name_at(
+                    image, image.read_pointer(superclass_address) or 0
+                )
             metaclass = image.read_pointer(pointer)
             item = ObjCClass(
                 name=name,
@@ -538,6 +548,15 @@ def recover(image: MachOImage) -> ObjCRuntime:
 def _first(image: MachOImage, name: str):
     sections = image.sections_named(name)
     return sections[0] if sections else None
+
+
+def _class_name_from_symbol(symbol: str | None) -> str | None:
+    if not symbol:
+        return None
+    for prefix in ("_OBJC_CLASS_$_", "_OBJC_METACLASS_$_"):
+        if symbol.startswith(prefix) and len(symbol) > len(prefix):
+            return symbol[len(prefix) :]
+    return None
 
 
 def _class_name_at(image: MachOImage, address: int) -> str | None:

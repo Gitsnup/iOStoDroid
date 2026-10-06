@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -28,7 +29,9 @@ struct HookState {
     bool instructionLimitHit = false;
     bool timeLimitHit = false;
     bool calloutDispatched = false;
+    bool guestExceptionRaised = false;
     GuestAddress calloutResumeAddress = 0;
+    std::map<GuestAddress, std::size_t> mappedRegions;
     bool memoryFault = false;
     std::string message;
 };
@@ -80,6 +83,7 @@ std::uint32_t unicornPermissions(MemoryPermission permissions) {
 }
 
 bool initializeEngineMemory(uc_engine *engine, const GuestMemoryCallbacks &memory,
+                            std::map<GuestAddress, std::size_t> &mappedRegions,
                             std::string &reason) {
     if (!memory.regions || !memory.read) {
         reason = "ARM32 backend requires guest-region and read callbacks.";
@@ -97,6 +101,7 @@ bool initializeEngineMemory(uc_engine *engine, const GuestMemoryCallbacks &memor
                      uc_strerror(mapped);
             return false;
         }
+        mappedRegions.emplace(region.base, region.size);
         if (hasPermission(region.permissions, MemoryPermission::Read)) {
             std::vector<std::uint8_t> bytes(region.size);
             if (!memory.read(region.base, bytes.data(), bytes.size())) {
@@ -114,10 +119,59 @@ bool initializeEngineMemory(uc_engine *engine, const GuestMemoryCallbacks &memor
 }
 
 bool synchronizeEngineMemory(uc_engine *engine, const GuestMemoryCallbacks &memory,
+                             std::map<GuestAddress, std::size_t> &mappedRegions,
                              std::string &reason) {
-    if (!memory.regions || !memory.read)
+    if (!memory.regions || !memory.read) {
+        reason = "ARM32 backend requires guest-region and read callbacks.";
         return false;
-    for (const auto &region : memory.regions()) {
+    }
+    const auto regions = memory.regions();
+    std::map<GuestAddress, std::size_t> currentRegions;
+    for (const auto &region : regions) {
+        if (region.base % kPageSize != 0 || region.size == 0 || region.size % kPageSize != 0) {
+            reason = "ARM32 backend requires page-aligned guest regions.";
+            return false;
+        }
+        currentRegions.emplace(region.base, region.size);
+    }
+
+    for (auto current = mappedRegions.begin(); current != mappedRegions.end();) {
+        if (currentRegions.count(current->first) != 0) {
+            ++current;
+            continue;
+        }
+        const auto unmapped = uc_mem_unmap(engine, current->first, current->second);
+        if (unmapped != UC_ERR_OK) {
+            reason = std::string("could not unmap a released guest region: ") +
+                     uc_strerror(unmapped);
+            return false;
+        }
+        current = mappedRegions.erase(current);
+    }
+
+    for (const auto &region : regions) {
+        const auto knownRegion = mappedRegions.find(region.base);
+        if (knownRegion == mappedRegions.end()) {
+            const auto mapped = uc_mem_map(engine, region.base, region.size,
+                                           unicornPermissions(region.permissions));
+            if (mapped != UC_ERR_OK) {
+                reason = std::string("could not map a newly allocated guest region: ") +
+                         uc_strerror(mapped);
+                return false;
+            }
+            mappedRegions.emplace(region.base, region.size);
+        } else if (knownRegion->second != region.size) {
+            reason = "guest region size changed without unmapping the previous region.";
+            return false;
+        } else {
+            const auto protectedRegion = uc_mem_protect(engine, region.base, region.size,
+                                                        unicornPermissions(region.permissions));
+            if (protectedRegion != UC_ERR_OK) {
+                reason = std::string("could not synchronize guest region permissions: ") +
+                         uc_strerror(protectedRegion);
+                return false;
+            }
+        }
         if (!hasPermission(region.permissions, MemoryPermission::Read))
             continue;
         std::vector<std::uint8_t> bytes(region.size);
@@ -165,23 +219,36 @@ void codeHook(uc_engine *engine, std::uint64_t address, std::uint32_t, void *use
         (void)uc_emu_stop(engine);
         return;
     }
+    if (callout == GuestCalloutResult::ExceptionRaised) {
+        state.guestExceptionRaised = true;
+        state.message = reason.empty() ? "guest exception raised; guest unwinding is unsupported."
+                                       : std::move(reason);
+        (void)uc_emu_stop(engine);
+        return;
+    }
 
-    // A successful native adapter returns through the guest LR. Preserve the ARM/Thumb
-    // interworking bit and resume the backend at that return address.
-    const auto returnAddress = registers.r[14];
-    if ((returnAddress & 1U) != 0)
-        registers.cpsr |= kCpsrThumbBit;
-    else
-        registers.cpsr &= ~kCpsrThumbBit;
-    registers.r[15] = returnAddress & ~GuestAddress{1};
-    state.calloutResumeAddress = registers.r[15] | ((registers.cpsr & kCpsrThumbBit) != 0 ? 1U : 0U);
+    // Native shims either return through the guest LR or request a validated
+    // transfer to a guest IMP. Preserve ARM/Thumb interworking in both cases.
+    if (callout == GuestCalloutResult::Transferred) {
+        state.calloutResumeAddress = registers.r[15] |
+            ((registers.cpsr & kCpsrThumbBit) != 0 ? 1U : 0U);
+    } else {
+        const auto returnAddress = registers.r[14];
+        if ((returnAddress & 1U) != 0)
+            registers.cpsr |= kCpsrThumbBit;
+        else
+            registers.cpsr &= ~kCpsrThumbBit;
+        registers.r[15] = returnAddress & ~GuestAddress{1};
+        state.calloutResumeAddress = registers.r[15] |
+            ((registers.cpsr & kCpsrThumbBit) != 0 ? 1U : 0U);
+    }
     if (!writeRegisters(engine, registers)) {
         state.memoryFault = true;
         state.message = "ARM32 backend could not restore guest registers after a shim callout.";
         (void)uc_emu_stop(engine);
         return;
     }
-    if (!synchronizeEngineMemory(engine, *state.memory, state.message)) {
+    if (!synchronizeEngineMemory(engine, *state.memory, state.mappedRegions, state.message)) {
         state.memoryFault = true;
         (void)uc_emu_stop(engine);
         return;
@@ -251,6 +318,7 @@ class UnicornArm32Backend final : public CpuBackend {
         prepared.instructionLimit = function.instructionLimit;
         prepared.timeLimitMicros = function.timeLimitMicros;
         prepared.backendName = name();
+        prepared.origin = function.origin;
         return true;
     }
 
@@ -269,7 +337,9 @@ class UnicornArm32Backend final : public CpuBackend {
         }
 
         std::string reason;
-        if (!initializeEngineMemory(engine, memory, reason)) {
+        HookState hooks;
+        hooks.memory = &memory;
+        if (!initializeEngineMemory(engine, memory, hooks.mappedRegions, reason)) {
             (void)uc_close(engine);
             result.status = CpuExecutionStatus::MemoryFault;
             result.message = reason;
@@ -293,8 +363,6 @@ class UnicornArm32Backend final : public CpuBackend {
             return result;
         }
 
-        HookState hooks;
-        hooks.memory = &memory;
         hooks.instructionLimit = function.instructionLimit;
         uc_hook code = 0;
         uc_hook writes = 0;
@@ -337,7 +405,7 @@ class UnicornArm32Backend final : public CpuBackend {
             status = uc_emu_start(engine, resumeAddress, kReturnSentinel,
                                   static_cast<std::uint64_t>(remainingTime),
                                   static_cast<std::size_t>(remaining));
-            if (hooks.memoryFault || hooks.instructionLimitHit)
+            if (hooks.memoryFault || hooks.instructionLimitHit || hooks.guestExceptionRaised)
                 break;
             if (status != UC_ERR_OK) {
                 hooks.message = std::string("ARM32 guest execution stopped: ") + uc_strerror(status);
@@ -386,6 +454,9 @@ class UnicornArm32Backend final : public CpuBackend {
             result.message = hooks.message;
         } else if (hooks.memoryFault) {
             result.status = CpuExecutionStatus::MemoryFault;
+            result.message = hooks.message;
+        } else if (hooks.guestExceptionRaised) {
+            result.status = CpuExecutionStatus::GuestExceptionRaised;
             result.message = hooks.message;
         } else if (returned) {
             result.status = CpuExecutionStatus::Returned;

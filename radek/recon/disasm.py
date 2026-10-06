@@ -508,47 +508,164 @@ def decode_arm64(word: int, address: int) -> Instr:
 
 
 def decode_arm(word: int, address: int) -> Instr:
+    """Decode the common ARM-state encodings used by 32-bit iOS images.
+
+    A32's condition field is ``AL`` for unconditional instructions and ``NV``
+    for BLX-immediate; neither is a predication condition. Keep those cases as
+    ``None`` so CFG construction treats unconditional branches correctly.
+    Unsupported encodings remain explicit unknowns.
+    """
     def instr(mnemonic, operands, kind, **extra) -> Instr:
         return Instr(address=address, size=4, mnemonic=mnemonic, operands=operands, kind=kind, raw=word, **extra)
 
-    condition = CONDITIONS[_bits(word, 31, 28)]
+    condition_code = _bits(word, 31, 28)
+    condition = CONDITIONS[condition_code] if condition_code < 14 else None
+
+    # BX/BLX register. The low register nibble is variable; preserve it in the
+    # mask rather than accidentally testing it as an opcode bit.
     if (word & 0x0FFFFFF0) == 0x012FFF10:
-        return instr("bx", f"r{_bits(word, 3, 0)}", "ret" if _bits(word, 3, 0) == 14 else "branch", condition=condition)
-    if (word & 0x0F000000) == 0x0A000000:
+        register = _bits(word, 3, 0)
+        return instr(
+            "bx",
+            f"r{register}",
+            "ret" if register == 14 else "branch",
+            condition=condition,
+            sources=(register,),
+        )
+    if (word & 0x0FFFFFF0) == 0x012FFF30:
+        register = _bits(word, 3, 0)
+        return instr("blx", f"r{register}", "call", condition=condition, sources=(register,))
+
+    # BLX-immediate uses cond=1111 and an H bit in bit 24. Its destination is
+    # Thumb code, but the byte address is still useful for a static call edge.
+    if condition_code == 15 and (word & 0x0E000000) == 0x0A000000:
+        displacement = _sign(_bits(word, 23, 0), 24) * 4 + _bits(word, 24, 24) * 2
+        target = address + 8 + displacement
+        return instr("blx", f"0x{target:x}", "call", target=target)
+
+    # B/BL: bit 24 selects link. Mask only bits 27:25 so BL (bit 24 set) is
+    # recognized alongside B; this was the cause of ARMv6 call edges vanishing.
+    if (word & 0x0E000000) == 0x0A000000:
         target = address + 8 + _sign(_bits(word, 23, 0), 24) * 4
         call = bool(word & (1 << 24))
-        return instr("bl" if call else "b", f"0x{target:x}", "call" if call else "branch", target=target, condition=condition)
-    if (word & 0x0FFFFFD0) == 0x012FFF30:
-        return instr("blx", f"r{_bits(word, 3, 0)}", "call", condition=condition)
-    if (word & 0x0E000000) == 0x04000000 and not (word & (1 << 20)) or (word & 0x0C000000) == 0x04000000:
+        return instr(
+            "bl" if call else "b",
+            f"0x{target:x}",
+            "call" if call else "branch",
+            target=target,
+            condition=condition,
+        )
+
+    # Data-processing operations (AND through MVN), including the immediate
+    # rotated-immediate form used by ARM compilers for stack and pointer setup.
+    if (word & 0x0C000000) == 0:
         opcode = _bits(word, 24, 21)
-        if opcode in (0b0100, 0b0010):  # ADD/SUB immediate
-            name = "sub" if opcode == 0b0010 else "add"
+        immediate_operand = bool(word & (1 << 25))
+        set_flags = bool(word & (1 << 20))
+        rn = _bits(word, 19, 16)
+        rd = _bits(word, 15, 12)
+        rm = _bits(word, 3, 0)
+        operations = {
+            0: "and", 1: "eor", 2: "sub", 3: "rsb", 4: "add", 5: "adc",
+            6: "sbc", 7: "rsc", 8: "tst", 9: "teq", 10: "cmp", 11: "cmn",
+            12: "orr", 13: "mov", 14: "bic", 15: "mvn",
+        }
+        name = operations[opcode]
+        if immediate_operand:
+            imm8 = _bits(word, 7, 0)
+            rotate = _bits(word, 11, 8) * 2
+            immediate = ((imm8 >> rotate) | (imm8 << (32 - rotate))) & 0xFFFFFFFF if rotate else imm8
+            operand = f"#{immediate}"
+            sources = () if opcode in (13, 15) else (rn,)
+        else:
+            immediate = None
+            operand = f"r{rm}"
+            sources = (rm,) if opcode in (13, 15) else (rn, rm)
+        if opcode in (8, 9, 10, 11) or (set_flags and opcode in (0, 1, 2, 3, 4, 5, 6, 7, 12, 14)):
+            kind = "compare"
+            destination = None
+            operands = f"r{rn}, {operand}"
+        elif opcode in (13, 15):
+            kind = "move"
+            destination = rd
+            operands = f"r{rd}, {operand}"
+        else:
+            kind = "arith"
+            destination = rd
+            operands = f"r{rd}, r{rn}, {operand}"
+        if destination == 15 and kind != "compare":
+            kind = "branch"
+        return instr(
+            name,
+            operands,
+            kind,
+            target=None,
+            dst=destination,
+            sources=sources,
+            immediate=immediate,
+            condition=condition,
+            writes_flags=set_flags,
+        )
+
+    # Single data transfer. An immediate LDR from PC is a literal load and its
+    # address can be followed to import stubs and Objective-C metadata.
+    if (word & 0x0C000000) == 0x04000000:
+        register_offset = bool(word & (1 << 25))
+        pre_indexed = bool(word & (1 << 24))
+        add_offset = bool(word & (1 << 23))
+        byte_transfer = bool(word & (1 << 22))
+        write_back = bool(word & (1 << 21))
+        load = bool(word & (1 << 20))
+        rn = _bits(word, 19, 16)
+        rd = _bits(word, 15, 12)
+        if register_offset:
+            offset = f"r{_bits(word, 3, 0)}"
+            immediate = None
+        else:
+            magnitude = _bits(word, 11, 0)
+            immediate = magnitude if add_offset else -magnitude
+            offset = f"#{immediate}"
+        if rn == 15 and load and not register_offset and pre_indexed:
+            literal_address = address + 8 + (immediate or 0)
             return instr(
-                name,
-                f"r{_bits(word, 15, 12)}, r{_bits(word, 19, 16)}, #{_bits(word, 11, 0)}",
-                "arith",
-                dst=_bits(word, 15, 12),
-                sources=(_bits(word, 19, 16),),
-                immediate=_bits(word, 11, 0),
+                "ldr",
+                f"r{rd}, [pc, {offset}]",
+                "loadlit",
+                target=literal_address,
+                dst=rd,
+                sources=(rn,),
+                immediate=immediate,
                 condition=condition,
-                writes_flags=bool(word & (1 << 20)),
             )
-    if (word & 0x0DE00000) == 0x01A00000:
-        return instr("mov", f"r{_bits(word, 15, 12)}, r{_bits(word, 3, 0)}", "move", dst=_bits(word, 15, 12), sources=(_bits(word, 3, 0),), condition=condition)
-    if (word & 0x0F000000) == 0x05000000 or (word & 0x0E000000) == 0x04000000:
+        suffix = "b" if byte_transfer else ""
+        sign = "+" if (immediate or 0) >= 0 else ""
+        operands = f"r{rd}, [r{rn}, {sign}{offset}]"
+        if not pre_indexed:
+            operands = f"r{rd}, [r{rn}], {sign}{offset}"
+        if write_back and pre_indexed:
+            operands = f"r{rd}, [r{rn}, {sign}{offset}]!"
+        return instr(
+            ("ldr" if load else "str") + suffix,
+            operands,
+            "load" if load else "store",
+            dst=rd if load else None,
+            sources=(rn,) if not register_offset else (rn, _bits(word, 3, 0)),
+            immediate=immediate,
+            condition=condition,
+        )
+
+    # LDM/STM register-list transfers.
+    if (word & 0x0E000000) == 0x08000000:
         load = bool(word & (1 << 20))
         return instr(
-            "ldr" if load else "str",
-            f"r{_bits(word, 15, 12)}, [r{_bits(word, 19, 16)}, #{_bits(word, 11, 0)}]",
+            "ldm" if load else "stm",
+            f"r{_bits(word, 19, 16)}, {{registers}}",
             "load" if load else "store",
             dst=_bits(word, 15, 12) if load else None,
             sources=(_bits(word, 19, 16),),
-            immediate=_bits(word, 11, 0),
             condition=condition,
         )
-    if (word & 0x0E000000) == 0x08000000:
-        return instr("stm/ldm", "", "store" if not word & (1 << 20) else "load", condition=condition)
+
     return instr(".word", f"0x{word:08x}", "unknown", unknown=True, condition=condition)
 
 
@@ -756,11 +873,13 @@ def disassemble(image: MachOImage, budget: int = MAX_INSTRUCTIONS_PER_IMAGE) -> 
         visited: set[int] = set()
         while work:
             current = work.pop(0)
-            if current in visited or not (start <= current < limit):
+            if current in visited or current in seen or not (start <= current < limit):
                 continue
             visited.add(current)
             block = Block(address=current)
             while True:
+                if current in seen:
+                    break
                 if len(function.instructions) >= MAX_INSTRUCTIONS_PER_FUNCTION:
                     function.complete = False
                     break

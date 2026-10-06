@@ -46,6 +46,8 @@ struct GuestRegionView {
 enum class GuestCalloutResult {
     NotRegistered,
     Returned,
+    Transferred,
+    ExceptionRaised,
     Failed,
 };
 

@@ -1,6 +1,9 @@
+#include "compat_runtime/audio_session_shims.hpp"
 #include "compat_runtime/cpu.hpp"
+#include "compat_runtime/objc_shims.hpp"
 #include "compat_runtime/runner.hpp"
 #include "compat_runtime/shim_registry.hpp"
+#include "compat_runtime/sjlj_unwind.hpp"
 #include "compat_runtime/runtime_contract.hpp"
 
 #include "json.hpp"
@@ -64,7 +67,13 @@ Java_dev_radek_compat_runtime_RuntimeBridge_runAuthorizedMainBinary(JNIEnv *env,
         env->GetByteArrayRegion(mainBinary, 0, length, reinterpret_cast<jbyte *>(bytes.data()));
         if (env->ExceptionCheck())
             return nullptr;
-        const radek::compat_runtime::ShimRegistry shims;
+        radek::compat_runtime::ShimRegistry shims;
+        radek::compat_runtime::objc::ShimAdapter objcShims;
+        radek::compat_runtime::audio::ShimAdapter audioShims;
+        radek::compat_runtime::SjLjUnwindAdapter sjljUnwind;
+        objcShims.registerBindings(shims);
+        audioShims.registerBindings(shims);
+        sjljUnwind.registerBindings(shims);
         const auto cpu = radek::compat_runtime::createArm32CpuBackend();
         const radek::compat_runtime::GuestRunner runner(shims, *cpu);
         return jsonString(env, runner.runMainBinary(bytes, true));

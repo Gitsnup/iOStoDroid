@@ -51,17 +51,20 @@ object Icons {
      */
     fun decode(data: ByteArray, sample: Int = 1): Bitmap? {
         if (data.isEmpty() || data.size > MAX_IMAGE_BYTES) return null
+        if (isCgbi(data)) {
+            return try {
+                IconDecoder.decodeCgbi(data, TARGET)
+            } catch (_: Exception) {
+                null
+            }
+        }
         val options = BitmapFactory.Options()
         options.inSampleSize = maxOf(1, sample)
-        try {
-            BitmapFactory.decodeByteArray(data, 0, data.size, options)?.let { return it }
+        return try {
+            BitmapFactory.decodeByteArray(data, 0, data.size, options)
         } catch (_: Exception) {
             // Robolectric's BitmapFactory throws where the platform returns null;
             // either way this candidate simply did not decode.
-        }
-        return try {
-            IconDecoder.decodeCgbi(data, TARGET)
-        } catch (_: Exception) {
             null
         }
     }
@@ -195,9 +198,58 @@ object Icons {
         return true
     }
 
+    /** Read original dimensions before BitmapFactory downsamples the candidate. */
+    private fun imageDimensions(data: ByteArray): Pair<Int, Int>? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        try {
+            BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+        } catch (_: Exception) {
+            // CgBI is not a standard Android PNG; read its IHDR below.
+        }
+        if (bounds.outWidth in 1..8192 && bounds.outHeight in 1..8192) {
+            return bounds.outWidth to bounds.outHeight
+        }
+        if (!startsWith(data, PNG_SIGNATURE) || data.size < 33) return null
+        var offset = PNG_SIGNATURE.size
+        val limit = minOf(data.size, 4096)
+        while (offset + 12 <= limit) {
+            val length = readU32(data, offset)
+            if (length < 0 || length.toLong() + 12 > data.size - offset) return null
+            val type = String(data, offset + 4, 4, Charsets.US_ASCII)
+            if (type == "IHDR" && length == 13 && offset + 20 <= data.size) {
+                val width = readU32(data, offset + 8)
+                val height = readU32(data, offset + 12)
+                return if (width in 1..8192 && height in 1..8192) width to height else null
+            }
+            if (type == "IEND") return null
+            offset += 12 + length
+        }
+        return null
+    }
+
     private data class Candidate(
-        val source: String, val bitmap: Bitmap, val declared: Boolean, val scale: Int, val named: Boolean
+        val source: String,
+        val bitmap: Bitmap,
+        val declared: Boolean,
+        val scale: Double,
+        val named: Boolean,
+        val sourceWidth: Int,
+        val sourceHeight: Int,
+        val kind: String,
+        val format: String,
+        val decoder: String,
     )
+
+    private fun iconNameMatches(preferred: String, source: String): Boolean {
+        fun stem(value: String): String = value.substringAfterLast(':').substringAfterLast('/')
+            .substringBeforeLast('.', value).lowercase()
+        val wanted = stem(preferred)
+        val actual = stem(source)
+        if (actual == wanted) return true
+        if (!actual.startsWith(wanted)) return false
+        val suffix = actual.drop(wanted.length)
+        return suffix.isNotEmpty() && (suffix.first() in "@~_-" || suffix.first().isDigit())
+    }
 
     /**
      * Recover the best icon for a bundle and record every attempt.
@@ -239,42 +291,72 @@ object Icons {
         queue.addAll(images.filter { it !in queue })
 
         var best: Candidate? = null
-        fun consider(source: String, data: ByteArray, declaredFile: Boolean, namedFile: Boolean) {
+        fun consider(
+            source: String,
+            data: ByteArray,
+            declaredFile: Boolean,
+            namedFile: Boolean,
+            kind: String = "file",
+            knownWidth: Int? = null,
+            knownHeight: Int? = null,
+            knownScale: Double? = null,
+            knownFormat: String? = null,
+            knownDecoder: String? = null,
+        ) {
             if (data.isEmpty() || data.size > MAX_IMAGE_BYTES) {
                 attempt(source, false, "payload outside the size limit"); return
             }
-            val bounds = BitmapFactory.Options()
-            bounds.inJustDecodeBounds = true
-            try {
-                BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
-            } catch (_: Exception) {
-                // Not a bitmap the platform decoder understands; the CgBI decoder
-                // below and the caller's fallback chain still get their turn.
+            val dimensions = if (knownWidth != null && knownHeight != null) {
+                knownWidth to knownHeight
+            } else {
+                imageDimensions(data)
             }
-            if (bounds.outWidth in 1..8192 && bounds.outHeight in 1..8192 || isCgbi(data)) {
-                val sample = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / TARGET)
-                val bitmap = decode(data, sample)
-                if (bitmap != null) {
-                    if (isOpaque(bitmap)) {
-                        attempt(source, true, "decoded", bitmap.width, bitmap.height)
-                        val scale = when {
-                            "@3x" in source -> 3
-                            "@2x" in source -> 2
-                            else -> 1
-                        }
-                        val candidate = Candidate(source, bitmap, declaredFile, scale, namedFile)
-                        if (better(candidate, best)) {
-                            best?.bitmap?.recycle()
-                            best = candidate
-                        } else bitmap.recycle()
-                        return
-                    }
-                    bitmap.recycle()
-                    attempt(source, false, "decoded but fully transparent")
-                    return
-                }
+            if (dimensions == null) {
+                attempt(source, false, "image dimensions could not be read")
+                return
             }
-            attempt(source, false, "BitmapFactory could not decode this payload")
+            val (sourceWidth, sourceHeight) = dimensions
+            val sample = maxOf(1, maxOf(sourceWidth, sourceHeight) / TARGET)
+            val bitmap = decode(data, sample)
+            if (bitmap == null) {
+                attempt(source, false, "image payload could not be decoded", sourceWidth, sourceHeight)
+                return
+            }
+            if (!isOpaque(bitmap)) {
+                bitmap.recycle()
+                attempt(source, false, "decoded but fully transparent", sourceWidth, sourceHeight)
+                return
+            }
+            attempt(source, true, "decoded", sourceWidth, sourceHeight)
+            val scale = knownScale ?: when {
+                "@3x" in source -> 3.0
+                "@2x" in source -> 2.0
+                else -> 1.0
+            }
+            val format = knownFormat ?: when {
+                startsWith(data, PNG_SIGNATURE) -> "png"
+                data.size >= 3 && data[0] == 0xFF.toByte() && data[1] == 0xD8.toByte() -> "jpeg"
+                else -> source.substringAfterLast('.', "unknown")
+            }
+            val decoder = knownDecoder ?: if (isCgbi(data)) "IconDecoder" else "BitmapFactory"
+            val candidate = Candidate(
+                source = source,
+                bitmap = bitmap,
+                declared = declaredFile,
+                scale = scale,
+                named = namedFile,
+                sourceWidth = sourceWidth,
+                sourceHeight = sourceHeight,
+                kind = kind,
+                format = format,
+                decoder = decoder,
+            )
+            if (better(candidate, best)) {
+                best?.bitmap?.recycle()
+                best = candidate
+            } else {
+                bitmap.recycle()
+            }
         }
 
         var examined = 0
@@ -284,12 +366,50 @@ object Icons {
             val relative = file.relativeTo(app).path
             consider(relative, file.readBytes(), declared.contains(file), named.contains(file))
         }
-        for (catalog in app.walkTopDown().filter { it.isFile && it.name == "Assets.car" }) {
+        val preferredName = names.firstOrNull()
+        for (catalog in app.walkTopDown().filter { it.isFile && it.name.equals("Assets.car", ignoreCase = true) }) {
             val relative = catalog.relativeTo(app).path
+            val extraction = AssetCatalogIcon.extract(catalog, preferredName, TARGET)
+            extraction.attempts.forEach { item ->
+                val assetLabel = item.asset.removePrefix("${catalog.name}:")
+                attempt("$relative:$assetLabel", item.ok, item.detail, extraction.width, extraction.height)
+            }
+            val catalogBitmap = extraction.bitmap
+            if (catalogBitmap != null) {
+                val assetLabel = extraction.asset?.removePrefix("${catalog.name}:") ?: "unnamed"
+                val assetSource = "$relative:$assetLabel"
+                val matchesDeclared = preferredName?.let { iconNameMatches(it, assetSource) } ?: false
+                val candidate = Candidate(
+                    source = assetSource,
+                    bitmap = catalogBitmap,
+                    declared = matchesDeclared,
+                    scale = extraction.scale,
+                    named = "icon" in assetSource.lowercase() || matchesDeclared,
+                    sourceWidth = extraction.width,
+                    sourceHeight = extraction.height,
+                    kind = "assets.car",
+                    format = extraction.format ?: "asset-catalog",
+                    decoder = "AssetCatalogIcon",
+                )
+                if (better(candidate, best)) {
+                    best?.bitmap?.recycle()
+                    best = candidate
+                } else {
+                    catalogBitmap.recycle()
+                }
+                continue
+            }
+
+            attempt(relative, false, extraction.error ?: "asset catalog has no decodable icon")
+            // Last-resort magic scan is less precise because it loses rendition
+            // names and idiom metadata; use it only when the bounded CAR parser
+            // cannot produce a bitmap.
             val payloads = catalogPayloads(catalog)
-            attempt(relative, payloads.isNotEmpty(), "${payloads.size} embedded image payloads")
+            if (payloads.isNotEmpty()) {
+                attempt(relative, true, "magic scan found ${payloads.size} image payload(s)")
+            }
             payloads.forEachIndexed { index, payload ->
-                consider("$relative#$index", payload, false, false)
+                consider("$relative#$index", payload, false, false, kind = "assets.car")
             }
         }
 
@@ -305,12 +425,17 @@ object Icons {
             return JSONObject().put("status", "SUPPORTED")
                 .put("source", chosen.source)
                 .put("path", "icon.png")
-                .put("kind", if ("#" in chosen.source) "asset-catalog" else "file")
-                .put("format", if ("#" in chosen.source) "car-payload" else chosen.source.substringAfterLast('.', "png"))
-                .put("decoder", "android.graphics.BitmapFactory")
+                .put("kind", chosen.kind)
+                .put("format", chosen.format)
+                .put("decoder", chosen.decoder)
                 .put("width", width).put("height", height)
-                .put("scale", chosen.scale.toDouble())
-                .put("reason", "Decoded bundle icon (${chosen.source}, ${width}x${height})")
+                .put("sourceWidth", chosen.sourceWidth).put("sourceHeight", chosen.sourceHeight)
+                .put("scale", chosen.scale)
+                .put(
+                    "reason",
+                    "Selected the highest-resolution eligible bundle icon (${chosen.source}, " +
+                        "${chosen.sourceWidth}x${chosen.sourceHeight}; output ${width}x${height})",
+                )
                 .put("attempts", attempts)
         }
         // Nothing usable: generate a deterministic tile so the library entry is
@@ -327,7 +452,7 @@ object Icons {
             .put("attempts", attempts)
     }
 
-    /** Declared Info.plist icons win, then icon-named files, then pixel count. */
+    /** Prefer the declared icon family, then compare original source resolution. */
     private fun better(candidate: Candidate, current: Candidate?): Boolean {
         if (current == null) return true
         fun rank(value: Candidate) = when {
@@ -336,9 +461,13 @@ object Icons {
             else -> 0
         }
         if (rank(candidate) != rank(current)) return rank(candidate) > rank(current)
-        val candidatePixels = candidate.bitmap.width * candidate.bitmap.height
-        val currentPixels = current.bitmap.width * current.bitmap.height
+        val candidatePixels = candidate.sourceWidth.toLong() * candidate.sourceHeight
+        val currentPixels = current.sourceWidth.toLong() * current.sourceHeight
         if (candidatePixels != currentPixels) return candidatePixels > currentPixels
-        return candidate.scale > current.scale
+        val candidateLongest = maxOf(candidate.sourceWidth, candidate.sourceHeight)
+        val currentLongest = maxOf(current.sourceWidth, current.sourceHeight)
+        if (candidateLongest != currentLongest) return candidateLongest > currentLongest
+        if (candidate.scale != current.scale) return candidate.scale > current.scale
+        return candidate.source < current.source
     }
 }

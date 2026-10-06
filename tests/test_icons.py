@@ -28,8 +28,8 @@ def catalog_bytes() -> bytes:
     builder = Builder()
     entries = []
     for name, size, scale, value, identifier in [
-        ("AppIcon", 120, 2, 150, 0x8019),
-        ("AppIcon", 180, 3, 200, 0x8019),
+        ("AppIcon", 120, 3, 150, 0x8019),
+        ("AppIcon", 180, 2, 200, 0x8019),
         ("OtherImage", 32, 1, 20, 0x1234),
     ]:
         entries.append(
@@ -96,6 +96,19 @@ class IconTests(unittest.TestCase):
         self.assertEqual(second.source, "Icon@2x.png")
         self.assertEqual(second.scale, 2.0)
 
+    def test_highest_pixel_rendition_wins_over_scale_suffix(self):
+        app = self.make_app(
+            {
+                "AppIcon@3x.png": png(96, 96, value=30),
+                "AppIcon@2x.png": png(128, 128, value=220),
+            }
+        )
+        result = icons.extract(app, {"CFBundleIconFiles": ["AppIcon"]})
+        self.assertEqual("SUPPORTED", result.status)
+        self.assertEqual("AppIcon@2x.png", result.source)
+        self.assertEqual((128, 128), (result.width, result.height))
+        self.assertEqual(2.0, result.scale)
+
     def test_cfbundleicons_and_device_variants_are_collected(self):
         info = {
             "CFBundleIcons": {
@@ -122,8 +135,22 @@ class IconTests(unittest.TestCase):
         self.assertEqual(result.decoder, "assetcatalog+pngcodec")
         self.assertIn("Assets.car", result.source or "")
         self.assertEqual(decode(result.image).width, 180)
-        self.assertEqual(result.scale, 3.0)
+        self.assertEqual(result.scale, 2.0)
+        self.assertEqual((result.width, result.height), (180, 180))
         self.assertIsNotNone(result.catalog)
+
+    def test_higher_resolution_catalog_icon_beats_smaller_declared_file(self):
+        app = self.make_app({"AppIcon@2x.png": png(64, 64), "Assets.car": catalog_bytes()})
+        info = {
+            "CFBundleIcons": {
+                "CFBundlePrimaryIcon": {"CFBundleIconFiles": ["AppIcon"], "CFBundleIconName": "AppIcon"}
+            }
+        }
+        result = icons.extract(app, info)
+        self.assertEqual("SUPPORTED", result.status)
+        self.assertEqual("assets.car", result.kind)
+        self.assertIn("AppIcon", result.source or "")
+        self.assertEqual((180, 180), (result.width, result.height))
 
     def test_catalog_is_used_when_no_loose_icon_exists(self):
         app = self.make_app({"Assets.car": catalog_bytes(), "Readme.txt": b"no images here"})

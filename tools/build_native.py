@@ -120,6 +120,9 @@ compat_sources = [
     root / "native/src/compat_runtime/runner.cpp",
     root / "native/src/compat_runtime/cpu.cpp",
     root / "native/src/compat_runtime/objc_runtime.cpp",
+    root / "native/src/compat_runtime/objc_shims.cpp",
+    root / "native/src/compat_runtime/audio_session_shims.cpp",
+    root / "native/src/compat_runtime/sjlj_unwind.cpp",
 ]
 subprocess.run(
     [

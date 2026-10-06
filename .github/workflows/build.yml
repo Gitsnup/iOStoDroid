@@ -38,9 +38,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v5
       - name: Build native analyzer and run C++ runtime tests
         run: python3 tools/build_native.py
-      - name: Configure and run CMake compat-runtime-v1 host tests
+      - name: Configure and run CMake compat-runtime-v1 with pinned Unicorn ARM32 host tests
         run: |
-          cmake -S native -B .local/native-cmake -DRADEK_BUILD_COMPAT_RUNTIME=ON -DRADEK_FETCH_UNICORN=OFF
+          cmake -S native -B .local/native-cmake -DRADEK_BUILD_COMPAT_RUNTIME=ON -DRADEK_FETCH_UNICORN=ON
           cmake --build .local/native-cmake --parallel 2
           ctest --test-dir .local/native-cmake --output-on-failure
       - name: Validate compat-runtime-v1 smoke database

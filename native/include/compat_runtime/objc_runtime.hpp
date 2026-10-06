@@ -23,6 +23,9 @@ struct Object {
     Class *isa = nullptr;
     std::atomic<std::uint32_t> references{1};
     std::vector<Value> ivars;
+    // Host-backed payloads for the bounded Foundation NSString/NSArray subset.
+    std::string stringValue;
+    std::vector<Object *> arrayItems;
 
     explicit Object(Class *objectClass, std::size_t instanceSlots = 0);
     virtual ~Object() = default;
@@ -45,7 +48,10 @@ struct Class {
     bool isMetaclass = false;
     std::map<Selector, IMP> methods;
     std::vector<std::string> ivarNames;
+    // Protocol names declared directly by this class or an attached category.
+    std::set<std::string> protocols;
     std::size_t instanceSlots = 0;
+    std::size_t instanceSizeBytes = sizeof(std::uint32_t);
 };
 
 /** Host-testable Objective-C object model; it does not expose a platform ABI. */
@@ -64,11 +70,18 @@ class Runtime {
     Selector selector(const std::string &name);
     Class *registerClass(const std::string &name, Class *superclass = nullptr,
                          std::vector<std::string> ivars = {});
+    Class *registerClassWithInstanceSize(const std::string &name, Class *superclass,
+                                         std::vector<std::string> ivars,
+                                         std::size_t instanceSizeBytes);
     Class *findClass(const std::string &name) const;
     void addMethod(Class *klass, Selector selector, IMP implementation);
     Object *allocate(Class *klass) const;
     Value send(Object *object, Selector selector, const Arguments &arguments = {});
     Value send(Class *classObject, Selector selector, const Arguments &arguments = {});
+    Value sendSuper(Object *object, Class *currentClass, Selector selector,
+                    const Arguments &arguments = {});
+    Value sendSuper(Class *classObject, Class *currentClass, Selector selector,
+                    const Arguments &arguments = {});
 };
 
 Object *retain(Object *object);

@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -31,6 +32,14 @@ int compareInts(const void *left, const void *right) {
     return (a > b) - (a < b);
 }
 
+int callVsnprintf(char *buffer, size_t size, const char *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    const int written = radek_compat_vsnprintf(buffer, size, format, arguments);
+    va_end(arguments);
+    return written;
+}
+
 void testLibc() {
     void *memory = radek_compat_malloc(64);
     CHECK(memory != nullptr);
@@ -43,6 +52,18 @@ void testLibc() {
     CHECK(grown != nullptr);
     radek_compat_free(grown);
     radek_compat_free(zeroed);
+
+    char copiedString[16] = {};
+    CHECK(radek_compat_strcpy(copiedString, "copy") == copiedString);
+    CHECK(std::string(copiedString) == "copy");
+    char boundedString[8] = {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'};
+    CHECK(radek_compat_strncpy(boundedString, "ok", 5) == boundedString);
+    CHECK(boundedString[0] == 'o' && boundedString[1] == 'k' && boundedString[2] == '\0' && boundedString[4] == '\0');
+
+    unsigned char copiedBytes[4] = {};
+    const unsigned char sourceBytes[4] = {9, 8, 7, 6};
+    CHECK(radek_compat_memcpy(copiedBytes, sourceBytes, sizeof(sourceBytes)) == copiedBytes);
+    CHECK(copiedBytes[0] == 9 && copiedBytes[3] == 6);
 
     CHECK(radek_compat_strlen("radek") == 5);
     CHECK(radek_compat_strcmp("abc", "abc") == 0);
@@ -72,6 +93,15 @@ void testLibc() {
     char formatted[32] = {};
     CHECK(radek_compat_snprintf(formatted, sizeof(formatted), "%d-%s", 7, "ok") == 4);
     CHECK(std::string(formatted) == "7-ok");
+    CHECK(callVsnprintf(formatted, sizeof(formatted), "%s-%d", "ok", 7) == 4);
+    CHECK(std::string(formatted) == "ok-7");
+
+    CHECK(radek_compat_printf("shim-%d\n", 7) == 7);
+    CHECK(radek_compat_puts("shim-puts") >= 0);
+    radek_compat_srand(1234);
+    const int randomValue = radek_compat_rand();
+    radek_compat_srand(1234);
+    CHECK(radek_compat_rand() == randomValue);
 
     unsigned char buffer[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     unsigned char moved[8] = {};
@@ -111,14 +141,20 @@ void testStdio() {
                                              : "/tmp/radek_shim_test.txt";
     FILE *stream = radek_compat_fopen(path, "w+");
     CHECK(stream != nullptr);
-    CHECK(radek_compat_fputs("radek", stream) >= 0);
-    CHECK(radek_compat_fprintf(stream, "-%d", 42) == 3);
+    CHECK(radek_compat_fwrite("radek", 1, 5, stream) == 5);
+    CHECK(radek_compat_fputs("-", stream) >= 0);
+    CHECK(radek_compat_fprintf(stream, "%d", 42) == 2);
     CHECK(radek_compat_fflush(stream) == 0);
     CHECK(radek_compat_fseek(stream, 0, SEEK_SET) == 0);
     char read[32] = {};
     CHECK(radek_compat_fread(read, 1, sizeof(read) - 1, stream) == 8);
     CHECK(std::string(read) == "radek-42");
+    CHECK(radek_compat_feof(stream) != 0);
     CHECK(radek_compat_ftell(stream) == 8);
+    CHECK(radek_compat_fseek(stream, 0, SEEK_SET) == 0);
+    char line[16] = {};
+    CHECK(radek_compat_fgets(line, sizeof(line), stream) == line);
+    CHECK(std::string(line) == "radek-42");
     CHECK(radek_compat_fclose(stream) == 0);
     CHECK(radek_compat_remove(path) == 0);
 }

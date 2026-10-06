@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from radek.api_implementations import _SUPPORTED, generate
+from radek.api_implementations import _SUPPORTED, generate, reachable_imports
 
 
 class MachTimebaseInfo(ctypes.Structure):
@@ -39,6 +39,32 @@ class ApiImplementationTests(unittest.TestCase):
                 }
             ]
         }
+
+    def test_entry_import_selection_is_architecture_scoped_and_ignores_all_code_call_list(self):
+        reconstruction = {
+            "images": [
+                {
+                    "slices": [
+                        {
+                            "architecture": "arm64",
+                            "apis": {
+                                "used": [{"name": "_CFAbsoluteTimeGetCurrent", "callers": ["_main"]}],
+                                "entryReachability": {"imports": []},
+                            },
+                        },
+                        {
+                            "architecture": "armv7",
+                            "apis": {
+                                "used": [{"name": "_mach_absolute_time", "callers": ["_main"]}],
+                                "entryReachability": {"imports": [{"name": "_mach_absolute_time"}]},
+                            },
+                        },
+                    ]
+                }
+            ]
+        }
+        self.assertEqual(reachable_imports(reconstruction, "arm64"), set())
+        self.assertEqual(reachable_imports(reconstruction, "armv7"), {"_mach_absolute_time"})
 
     def test_generates_only_reachable_compiled_compatibility_implementations(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -252,6 +278,13 @@ class ApiImplementationTests(unittest.TestCase):
         actual = dict(re.findall(r'"([^"]+)"\s+to\s+"([^"]+)"', source[start:end]))
         expected = {symbol: implementation for symbol, (implementation, _macro) in _SUPPORTED.items()}
         self.assertEqual(expected, actual)
+
+    def test_every_host_tested_import_has_a_native_test_reference(self):
+        native_tests = Path(__file__).resolve().parent.parent / "native/tests"
+        test_sources = "\\n".join(path.read_text(encoding="utf-8") for path in native_tests.glob("*.cpp"))
+        for symbol, (implementation, _macro) in _SUPPORTED.items():
+            with self.subTest(symbol=symbol, implementation=implementation):
+                self.assertIn(implementation, test_sources)
 
     def test_shim_table_matches_the_native_header_macro(self):
         """The Python table must equal RADEK_IOS_SHIM_TABLE in the C++ header.

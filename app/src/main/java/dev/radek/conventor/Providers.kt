@@ -20,7 +20,10 @@ object Providers {
 
     const val STATUS_PROVIDED = "provided"
     const val STATUS_COMPATIBILITY = "compatibility"
-    const val STATUS_BLOCKED = "blocked"
+    const val STATUS_CANDIDATE = "candidate"
+    const val STATUS_NO_EXECUTION_PATH_YET = "no-execution-path-yet"
+    // Backwards-compatible name for callers that used the old blocked state.
+    const val STATUS_BLOCKED = STATUS_NO_EXECUTION_PATH_YET
 
     /** Native libraries the converted image may legitimately depend on. */
     val NATIVE_LIBRARIES = listOf(
@@ -41,95 +44,102 @@ object Providers {
     private val TABLE = listOf(
         Provider("OpenGLES.framework/OpenGLES", "OpenGLES", "libGLESv2.so · libGLESv3.so · libEGL.so · libGLESv1_CM.so",
             KIND_LIBRARY, STATUS_PROVIDED,
-            "Android ships the identical Khronos OpenGL ES 1.1/2.0/3.x and EGL C ABI; gl*/egl* symbols bind directly."),
+            "Android provides GLES/EGL system libraries with Khronos C ABIs; this identifies a possible system target only and does not prove that an IPA import resolves or is linked."),
         Provider("libiconv.2.dylib", "libiconv", "bionic libc.so iconv · iconv_open · iconv_close",
             KIND_LIBRARY, STATUS_PROVIDED,
-            "Android's libc exports the POSIX iconv API from API 28; the same entry points resolve at load time."),
+            "Android bionic exports iconv on supported API levels. A system symbol inventory match does not prove this IPA's ABI, load, or callsite linkage."),
         Provider("libsqlite3.dylib", "libsqlite3", "libsqlite.so sqlite3_*",
-            KIND_LIBRARY, STATUS_PROVIDED, "Android ships the SQLite C API as libsqlite.so."),
+            KIND_LIBRARY, STATUS_PROVIDED, "Android ships a SQLite system library as libsqlite.so; this does not prove an IPA callsite is rewritten or linked."),
         Provider("libSystem.B.dylib", "libSystem", "bionic libc.so · libm.so · libdl.so · liblog.so · pthreads",
-            KIND_LIBRARY, STATUS_PROVIDED, "POSIX/libc/pthread surface is provided natively by bionic."),
-        Provider("libc++.1.dylib", "libc++", "libc++_shared.so (NDK)",
-            KIND_LIBRARY, STATUS_PROVIDED, "The same LLVM C++ runtime, packaged with the app."),
-        Provider("libc++abi.dylib", "libc++abi", "libc++_shared.so (NDK)",
-            KIND_LIBRARY, STATUS_PROVIDED, "C++ ABI support is part of the NDK runtime."),
-        Provider("libstdc++.6.dylib", "libstdc++", "libc++_shared.so (NDK)",
-            KIND_LIBRARY, STATUS_PROVIDED, "C++ standard library calls are served by the NDK runtime."),
-        Provider("libgcc_s.1.dylib", "libgcc_s", "NDK compiler-rt builtins · NDK libunwind/libc++abi",
-            KIND_RUNTIME, STATUS_COMPATIBILITY,
-            "Android NDK does not ship a drop-in libgcc_s.so. Compiler helper symbols need toolchain compiler-rt builtins; unwind/personality symbols need per-symbol NDK libunwind/libc++abi validation. The install-name mapping is a candidate, not a loadable-library alias or completed link."),
+            KIND_LIBRARY, STATUS_PROVIDED, "Bionic provides Android's libc/libm/libdl and pthread system libraries; Darwin-specific layouts and behavior are not implied, and no IPA linkage is proven."),
+        Provider("libc++.1.dylib", "libc++", "NDK libc++_shared.so (packaging/runtime presence unverified)",
+            KIND_RUNTIME, STATUS_CANDIDATE,
+            "The NDK LLVM libc++ is a possible target, but this mapping does not prove the library is present in an output APK or that Apple's caller ABI and runtime behavior match."),
+        Provider("libc++abi.dylib", "libc++abi", "NDK libc++abi (toolchain candidate)",
+            KIND_RUNTIME, STATUS_CANDIDATE,
+            "A toolchain candidate only; the Apple C++ ABI, exception behavior, and output link have not been validated."),
+        Provider("libstdc++.6.dylib", "libstdc++", "GNU libstdc++ ABI: no drop-in NDK provider; libc++_shared.so has low-level overlap only",
+            KIND_RUNTIME, STATUS_CANDIDATE,
+            "GNU libstdc++ and LLVM libc++ use different C++ ABIs and mangling. Only some low-level C symbols may overlap; no NDK libstdc++ serving or compatible C++ runtime link is proven."),
+        Provider("libgcc_s.1.dylib", "libgcc_s", "compiler-rt builtins / libunwind per-symbol candidates; no libgcc_s.so alias",
+            KIND_RUNTIME, STATUS_CANDIDATE,
+            "Android NDK does not ship a drop-in libgcc_s.so. Compiler helper symbols and unwind/personality symbols need per-symbol ABI and toolchain validation. This is a candidate only, not a loadable-library mapping or completed link."),
         Provider("libz.1.dylib", "libz", "libz.so deflate · inflate · crc32",
             KIND_LIBRARY, STATUS_PROVIDED, "zlib is part of the Android platform."),
         Provider("libresolv.9.dylib", "libresolv", "bionic getaddrinfo · res_*",
             KIND_LIBRARY, STATUS_PROVIDED, "Resolver entry points are in bionic libc."),
-        Provider("libcompression.dylib", "libcompression", "libz.so · java.util.zip.Inflater/Deflater",
-            KIND_PLATFORM, STATUS_COMPATIBILITY, "zlib streams map directly; LZFSE/LZMA payloads are decoded by the runtime."),
+        Provider("libcompression.dylib", "libcompression", "libz.so · java.util.zip (candidate building blocks)",
+            KIND_PLATFORM, STATUS_CANDIDATE,
+            "No libcompression ABI adapter or game callsite link is implemented; zlib/Java zip are only possible building blocks, and LZFSE/LZMA behavior is not proven."),
 
         Provider("Foundation.framework/Foundation", "Foundation",
-            "dev.radek.runtime.Foundation · libioscompat.so", KIND_RUNTIME, STATUS_COMPATIBILITY,
-            "NSObject/NSString/NSData/NSArray/NSDictionary/NSNotificationCenter/NSUserDefaults over JVM objects, SharedPreferences and java.time."),
+            "Android Java/Kotlin API analogues (semantic rewrite candidates only)", KIND_RUNTIME, STATUS_CANDIDATE,
+            "No Foundation/Objective-C ABI adapter is implemented. NSString, collections, bundle lookup, notifications, and defaults are not linked or backed by Android APIs for imported game code."),
         Provider("CoreFoundation.framework/CoreFoundation", "CoreFoundation",
-            "libioscompat.so (CFString/CFData/CFArray/CFDictionary/CFNumber/CFDate + CFRunLoop subset)", KIND_RUNTIME, STATUS_COMPATIBILITY,
-            "A small host-tested opaque CF object/collection model and queued C-callback run-loop subset are implemented. It is not the complete CoreFoundation ABI: Apple callbacks/Blocks, run-loop sources/timers, toll-free bridging and the Objective-C runtime remain unsupported."),
-        Provider("libobjc.A.dylib", "libobjc", "libioscompat.so message dispatch",
-            KIND_RUNTIME, STATUS_COMPATIBILITY, "Class registration, selector interning, IMP lookup, inheritance and autorelease pools."),
+            "libioscompat.so host-tested C subset (CFString/CFData/CFArray/CFDictionary/CFNumber/CFDate + limited CFRunLoop)", KIND_RUNTIME, STATUS_COMPATIBILITY,
+            "Partial only: a small opaque CF object/collection model and queued C-callback run-loop subset have host tests. This is not full CoreFoundation; Apple callbacks/Blocks, run-loop sources/timers, toll-free bridging, loader callouts, and game callsite linking are not implemented."),
+        Provider("libobjc.A.dylib", "libobjc", "compat-runtime-v1 standalone Objective-C model (not linked to the IPA loader)",
+            KIND_RUNTIME, STATUS_COMPATIBILITY,
+            "A host-tested class/metaclass/selector/dispatch and retain/release/autorelease model exists, but it is not wired to the guest import loader as an Apple Objective-C ABI adapter; no game callsites are linked."),
         Provider("UIKit.framework/UIKit", "UIKit",
-            "android.app.Activity · android.view.View/ViewGroup · TextView · ImageView · Bitmap",
-            KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "UIView/UILabel/UIImageView/UIWindow/UIScreen/UIApplication are backed by the real Android view hierarchy."),
+            "android.app.Activity / android.view.View / TextView / ImageView analogues (rewrite candidates only)",
+            KIND_PLATFORM, STATUS_CANDIDATE,
+            "Android UI classes exist, but UIKit classes, lifecycle, object layout, input and API behavior are not adapted or linked for the IPA."),
         Provider("CoreGraphics.framework/CoreGraphics", "CoreGraphics",
-            "android.graphics.Canvas/Paint/Bitmap · NDK ACanvas/APaint · libioscompat.so affine math",
-            KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "CGAffineTransform/CGPoint/CGRect math is native; drawing goes to a real Android Canvas."),
+            "Android Canvas/Paint/Bitmap analogues (rewrite candidates only)",
+            KIND_PLATFORM, STATUS_CANDIDATE,
+            "No CoreGraphics ABI adapter or game callsite rewrite is implemented; Android drawing APIs are only possible semantic targets."),
         Provider("QuartzCore.framework/QuartzCore", "QuartzCore",
-            "libioscompat.so C frame-link callback API · android.view.Choreographer", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "libioscompat.so implements a native C frame-link callback service driven by Choreographer in the bounded converted launcher. It is not the Objective-C CADisplayLink class/selector ABI; CAAnimation, CALayer and callsite rewriting remain unsupported."),
-        Provider("OpenAL.framework/OpenAL", "OpenAL", "libaaudio.so software mixer",
-            KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "al*/alc* buffers and sources are mixed into a real AAudio low-latency output stream."),
+            "libioscompat.so time/C frame-link subset · Android Choreographer (not Apple QuartzCore ABI)", KIND_PLATFORM, STATUS_COMPATIBILITY,
+            "Partial only: host-tested time exports and a C frame-link callback service exist. CADisplayLink's Objective-C ABI, CALayer, CAAnimation, callsite rewriting, and game linkage are not implemented."),
+        Provider("OpenAL.framework/OpenAL", "OpenAL", "libaaudio.so / AAudio (possible output target)",
+            KIND_PLATFORM, STATUS_CANDIDATE,
+            "No OpenAL ABI, source/buffer model, mixer, or IPA callsite adapter is implemented; AAudio is only a possible output target."),
         Provider("AudioToolbox.framework/AudioToolbox", "AudioToolbox",
-            "libaaudio.so · android.media.AudioTrack · SoundPool", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "AudioQueue*/AudioServices*/ExtAudioFile over AAudio streams and platform players."),
+            "AAudio / AudioTrack / SoundPool (possible targets)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "No AudioToolbox ABI or AudioQueue/AudioServices/ExtAudioFile behavior is adapted or linked to imported game code."),
         Provider("CoreAudio.framework/CoreAudio", "CoreAudio",
-            "libaaudio.so · android.media.AudioManager", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "AudioStreamBasicDescription and AudioComponent rendering over AAudio."),
+            "AAudio / AudioManager (possible targets)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "No CoreAudio ABI, AudioComponent renderer, or IPA callsite adapter is implemented."),
         Provider("AVFoundation.framework/AVFoundation", "AVFoundation",
-            "android.media.MediaPlayer · MediaExtractor · MediaCodec", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "AVAudioPlayer/AVPlayer/AVAudioSession map to the platform media stack and AudioManager focus."),
+            "MediaPlayer / MediaExtractor / MediaCodec (possible targets)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "Android media APIs are possible semantic targets only; AVFoundation classes, lifecycle, behavior, and callsite rewriting are not implemented."),
         Provider("MediaPlayer.framework/MediaPlayer", "MediaPlayer",
-            "android.media.MediaPlayer · SoundPool · AudioManager", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "MPMoviePlayer/MPMusicPlayer playback over the platform player and audio focus."),
+            "MediaPlayer / SoundPool / AudioManager (possible targets)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "No MediaPlayer.framework ABI adapter or imported game callsite link is implemented."),
         Provider("CoreMedia.framework/CoreMedia", "CoreMedia",
-            "libmediandk.so AMediaFormat/AMediaCodec · android.media.MediaFormat", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "CMTime arithmetic is native; sample buffers ride on MediaCodec buffers."),
+            "Media NDK / MediaFormat (possible targets)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "No CoreMedia ABI or CMSampleBuffer/CMTime-to-Android adapter is implemented; no calls are linked."),
         Provider("CoreVideo.framework/CoreVideo", "CoreVideo",
-            "libandroid.so AHardwareBuffer · ANativeWindow · Surface", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "CVPixelBuffer storage is an AHardwareBuffer; buffer pools are Surface-backed."),
+            "AHardwareBuffer / ANativeWindow (possible targets)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "No CoreVideo pixel-buffer ABI or pool/surface adapter is implemented; these are target APIs only."),
         Provider("CFNetwork.framework/CFNetwork", "CFNetwork",
-            "bionic sockets · java.net.HttpURLConnection", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "CFReadStream/CFHTTPMessage over real sockets and the platform HTTP client."),
+            "bionic sockets / HttpURLConnection (possible targets)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "No CFNetwork stream/message ABI adapter or IPA callsite rewrite is implemented."),
         Provider("CoreText.framework/CoreText", "CoreText",
-            "android.graphics.Typeface · StaticLayout", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "Glyph runs and line breaking use the platform text stack."),
+            "Typeface / StaticLayout (possible targets)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "Android text APIs are possible semantic targets only; CoreText glyph-run and layout behavior is not adapted."),
         Provider("ImageIO.framework/ImageIO", "ImageIO",
-            "android.graphics.BitmapFactory · ImageDecoder", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "Image decoding, including Apple CgBI PNG payloads, is handled by the runtime decoder."),
+            "BitmapFactory / ImageDecoder (possible targets)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "The importer can decode selected bundle icons, but no ImageIO ABI is provided to imported game code or linked."),
         Provider("Security.framework/Security", "Security",
-            "java.security · AndroidKeyStore", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "Keychain items map to EncryptedSharedPreferences/Keystore-backed keys."),
+            "java.security / AndroidKeyStore (possible targets)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "No Security.framework/Keychain ABI or permission/behavior adapter is implemented; no game calls are linked."),
         Provider("SystemConfiguration.framework/SystemConfiguration", "SystemConfiguration",
-            "android.net.ConnectivityManager", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "Reachability flags come from the platform connectivity callbacks."),
+            "ConnectivityManager (possible target)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "No SystemConfiguration/Reachability callback ABI adapter or IPA callsite link is implemented."),
         Provider("MobileCoreServices.framework/MobileCoreServices", "MobileCoreServices",
-            "android.webkit.MimeTypeMap", KIND_PLATFORM, STATUS_COMPATIBILITY,
-            "UTI to MIME type static recompilation."),
+            "MimeTypeMap (possible target)", KIND_PLATFORM, STATUS_CANDIDATE,
+            "No MobileCoreServices/UTI ABI adapter is implemented for imported game code."),
         Provider("Accelerate.framework/Accelerate", "Accelerate",
-            "NEON intrinsics in libioscompat.so", KIND_RUNTIME, STATUS_COMPATIBILITY,
-            "vDSP/vImage hot paths are implemented with ARM NEON."),
-        Provider("Metal.framework/Metal", "Metal", "libvulkan.so · OpenGL ES",
-            KIND_PLATFORM, STATUS_COMPATIBILITY, "Metal render pipelines fall back to Vulkan/GLES command static recompilation."),
-        Provider("WebKit.framework/WebKit", "WebKit", "android.webkit.WebView",
-            KIND_PLATFORM, STATUS_COMPATIBILITY, "WKWebView content is rendered by the platform WebView."),
+            "No verified Android implementation; NEON is only a possible technique", KIND_RUNTIME, STATUS_CANDIDATE,
+            "No vDSP/vImage shim implementation or tested NEON call path is present."),
+        Provider("Metal.framework/Metal", "Metal", "Vulkan / OpenGL ES (candidate rendering targets)",
+            KIND_PLATFORM, STATUS_CANDIDATE,
+            "No Metal ABI or command-buffer/pipeline rewriting is implemented; Vulkan/GLES are ideas, not a proven mapping."),
+        Provider("WebKit.framework/WebKit", "WebKit", "WebView (possible target)",
+            KIND_PLATFORM, STATUS_CANDIDATE,
+            "No WKWebView ABI, navigation/lifecycle bridge, or IPA callsite adapter is implemented."),
         Provider("AdSupport.framework/AdSupport", "AdSupport", "none",
             KIND_PLATFORM, STATUS_BLOCKED,
             "IDFA has no Android contract; the advertising id requires Play Services and explicit consent."),
@@ -228,23 +238,72 @@ object Providers {
         return null
     }
 
+    /** Build honest, per-import evidence totals for one dependency edge. */
+    fun evidenceForImports(
+        observedSymbols: Collection<String>,
+        mappedSymbols: Map<String, JSONObject>,
+        associationComplete: Boolean = true,
+    ): JSONObject {
+        val observed = observedSymbols.filter { it.isNotBlank() }.toSortedSet()
+        val verified = sortedSetOf<String>()
+        val hostTested = sortedSetOf<String>()
+        val stubOnly = sortedSetOf<String>()
+        val none = sortedSetOf<String>()
+        for (symbol in observed) {
+            val evidence = mappedSymbols[symbol]?.optJSONObject("evidence")
+            val verifiedHere = evidence?.optBoolean("exportsVerifiedOnThisDevice", false) == true
+            val testedHere = evidence?.optBoolean("hostTestedImplementation", false) == true
+            val stubHere = evidence?.optBoolean("stubOnly", false) == true
+            if (verifiedHere) verified += symbol
+            if (testedHere) hostTested += symbol
+            if (stubHere) stubOnly += symbol
+            if (!verifiedHere && !testedHere && !stubHere) none += symbol
+        }
+        val kinds = mutableListOf<String>()
+        if (verified.isNotEmpty()) kinds += "exports-verified-on-this-device"
+        if (hostTested.isNotEmpty()) kinds += "host-tested-implementation"
+        if (stubOnly.isNotEmpty()) kinds += "stub-only"
+        if (none.isNotEmpty() || observed.isEmpty()) kinds += "none"
+        return JSONObject()
+            .put("observedImportCount", observed.size)
+            .put("exportsVerifiedOnThisDevice", verified.size)
+            .put("hostTestedImplementations", hostTested.size)
+            .put("stubOnlyCount", stubOnly.size)
+            .put("noneCount", none.size)
+            .put("none", verified.isEmpty() && hostTested.isEmpty() && stubOnly.isEmpty())
+            .put("evidenceKinds", JSONArray(kinds))
+            .put("verifiedExportSymbols", JSONArray(verified.take(12)))
+            .put("hostTestedSymbols", JSONArray(hostTested.take(12)))
+            .put("stubOnlySymbols", JSONArray(stubOnly.take(12)))
+            .put("noEvidenceSymbols", JSONArray(none.take(12)))
+            .put("associationStatus", if (associationComplete) "COMPLETE" else "PARTIAL")
+            .put("runtimeBackingClaimed", false)
+            .put("linkedGameCallCount", 0)
+            .put("recompiledBytesLinked", 0)
+            .put("note", "Evidence is about exports, host tests, or explicit stubs only; no IPA callsite is claimed linked or running.")
+    }
+
     /**
-     * Classify one dependency edge exactly like `radek/analysis.py` does on the
-     * host, so the app and the CLI report the same thing.
+     * Classify one dependency edge exactly like `radek/providers.py` does on the
+     * host, so the app and the CLI report the same grade and disclosure.
      */
     fun classify(installName: String): JSONObject {
         val provider = forInstallName(installName)
         return if (provider == null) {
-            JSONObject().put("installName", installName).put("classification", "unsupported")
-                .put("status", STATUS_BLOCKED).put("provider", "")
-                .put("reason", "No Android provider: this Darwin image is not on the verified mapping table")
+            JSONObject().put("installName", installName)
+                .put("classification", STATUS_NO_EXECUTION_PATH_YET)
+                .put("status", STATUS_NO_EXECUTION_PATH_YET).put("provider", "")
+                .put("kind", "").put("providerKind", "")
+                .put("reason", "No execution path yet: this Darwin image has no verified Android provider or ABI adapter.")
+                .put("evidence", evidenceForImports(emptyList(), emptyMap()))
         } else {
             JSONObject().put("installName", installName)
                 .put("framework", provider.framework)
-                .put("classification", if (provider.status == STATUS_BLOCKED) "unsupported" else "provided")
-                .put("status", provider.status).put("kind", provider.kind)
+                .put("classification", provider.status)
+                .put("status", provider.status).put("kind", provider.kind).put("providerKind", provider.kind)
                 .put("provider", provider.android)
                 .put("reason", provider.detail)
+                .put("evidence", evidenceForImports(emptyList(), emptyMap()))
         }
     }
 
@@ -271,11 +330,13 @@ object Providers {
 
     /** Human-readable table for the detail screen. */
     fun describe(installName: String): String {
-        val provider = forInstallName(installName) ?: return "BLOCKED · no Android provider"
+        val provider = forInstallName(installName)
+            ?: return "NO-EXECUTION-PATH-YET · no Android provider"
         val marker = when (provider.status) {
             STATUS_PROVIDED -> "PROVIDED"
-            STATUS_COMPATIBILITY -> "COMPAT"
-            else -> "BLOCKED"
+            STATUS_COMPATIBILITY -> "COMPATIBILITY"
+            STATUS_CANDIDATE -> "CANDIDATE"
+            else -> "NO-EXECUTION-PATH-YET"
         }
         return "$marker · ${provider.framework} → ${provider.android}"
     }

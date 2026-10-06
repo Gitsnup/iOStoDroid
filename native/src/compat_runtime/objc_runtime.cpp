@@ -33,21 +33,43 @@ Selector Runtime::selector(const std::string &name) {
 
 Class *Runtime::registerClass(const std::string &name, Class *superclass,
                               std::vector<std::string> ivars) {
+    return registerClassWithInstanceSize(name, superclass, std::move(ivars), 0);
+}
+
+Class *Runtime::registerClassWithInstanceSize(const std::string &name, Class *superclass,
+                                               std::vector<std::string> ivars,
+                                               std::size_t instanceSizeBytes) {
     if (name.empty())
         throw std::invalid_argument("Objective-C class name must not be empty");
     std::lock_guard<std::mutex> lock(mutex_);
     if (classes_.find(name) != classes_.end() || classes_.find(name + "$metaclass") != classes_.end())
         throw std::runtime_error("duplicate or reserved Objective-C class name: " + name);
-    if (superclass)
+    if (superclass) {
         requireKnownClassLocked(superclass);
+        if (superclass->isMetaclass)
+            throw std::invalid_argument("Objective-C superclass must not be a metaclass");
+    }
+    if (instanceSizeBytes == 0) {
+        const auto inheritedSize = superclass ? superclass->instanceSizeBytes : sizeof(std::uint32_t);
+        if (ivars.size() > (std::numeric_limits<std::size_t>::max() - inheritedSize) /
+                               sizeof(std::uint32_t))
+            throw std::overflow_error("Objective-C class instance size overflows the host address space");
+        instanceSizeBytes = inheritedSize + ivars.size() * sizeof(std::uint32_t);
+    }
+    if (instanceSizeBytes < sizeof(std::uint32_t) ||
+        instanceSizeBytes > std::numeric_limits<std::size_t>::max() - 3)
+        throw std::invalid_argument("Objective-C class instance size is invalid");
+    instanceSizeBytes = (instanceSizeBytes + 3) & ~std::size_t{3};
+    if (superclass && instanceSizeBytes < superclass->instanceSizeBytes)
+        throw std::invalid_argument("Objective-C subclass instance size is smaller than its superclass");
 
     auto classObject = std::make_unique<Class>();
     auto metaclass = std::make_unique<Class>();
     classObject->name = name;
     classObject->superclass = superclass;
     classObject->ivarNames = std::move(ivars);
-    classObject->instanceSlots = (superclass ? superclass->instanceSlots : 0) +
-                                 classObject->ivarNames.size();
+    classObject->instanceSizeBytes = instanceSizeBytes;
+    classObject->instanceSlots = instanceSizeBytes / sizeof(std::uint32_t) - 1;
     metaclass->name = name + "$metaclass";
     metaclass->isMetaclass = true;
     metaclass->superclass = superclass ? superclass->metaclass : nullptr;
@@ -131,6 +153,39 @@ Value Runtime::send(Class *classObject, Selector selectorValue, const Arguments 
         if (classObject->isMetaclass)
             throw std::invalid_argument("class dispatch requires an Objective-C class object");
         implementation = lookupLocked(classObject->metaclass, selectorValue);
+    }
+    return implementation(Receiver{nullptr, classObject, true}, arguments);
+}
+
+Value Runtime::sendSuper(Object *object, Class *currentClass, Selector selectorValue,
+                         const Arguments &arguments) {
+    if (!object)
+        return 0;
+    IMP implementation;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        requireKnownClassLocked(object->isa);
+        requireKnownClassLocked(currentClass);
+        if (currentClass->isMetaclass || !currentClass->superclass)
+            throw std::runtime_error("Objective-C super dispatch has no superclass");
+        implementation = lookupLocked(currentClass->superclass, selectorValue);
+    }
+    return implementation(Receiver{object, nullptr, false}, arguments);
+}
+
+Value Runtime::sendSuper(Class *classObject, Class *currentClass, Selector selectorValue,
+                         const Arguments &arguments) {
+    if (!classObject)
+        return 0;
+    IMP implementation;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        requireKnownClassLocked(classObject);
+        requireKnownClassLocked(currentClass);
+        if (classObject->isMetaclass || currentClass->isMetaclass ||
+            !currentClass->metaclass || !currentClass->metaclass->superclass)
+            throw std::runtime_error("Objective-C class super dispatch has no superclass");
+        implementation = lookupLocked(currentClass->metaclass->superclass, selectorValue);
     }
     return implementation(Receiver{nullptr, classObject, true}, arguments);
 }

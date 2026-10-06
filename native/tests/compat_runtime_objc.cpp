@@ -47,6 +47,18 @@ void testClassesSelectorsAndDispatch() {
     CHECK(runtime.send(object, value) == 23);
     CHECK(runtime.send(object, value, {41}) == 41);
 
+    const auto superValue = runtime.selector("superValue");
+    runtime.addMethod(root, superValue, [](const Receiver &, const Arguments &) { return Value{73}; });
+    CHECK(runtime.sendSuper(object, child, superValue) == 73);
+
+    const auto classSuperValue = runtime.selector("classSuperValue");
+    runtime.addMethod(root->metaclass, classSuperValue,
+                      [](const Receiver &receiver, const Arguments &) {
+                          CHECK(receiver.isClassMethod);
+                          return Value{74};
+                      });
+    CHECK(runtime.sendSuper(child, child, classSuperValue) == 74);
+
     const auto className = runtime.selector("className");
     runtime.addMethod(root->metaclass, className, [](const Receiver &receiver, const Arguments &) {
         CHECK(receiver.isClassMethod);

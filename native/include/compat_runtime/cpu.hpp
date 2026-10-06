@@ -13,6 +13,7 @@ struct GuestFunction {
     bool thumb = false;
     std::uint64_t instructionLimit = 1000000;
     std::uint64_t timeLimitMicros = 1000000;
+    std::string origin;
 };
 
 struct PreparedGuestFunction {
@@ -21,6 +22,7 @@ struct PreparedGuestFunction {
     std::uint64_t instructionLimit = 1000000;
     std::uint64_t timeLimitMicros = 1000000;
     std::string backendName;
+    std::string origin;
 };
 
 enum class CpuExecutionStatus {
@@ -28,6 +30,7 @@ enum class CpuExecutionStatus {
     BackendUnavailable,
     InvalidFunction,
     MemoryFault,
+    GuestExceptionRaised,
     ExecutionFault,
     InstructionLimit,
     TimeLimit,

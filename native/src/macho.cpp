@@ -219,22 +219,29 @@ Json thin(Reader r, bool includeSymbolDetails) {
     j["fixupStreams"] = array();
     if (!includeSymbolDetails)
         j["importsTruncated"] = false;
-    std::unordered_set<std::string> compactImportNames;
+    std::unordered_set<std::string> compactImportKeys;
     auto appendImport = [&](Json import) {
         if (includeSymbolDetails) {
             j["imports"].push(std::move(import));
             return;
         }
         const auto found = import.fields.find("name");
-        if (found == import.fields.end() || compactImportNames.count(found->second.value))
+        if (found == import.fields.end())
             return;
-        if (compactImportNames.size() >= kMaximumCompactImports) {
+        const auto ordinal = import.fields.find("ordinal");
+        const std::string key = found->second.value + "\x1f" +
+                                (ordinal == import.fields.end() ? "no-ordinal" : ordinal->second.value);
+        if (compactImportKeys.count(key))
+            return;
+        if (compactImportKeys.size() >= kMaximumCompactImports) {
             j["importsTruncated"] = true;
             return;
         }
-        compactImportNames.insert(found->second.value);
+        compactImportKeys.insert(key);
         Json compact = object();
         compact["name"] = found->second;
+        if (ordinal != import.fields.end())
+            compact["ordinal"] = ordinal->second;
         j["imports"].push(std::move(compact));
     };
     size_t symoff = 0, nsyms = 0, stroff = 0, strsize = 0;
@@ -641,6 +648,7 @@ Json thin(Reader r, bool includeSymbolDetails) {
     for (size_t i = 0; i < nsyms; i++) {
         size_t p = symoff + i * (wide ? 16 : 12);
         auto index = r.u(p, 4), type = r.u(p + 4, 1);
+        const auto libraryOrdinal = (r.u(p + 6, 2) >> 8) & 0xff;
         if (index >= strsize)
             throw std::runtime_error("invalid symbol string offset");
         const bool externalNonStab = !(type & 0xe0) && (type & 1);
@@ -653,6 +661,8 @@ Json thin(Reader r, bool includeSymbolDetails) {
                 s["section"] = r.u(p + 5, 1);
                 s["description"] = r.u(p + 6, 2);
                 s["value"] = r.u(p + 8, wide ? 8 : 4);
+                if (externalNonStab && undefined)
+                    s["ordinal"] = libraryOrdinal;
                 j["symbols"].push(s);
                 if (externalNonStab && undefined)
                     appendImport(s);
@@ -663,6 +673,8 @@ Json thin(Reader r, bool includeSymbolDetails) {
                 // exported nlist record. Keep its inventory compact and deduplicated.
                 Json import = object();
                 import["name"] = s["name"];
+                if (externalNonStab && undefined)
+                    import["ordinal"] = libraryOrdinal;
                 appendImport(std::move(import));
             }
         }

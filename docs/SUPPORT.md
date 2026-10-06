@@ -8,11 +8,17 @@ whole executable is proven to be exactly that one routine. No general iOS-to-And
 exists. The Android importer converts that proven subset on-device and otherwise builds a separately
 identified, explicitly non-playable preview shell.
 
+Provider grades are not gameplay grades: `provided` names a reviewed Android system ABI only;
+`compatibility` marks a bounded tested implementation subset; `candidate` is a possible semantic/API
+target without a linked ABI adapter; `no-execution-path-yet` means no provider is identified. Reports
+attach per-import evidence to dependency edges by dylib ordinal and keep callsite links, observed runtime
+calls, and linked recompiled bytes explicitly at zero.
+
 | Area | Status | Contract / limitation |
 |---|---|---|
 | IPA archive, plist, icon inspection | PARTIAL | Bounded, authorized, offline inspection; source retained in Android private storage until entry deletion. The IPA archive itself is never embedded; bounded conversions package the bundle's static resources verbatim with a hashed inventory |
-| Icons (host inspection) | PARTIAL | Info.plist names, scale/device variants, compiled `Assets.car` raster renditions, then ranked loose images; unsupported formats are reported, not fabricated |
-| Icons (Android library) | PARTIAL | Plist/scale variants, supported compiled `Assets.car` raster renditions, then ranked PNG/JPEG resources. Force uses the recovered icon for the placeholder where available and records generated/fallback icon use otherwise |
+| Icons (host inspection) | PARTIAL | Info.plist names and variants, compiled `Assets.car` raster renditions, then ranked loose images; the largest decodable source by pixel count wins within the icon family, with scale only a tie-breaker. Unsupported formats are reported, not fabricated |
+| Icons (Android library) | PARTIAL | Plist/scale variants, supported compiled `Assets.car` raster renditions, then ranked PNG/JPEG resources. The largest decodable source by pixel count wins within the icon family; scale labels are not assumed to imply higher resolution. Force uses the recovered icon for the placeholder where available and records generated/fallback icon use otherwise |
 | Mach-O thin/FAT/FAT64 | SUPPORTED | CPU/subtype, endian headers, bounded load-command/section/symbol parsing |
 | Mach-O loader metadata | PARTIAL | Relocations, dynamic tables, binds/imports/addends, export trie, chained-fixup metadata, dependencies, LC_MAIN and signature-blob metadata. Incomplete bind tables and unsupported loader semantics block conversion |
 | ObjC/Swift/unwind/init metadata | PARTIAL | Host reconstruction recovers selected Objective-C/Swift metadata and reports limitations; it does not implement the Apple runtime ABI |
@@ -21,6 +27,8 @@ identified, explicitly non-playable preview shell.
 | ARMv6/ARMv7/v7s/Thumb/Thumb-2 | PARTIAL | Selected immediate arithmetic, register-copy and return instruction subsets can be lowered to ARMv7 and emitted in the same isolated ET_DYN format. It is not linked into a game; no 32-bit game APK is emitted |
 | Compatibility registry source | PARTIAL | `ioscompat/libioscompat.cpp` gives every observed Darwin import a resolution target: host-tested time/C/POSIX/limited CoreFoundation implementations or explicitly unimplemented stub handlers. Stub counts are resolution coverage, never implementation coverage (`compatRegistry.symbolResolution` reports verified/stubbed/unresolved with `linkedIntoGame: 0`) |
 | `libgcc_s.1.dylib` mapping | CANDIDATE ONLY | Compiler helpers are triaged to NDK compiler-rt builtins; unwind/personality symbols to NDK libunwind/libc++abi candidates. Android has no drop-in `libgcc_s.so` alias, and no toolchain link or ABI validation is performed |
+| `libstdc++.6.dylib` mapping | CANDIDATE ONLY | GNU libstdc++ and LLVM libc++ have different C++ ABIs and mangling. Low-level symbol overlap is not a drop-in runtime, compatible exception model, or completed link |
+| Darwin framework dependency grades | EVIDENCE-GRADED | `provided` is a reviewed Android system ABI target; `compatibility` marks a bounded tested implementation; `candidate` is a semantic/API target with no linked ABI adapter; `no-execution-path-yet` means no provider is identified. Dependency imports are associated by dylib ordinal; evidence counts never claim an IPA callsite link or runtime call |
 | Dynamic stub hook registration | SUPPORTED (registration only) | `libioscompat.so` registry registers unmapped symbols at runtime and resolves them to counted stub trampolines. Registration is not implementation and rewrites no IPA callsites |
 | Public NDK export lookup | PARTIAL (current-device check) | Uses exact `dlopen`/`dlsym`/`dladdr` checks against the reviewed public NDK library set, including native-window, neural-networks and sync libraries. Counts verify exports visible on the current device only; they do not prove ABI compatibility or link the IPA |
 | Experimental shell APK | SUPPORTED (explicitly non-game) | `convert` builds `experimental-shell.apk` (aapt2/javac/d8/zipalign/apksigner) around the isolated artifacts under `experimental-shell-v1`; launcher and metadata disclose that no game code is statically recompiled; it cannot satisfy `complete-game-v1` |
@@ -68,7 +76,7 @@ or linked, and full framework behavior remains unimplemented. A name resolving a
 prove caller ABI compatibility, minimum-API availability on other devices, relocation, or game
 integration. An `UNMAPPED` classification is a useful explicit blocker, not a conversion result.
 
-- Some OpenGL ES 1.x/2.x/3.x C entry points have Android equivalents, but each reachable symbol,
+- Some OpenGL ES 1.x/2.x/3.x C entry points have Android equivalents, but each statically called symbol,
   GLES version, context/lifecycle path, and ABI binding still has to be proven and linked. A symbol
   name match alone does not constitute a rewrite.
 - AudioToolbox/CoreAudio APIs such as AudioQueue, AudioUnit, and AudioComponent do not share the
@@ -88,8 +96,10 @@ integration. An `UNMAPPED` classification is a useful explicit blocker, not a co
 
 - `reconstruction.json` — machine-readable architectures, entry points, per-image/per-slice
   metrics, recovered functions and listings, call graph, Objective-C metadata, Swift types/symbols,
-  imports, linked frameworks and reachable API attribution.
-- `reconstruction.md` — readable evidence, reconstructed listings and reachable-API blockers.
+  imports, linked frameworks, ranked direct-callsite counts, and an entry-rooted direct-call graph.
+- `reconstruction.md` — readable evidence, reconstructed listings, import rankings and blockers
+  among statically called symbols. Rankings are limited to decoded `__text` coverage; indirect calls,
+  dyld handoffs, Objective-C dispatch, callbacks and loader initializers are not inferred.
 - `recompiled-entry.bin`, `recompiled-entry.c`, and `librecompiled-entry.so` — emitted only if the
   entry passes the closed-integer proof. The library exports one standalone native function and has
   no imports or relocations; it is not a game binary or APK.

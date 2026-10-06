@@ -41,8 +41,51 @@ def validate_database(data: Any) -> None:
         raise ValueError("unsupported compatibility database schemaVersion")
     apps = data.get("apps")
     backlog = data.get("shimBacklog")
+    static_evidence = data.get("staticEvidence", [])
     if not isinstance(apps, list) or not isinstance(backlog, list):
         raise ValueError("database apps and shimBacklog must be arrays")
+    if not isinstance(static_evidence, list):
+        raise ValueError("database staticEvidence must be an array")
+
+    evidence_ids: set[str] = set()
+    for evidence in static_evidence:
+        if not isinstance(evidence, dict):
+            raise ValueError("staticEvidence entries must be objects")
+        evidence_id = evidence.get("evidenceId")
+        digest = evidence.get("inputSha256")
+        first_call = evidence.get("firstStaticApplicationImport")
+        loader_probe = evidence.get("loaderProbe")
+        ranks = evidence.get("rankedRecoveredDirectCallImports")
+        if not isinstance(evidence_id, str) or not evidence_id or evidence_id in evidence_ids:
+            raise ValueError("staticEvidence IDs must be non-empty and unique")
+        evidence_ids.add(evidence_id)
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError(f"staticEvidence {evidence_id} requires a lowercase SHA-256")
+        if not isinstance(first_call, dict) or not all(
+            isinstance(first_call.get(key), str) and first_call[key]
+            for key in ("symbol", "function", "callSite", "evidenceLimit")
+        ):
+            raise ValueError(f"staticEvidence {evidence_id} requires a qualified first static call")
+        if not isinstance(loader_probe, dict) or not all(
+            isinstance(loader_probe.get(key), str) and loader_probe[key]
+            for key in ("status", "firstMissingImport", "lazyPointerSlot", "evidenceLimit")
+        ):
+            raise ValueError(f"staticEvidence {evidence_id} requires the loader's first missing import")
+        if loader_probe.get("guestInstructionsExecuted") is not False:
+            raise ValueError(f"staticEvidence {evidence_id} must not imply guest execution")
+        if evidence.get("runtimeSmokeStatus") is not None:
+            raise ValueError(f"staticEvidence {evidence_id} cannot claim a runtime smoke status")
+        if not isinstance(ranks, list) or not ranks:
+            raise ValueError(f"staticEvidence {evidence_id} requires ranked import evidence")
+        for expected_rank, item in enumerate(ranks, 1):
+            if (
+                not isinstance(item, dict)
+                or item.get("rank") != expected_rank
+                or not isinstance(item.get("symbol"), str)
+                or not isinstance(item.get("callSites"), int)
+                or item["callSites"] < 1
+            ):
+                raise ValueError(f"staticEvidence {evidence_id} has an invalid import ranking")
 
     app_ids: set[str] = set()
     for app in apps:

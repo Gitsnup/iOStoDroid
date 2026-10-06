@@ -53,6 +53,15 @@ internal object AssetCatalogIcon {
         val encoding: String,
     )
 
+    private fun matchesPreferred(value: String, preferred: String): Boolean {
+        val stem = value.substringAfterLast('/').substringBeforeLast('.', value).lowercase()
+        val wanted = preferred.substringAfterLast('/').substringBeforeLast('.', preferred).lowercase()
+        if (stem == wanted) return true
+        if (!stem.startsWith(wanted)) return false
+        val suffix = stem.drop(wanted.length)
+        return suffix.isNotEmpty() && (suffix.first() in "@~_-" || suffix.first().isDigit())
+    }
+
     fun extract(file: File, preferredName: String?, targetSize: Int): Extraction {
         if (!file.isFile || file.length() !in 1..MAX_FILE_BYTES.toLong()) {
             return Extraction(error = "Assets.car is missing or exceeds the 64 MiB icon-recovery limit")
@@ -64,10 +73,10 @@ internal object AssetCatalogIcon {
             val preferred = preferredName?.trim()?.takeIf { it.isNotEmpty() }
             val candidates = catalog.sortedWith(
                 compareBy<Rendition>(
-                    { if (preferred != null && (it.name.contains(preferred, true) || it.filename.contains(preferred, true))) 0 else 1 },
+                    { if (preferred != null && (matchesPreferred(it.name, preferred) || matchesPreferred(it.filename, preferred))) 0 else 1 },
                     { if (it.name.contains("icon", true) || it.filename.contains("icon", true)) 0 else 1 },
-                    { -it.scale },
                     { -(it.width.toLong() * it.height) },
+                    { -it.scale },
                     { if (it.width == it.height) 0 else 1 },
                     { it.name },
                 ),
@@ -87,13 +96,18 @@ internal object AssetCatalogIcon {
                     }
                     continue
                 }
+                if (!Icons.isOpaque(bitmap)) {
+                    bitmap.recycle()
+                    attempts += Attempt(displayName, "decoded but fully transparent", false)
+                    continue
+                }
                 attempts += Attempt(displayName, "decoded ${rendition.encoding} asset-catalog rendition", true)
                 return Extraction(
                     bitmap = bitmap,
                     asset = displayName,
                     format = rendition.encoding,
-                    width = bitmap.width,
-                    height = bitmap.height,
+                    width = rendition.width,
+                    height = rendition.height,
                     scale = rendition.scale,
                     attempts = attempts,
                 )

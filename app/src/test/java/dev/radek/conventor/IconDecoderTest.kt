@@ -52,8 +52,8 @@ class IconDecoderTest {
             chunk("IDAT", compressed) + chunk("IEND", byteArrayOf())
     }
 
-    private fun platformPng(color: Int): ByteArray {
-        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+    private fun platformPng(color: Int, width: Int = 8, height: Int = 8): ByteArray {
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         bitmap.eraseColor(color)
         return try {
             ByteArrayOutputStream().use { output ->
@@ -115,24 +115,34 @@ class IconDecoderTest {
         }
     }
 
-    private fun assetCatalog(iconPng: ByteArray, backgroundPng: ByteArray): ByteArray {
+    private fun assetCatalog(
+        iconPng: ByteArray,
+        backgroundPng: ByteArray,
+        additionalIconPng: ByteArray? = null,
+    ): ByteArray {
         val builder = CarBuilder()
-        fun rendition(asset: String, id: Int, png: ByteArray): Pair<ByteArray, ByteArray> {
-            val key = le16(0x55) + le16(0xb5) + le16(3) + le16(id)
+        fun rendition(asset: String, id: Int, png: ByteArray, scale: Int = 3): Pair<ByteArray, ByteArray> {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(png, 0, png.size, bounds)
+            val width = bounds.outWidth.coerceAtLeast(1)
+            val height = bounds.outHeight.coerceAtLeast(1)
+            val key = le16(0x55) + le16(0xb5) + le16(scale) + le16(id)
             val header = ByteArray(184)
             "ISTC".toByteArray().copyInto(header)
             ByteBuffer.wrap(header).order(java.nio.ByteOrder.LITTLE_ENDIAN).apply {
-                position(4); putInt(1); putInt(0); putInt(8); putInt(8); putInt(300); putInt(0x47425241); putInt(1)
+                position(4); putInt(1); putInt(0); putInt(width); putInt(height); putInt(scale * 100); putInt(0x47425241); putInt(1)
                 position(36); putShort(0)
                 position(40); put(asset.toByteArray().copyOf(127))
                 position(168); putInt(0); putInt(0); putInt(0); putInt(png.size)
             }
             return key to (header + png)
         }
-        val renditionTree = builder.tree(listOf(
-            rendition("AppIcon.png", 0x8019, iconPng),
-            rendition("Background.png", 0x1234, backgroundPng),
-        ))
+        val renditions = mutableListOf(
+            rendition("AppIcon@3x.png", 0x8019, iconPng, 3),
+            rendition("Background.png", 0x1234, backgroundPng, 3),
+        )
+        additionalIconPng?.let { renditions += rendition("AppIcon@2x.png", 0x8019, it, 2) }
+        val renditionTree = builder.tree(renditions)
         fun facet(id: Int) = le16(0) + le16(0) + le16(3) + le16(1) + le16(0x55) +
             le16(2) + le16(0xb5) + le16(16) + le16(id)
         val facetTree = builder.tree(listOf("AppIcon".toByteArray() to facet(0x8019), "Background".toByteArray() to facet(0x1234)))
@@ -163,14 +173,17 @@ class IconDecoderTest {
         try {
             val app = File(root, "Fixture.app").apply { mkdirs() }
             File(app, "AppIcon.png").writeBytes(byteArrayOf(1, 2, 3))
-            File(app, "AppIcon@2x.png").writeBytes(platformPng(Color.MAGENTA))
-            File(app, "Background.png").writeBytes(platformPng(Color.BLACK))
+            File(app, "AppIcon@3x.png").writeBytes(platformPng(Color.MAGENTA, 8, 8))
+            File(app, "AppIcon@2x.png").writeBytes(platformPng(Color.MAGENTA, 16, 16))
+            File(app, "Background.png").writeBytes(platformPng(Color.BLACK, 128, 128))
             val output = File(root, "result").apply { mkdirs() }
 
             val result = extractIcon(app, listOf("AppIcon.png"), output)
 
             assertEquals("SUPPORTED", result.getString("status"))
             assertEquals("AppIcon@2x.png", result.getString("source"))
+            assertEquals(16, result.getInt("width"))
+            assertEquals(2.0, result.getDouble("scale"), 0.0)
         } finally {
             root.deleteRecursively()
         }
@@ -189,6 +202,55 @@ class IconDecoderTest {
             assertEquals("assets.car", result.getString("kind"))
             assertTrue(result.getString("source").contains("AppIcon"))
             assertTrue(result.getJSONArray("attempts").length() >= 1)
+            val saved = BitmapFactory.decodeFile(File(output, "icon.png").path)
+            assertNotNull(saved)
+            assertEquals(Color.MAGENTA, saved!!.getPixel(0, 0))
+            saved.recycle()
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test fun originalPixelDimensionsBreakTiesAfterDecodeDownsampling() {
+        val root = createTempDir(prefix = "radek-original-resolution-test")
+        try {
+            val app = File(root, "Fixture.app").apply { mkdirs() }
+            File(app, "AppIcon@3x.png").writeBytes(platformPng(Color.BLUE, 1024, 1024))
+            File(app, "AppIcon@2x.png").writeBytes(platformPng(Color.MAGENTA, 2048, 2048))
+            val output = File(root, "result").apply { mkdirs() }
+
+            val result = extractIcon(app, listOf("AppIcon"), output)
+
+            assertEquals("SUPPORTED", result.getString("status"))
+            assertEquals("AppIcon@2x.png", result.getString("source"))
+            assertEquals(2048, result.getInt("sourceWidth"))
+            assertEquals(2048, result.getInt("sourceHeight"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test fun largerCatalogRenditionBeatsHigherScaleAndSmallerDeclaredFile() {
+        val root = createTempDir(prefix = "radek-car-resolution-test")
+        try {
+            val app = File(root, "Fixture.app").apply { mkdirs() }
+            File(app, "AppIcon@3x.png").writeBytes(platformPng(Color.BLUE, 8, 8))
+            File(app, "Assets.car").writeBytes(
+                assetCatalog(
+                    platformPng(Color.MAGENTA, 8, 8),
+                    platformPng(Color.BLACK, 128, 128),
+                    platformPng(Color.MAGENTA, 16, 16),
+                ),
+            )
+            val output = File(root, "result").apply { mkdirs() }
+
+            val result = extractIcon(app, listOf("AppIcon"), output)
+
+            assertEquals("SUPPORTED", result.getString("status"))
+            assertEquals("assets.car", result.getString("kind"))
+            assertTrue(result.getString("source").contains("AppIcon"))
+            assertEquals(16, result.getInt("width"))
+            assertEquals(2.0, result.getDouble("scale"), 0.0)
             val saved = BitmapFactory.decodeFile(File(output, "icon.png").path)
             assertNotNull(saved)
             assertEquals(Color.MAGENTA, saved!!.getPixel(0, 0))

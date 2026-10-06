@@ -17,7 +17,7 @@ KOTLIN = ROOT / "app/src/main/java/dev/radek/conventor/Providers.kt"
 API_MAPPER_KOTLIN = ROOT / "app/src/main/java/dev/radek/conventor/AndroidApiMapper.kt"
 NATIVE_JNI = ROOT / "native/src/jni.cpp"
 
-# The dependency lines reported as BLOCKED by the on-device UI.
+# Dependency names commonly seen in on-device compatibility reports.
 REPORTED = (
     "/System/Library/Frameworks/Foundation.framework/Foundation",
     "/System/Library/Frameworks/OpenGLES.framework/OpenGLES",
@@ -38,7 +38,7 @@ REPORTED = (
 
 
 class ProviderTests(unittest.TestCase):
-    def test_every_reported_framework_has_a_real_provider(self):
+    def test_every_reported_framework_has_a_graded_provider_entry(self):
         for install_name in REPORTED:
             with self.subTest(install_name=install_name):
                 provider = providers.for_install_name(install_name)
@@ -67,17 +67,18 @@ class ProviderTests(unittest.TestCase):
         self.assertIsNotNone(provider)
         self.assertEqual("libgcc_s", provider.framework)
         self.assertEqual(providers.KIND_RUNTIME, provider.kind)
-        self.assertEqual(providers.STATUS_COMPATIBILITY, provider.status)
+        self.assertEqual(providers.STATUS_CANDIDATE, provider.status)
         self.assertIn("compiler-rt", provider.android)
         self.assertIn("libunwind", provider.android)
-        self.assertIn("not a loadable-library alias", provider.detail)
+        self.assertIn("no libgcc_s.so alias", provider.android)
+        self.assertIn("not a loadable-library mapping", provider.detail)
         self.assertIn("NDK compiler-rt builtins", providers.for_symbol("___aeabi_uidiv"))
         self.assertIn("NDK libunwind", providers.for_symbol("__Unwind_Resume"))
         self.assertIn("NDK compiler-rt builtins", providers.for_symbol("___divti3"))
         self.assertIn("NDK compiler-rt builtins", providers.for_symbol("___divdi3"))
         self.assertIn("NDK libunwind", providers.for_symbol("__aeabi_unwind_cpp_pr0"))
 
-    def test_platform_apis_map_onto_real_android_classes(self):
+    def test_platform_apis_are_only_compatibility_targets_not_implemented_bridges(self):
         for install_name, expected in (
             ("/System/Library/Frameworks/UIKit.framework/UIKit", "android.view"),
             ("/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox", "AudioTrack"),
@@ -164,7 +165,14 @@ class ProviderTests(unittest.TestCase):
                 self.assertEqual(provider.framework, framework)
                 self.assertEqual(provider.android, android)
                 self.assertEqual("KIND_" + {"native-library": "LIBRARY", "platform-api": "PLATFORM", "runtime": "RUNTIME"}[provider.kind], kind)
-                self.assertEqual("STATUS_" + provider.status.upper(), status)
+                status_values = {
+                    "STATUS_PROVIDED": providers.STATUS_PROVIDED,
+                    "STATUS_COMPATIBILITY": providers.STATUS_COMPATIBILITY,
+                    "STATUS_CANDIDATE": providers.STATUS_CANDIDATE,
+                    "STATUS_BLOCKED": providers.STATUS_NO_EXECUTION_PATH_YET,
+                    "STATUS_NO_EXECUTION_PATH_YET": providers.STATUS_NO_EXECUTION_PATH_YET,
+                }
+                self.assertEqual(provider.status, status_values[status])
 
     def test_runtime_ndk_export_whitelists_match_between_kotlin_and_jni(self):
         kotlin = API_MAPPER_KOTLIN.read_text()
@@ -176,11 +184,64 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(kotlin_libraries, cpp_libraries)
         self.assertTrue({"libnativewindow.so", "libneuralnetworks.so", "libsync.so"}.issubset(kotlin_libraries))
 
-    def test_analysis_edges_carry_provider_fields(self):
+    def test_analysis_edges_carry_graded_status_and_fail_closed_evidence(self):
         edge = providers.classify("/System/Library/Frameworks/UIKit.framework/UIKit")
-        self.assertEqual(
-            {"framework", "provider", "providerKind", "status", "reason"}, set(edge)
+        self.assertEqual(edge["status"], providers.STATUS_CANDIDATE)
+        self.assertEqual(edge["classification"], providers.STATUS_CANDIDATE)
+        self.assertEqual(edge["providerKind"], providers.KIND_PLATFORM)
+        evidence = edge["evidence"]
+        self.assertEqual(evidence["observedImportCount"], 0)
+        self.assertEqual(evidence["exportsVerifiedOnThisDevice"], 0)
+        self.assertEqual(evidence["hostTestedImplementations"], 0)
+        self.assertEqual(evidence["stubOnlyCount"], 0)
+        self.assertTrue(evidence["none"])
+        self.assertFalse(evidence["runtimeBackingClaimed"])
+        self.assertEqual(evidence["linkedGameCallCount"], 0)
+        self.assertFalse(evidence["runtimeCallsObserved"])
+        self.assertEqual(evidence["recompiledBytesLinked"], 0)
+
+    def test_required_grade_corrections_and_partial_frameworks(self):
+        expected = {
+            "libgcc_s.1.dylib": providers.STATUS_CANDIDATE,
+            "libstdc++.6.dylib": providers.STATUS_CANDIDATE,
+            "CoreFoundation.framework/CoreFoundation": providers.STATUS_COMPATIBILITY,
+            "QuartzCore.framework/QuartzCore": providers.STATUS_COMPATIBILITY,
+            "Foundation.framework/Foundation": providers.STATUS_CANDIDATE,
+            "UIKit.framework/UIKit": providers.STATUS_CANDIDATE,
+            "CoreGraphics.framework/CoreGraphics": providers.STATUS_CANDIDATE,
+            "OpenAL.framework/OpenAL": providers.STATUS_CANDIDATE,
+            "AudioToolbox.framework/AudioToolbox": providers.STATUS_CANDIDATE,
+        }
+        for suffix, grade in expected.items():
+            with self.subTest(install_name=suffix):
+                provider = providers.for_install_name(suffix)
+                self.assertIsNotNone(provider)
+                self.assertEqual(grade, provider.status)
+        stdcxx = providers.for_install_name("/usr/lib/libstdc++.6.dylib")
+        self.assertIn("GNU libstdc++", stdcxx.detail)
+        self.assertIn("different C++ ABIs and mangling", stdcxx.detail)
+        self.assertNotIn("NDK libc++_shared.so (NDK)", stdcxx.android)
+        for suffix in ("CoreFoundation.framework/CoreFoundation", "QuartzCore.framework/QuartzCore"):
+            provider = providers.for_install_name(suffix)
+            self.assertNotEqual(providers.STATUS_PROVIDED, provider.status)
+            self.assertIn("Partial only", provider.detail)
+
+    def test_per_import_evidence_keeps_host_tests_stubs_and_none_separate(self):
+        evidence = providers.evidence_summary(
+            ["_CFRelease", "_objc_msgSend", "_unmapped"],
+            verified_device_symbols=["_CFRelease"],
+            host_tested_symbols=["_CFRelease"],
+            stub_only_symbols=["_objc_msgSend"],
         )
+        self.assertEqual(evidence["observedImportCount"], 3)
+        self.assertEqual(evidence["exportsVerifiedOnThisDevice"], 1)
+        self.assertEqual(evidence["hostTestedImplementations"], 1)
+        self.assertEqual(evidence["stubOnlyCount"], 1)
+        self.assertEqual(evidence["noneCount"], 1)
+        self.assertFalse(evidence["none"])
+        self.assertIn("none", evidence["evidenceKinds"])
+        self.assertFalse(evidence["runtimeBackingClaimed"])
+        self.assertEqual(evidence["linkedGameCallCount"], 0)
 
 
 if __name__ == "__main__":

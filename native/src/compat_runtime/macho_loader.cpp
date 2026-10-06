@@ -19,6 +19,7 @@ constexpr std::uint32_t kCpuTypeArm = 12;
 constexpr std::uint32_t kFileTypeExecute = 2;
 constexpr std::uint32_t kLcSegment = 0x1;
 constexpr std::uint32_t kLcSymtab = 0x2;
+constexpr std::uint32_t kLcDysymtab = 0xb;
 constexpr std::uint32_t kLcUnixThread = 0x5;
 constexpr std::uint32_t kLcLoadDylib = 0xc;
 constexpr std::uint32_t kLcLazyLoadDylib = 0x20;
@@ -40,6 +41,12 @@ constexpr std::uint32_t kThreadFlavorArm = 1;
 constexpr std::uint32_t kArmThreadStateWords = 17;
 constexpr std::uint8_t kRebaseTypePointer = 1;
 constexpr std::uint8_t kBindTypePointer = 1;
+constexpr std::uint32_t kSectionTypeMask = 0xff;
+constexpr std::uint32_t kSectionNonLazySymbolPointers = 0x6;
+constexpr std::uint32_t kSectionLazySymbolPointers = 0x7;
+constexpr std::uint32_t kSectionSymbolStubs = 0x8;
+constexpr std::uint32_t kIndirectSymbolLocal = 0x80000000;
+constexpr std::uint32_t kIndirectSymbolAbsolute = 0x40000000;
 
 struct SliceRange {
     std::size_t offset = 0;
@@ -231,6 +238,17 @@ std::uint32_t addGuestAddress(std::uint64_t address, GuestAddress slide, const c
     return static_cast<GuestAddress>(result);
 }
 
+struct Section {
+    std::string name;
+    std::string segmentName;
+    std::uint32_t address = 0;
+    std::uint32_t size = 0;
+    std::uint32_t fileOffset = 0;
+    std::uint32_t flags = 0;
+    std::uint32_t reserved1 = 0;
+    std::uint32_t reserved2 = 0;
+};
+
 struct Segment {
     std::string name;
     std::uint32_t vmAddress = 0;
@@ -240,6 +258,7 @@ struct Segment {
     std::uint32_t initialProtection = 0;
     GuestAddress guestAddress = 0;
     bool mapped = false;
+    std::vector<Section> sections;
 };
 
 struct DyldStreams {
@@ -262,12 +281,22 @@ struct SymbolTable {
     bool present = false;
 };
 
+struct DynamicSymbolTable {
+    std::uint32_t indirectSymbolOffset = 0;
+    std::uint32_t indirectSymbolCount = 0;
+    std::uint32_t externalRelocationOffset = 0;
+    std::uint32_t externalRelocationCount = 0;
+    bool present = false;
+};
+
 struct ImageState {
     std::vector<Segment> segments;
     std::vector<std::string> dependencies;
     DyldStreams streams;
     SymbolTable symbols;
+    DynamicSymbolTable dynamicSymbols;
     GuestAddress entryPoint = 0;
+    std::string entryPointSource;
     CpuRegisterState registers;
     std::optional<std::uint64_t> mainEntryOffset;
     bool hasThreadEntry = false;
@@ -372,7 +401,18 @@ void bindAt(const ImageState &image, GuestAddressSpace &memory, const ShimRegist
                          "no tested native call adapter is registered for this symbol", source);
         return;
     }
-    const auto shimAddress = static_cast<std::uint64_t>(binding->guestAddress);
+    GuestAddress resolvedAddress = binding->guestAddress;
+    if (binding->resolveGuestAddress) {
+        std::string resolutionError;
+        if (!binding->resolveGuestAddress(memory, resolvedAddress, resolutionError) || resolvedAddress == 0) {
+            appendUnresolved(report, symbol, library, ordinal, target, weakImport,
+                             resolutionError.empty() ? "guest data symbol could not be materialized"
+                                                     : resolutionError,
+                             source);
+            return;
+        }
+    }
+    const auto shimAddress = static_cast<std::uint64_t>(resolvedAddress);
     std::uint64_t resolved = shimAddress;
     if (addend >= 0) {
         const auto positiveAddend = static_cast<std::uint64_t>(addend);
@@ -396,7 +436,7 @@ void bindAt(const ImageState &image, GuestAddressSpace &memory, const ShimRegist
                          "registered shim address plus addend exceeds the guest address space", source);
         return;
     }
-    if (resolved != shimAddress) {
+    if (resolved != shimAddress && !binding->resolveGuestAddress) {
         appendUnresolved(report, symbol, library, ordinal, target, weakImport,
                          "non-zero bind addends are unsupported for native shim callouts", source);
         return;
@@ -407,8 +447,10 @@ void bindAt(const ImageState &image, GuestAddressSpace &memory, const ShimRegist
                          "could not write the registered shim address into the bind slot", source);
         return;
     }
+    auto resolvedBinding = *binding;
+    resolvedBinding.guestAddress = static_cast<GuestAddress>(resolved);
     report.resolvedSymbols.push_back(makeSymbolRecord(symbol, "resolved", library, ordinal,
-                                                       target, weakImport, &*binding, "", source));
+                                                       target, weakImport, &resolvedBinding, "", source));
 }
 
 void applyRebases(const Reader &reader, const ImageState &image, GuestAddress slide,
@@ -612,40 +654,267 @@ void applyBinds(const Reader &reader, const ImageState &image, GuestAddressSpace
     }
 }
 
+struct NlistEntry {
+    std::string name;
+    std::uint8_t type = 0;
+    std::uint16_t description = 0;
+    std::uint32_t value = 0;
+
+    bool undefinedExternal() const {
+        return (type & 0xe0) == 0 && (type & 0x0e) == 0 && (type & 0x01) != 0;
+    }
+
+    bool weakImport() const { return (description & 0x0040) != 0; }
+
+    std::int64_t libraryOrdinal() const {
+        const auto raw = static_cast<std::uint8_t>(description >> 8);
+        return raw >= 0x80 ? static_cast<std::int64_t>(raw) - 0x100 : raw;
+    }
+};
+
+NlistEntry readNlistEntry(const Reader &reader, const ImageState &image,
+                          std::uint32_t symbolIndex) {
+    if (!image.symbols.present || symbolIndex >= image.symbols.symbolCount)
+        throw std::runtime_error("Mach-O relocation references an invalid nlist symbol index");
+    const auto entry = static_cast<std::uint64_t>(image.symbols.symbolOffset) +
+                       static_cast<std::uint64_t>(symbolIndex) * 12;
+    reader.range(entry, 12);
+    const auto stringIndex = reader.u32le(static_cast<std::size_t>(entry));
+    NlistEntry result;
+    result.type = reader.u8(static_cast<std::size_t>(entry + 4));
+    result.description = reader.u16le(static_cast<std::size_t>(entry + 6));
+    result.value = reader.u32le(static_cast<std::size_t>(entry + 8));
+    if (stringIndex >= image.symbols.stringSize)
+        throw std::runtime_error("Mach-O nlist symbol has an invalid string-table offset");
+    const auto stringStart = static_cast<std::uint64_t>(image.symbols.stringOffset) + stringIndex;
+    const auto stringEnd = static_cast<std::uint64_t>(image.symbols.stringOffset) +
+                           image.symbols.stringSize;
+    if (stringStart > std::numeric_limits<std::size_t>::max() ||
+        stringEnd > std::numeric_limits<std::size_t>::max())
+        throw std::runtime_error("Mach-O nlist string range exceeds the host address space");
+    result.name = reader.cstring(static_cast<std::size_t>(stringStart),
+                                 static_cast<std::size_t>(stringEnd));
+    return result;
+}
+
+bool resolveRegisteredAddress(const ShimRegistry &shims, GuestAddressSpace &memory,
+                              const NlistEntry &symbol, GuestAddress &address,
+                              std::optional<ShimBinding> &binding, std::string &reason) {
+    binding = shims.resolve(symbol.name);
+    if (!binding) {
+        reason = "no tested native call adapter is registered for this symbol";
+        return false;
+    }
+    address = binding->guestAddress;
+    if (binding->resolveGuestAddress) {
+        if (!binding->resolveGuestAddress(memory, address, reason) || address == 0) {
+            if (reason.empty())
+                reason = "guest data symbol could not be materialized";
+            return false;
+        }
+    }
+    return true;
+}
+
+void applyIndirectSymbolPointers(const Reader &reader, const ImageState &image,
+                                GuestAddress slide, GuestAddressSpace &memory,
+                                const ShimRegistry &shims, MachOLoadReport &report,
+                                std::set<std::string> &observedSymbols) {
+    if (!image.dynamicSymbols.present)
+        return;
+    reader.range(image.dynamicSymbols.indirectSymbolOffset,
+                 static_cast<std::uint64_t>(image.dynamicSymbols.indirectSymbolCount) * 4);
+
+    // Lazy symbol pointers appear first in the real iOS 2-6 link products and
+    // are the function targets consumed by their ARM symbol stubs. Process them
+    // before other fixups so the first reported missing import has a stable,
+    // address-bearing source record.
+    for (const auto sectionType : {kSectionLazySymbolPointers, kSectionNonLazySymbolPointers}) {
+        for (const auto &segment : image.segments) {
+            for (const auto &section : segment.sections) {
+                if ((section.flags & kSectionTypeMask) != sectionType)
+                    continue;
+                if ((section.size % sizeof(std::uint32_t)) != 0) {
+                    throw std::runtime_error("Mach-O indirect symbol-pointer section has a partial slot");
+                }
+                const auto pointerCount = section.size / sizeof(std::uint32_t);
+                if (section.reserved1 > image.dynamicSymbols.indirectSymbolCount ||
+                    pointerCount > image.dynamicSymbols.indirectSymbolCount - section.reserved1)
+                    throw std::runtime_error("Mach-O section exceeds the indirect symbol table");
+                for (std::uint32_t index = 0; index < pointerCount; ++index) {
+                    const auto indirectIndex = section.reserved1 + index;
+                    const auto indirectOffset = static_cast<std::uint64_t>(
+                        image.dynamicSymbols.indirectSymbolOffset) +
+                        static_cast<std::uint64_t>(indirectIndex) * 4;
+                    const auto symbolIndex = reader.u32le(static_cast<std::size_t>(indirectOffset));
+                    if ((symbolIndex & (kIndirectSymbolLocal | kIndirectSymbolAbsolute)) != 0)
+                        continue;
+                    const auto symbol = readNlistEntry(reader, image, symbolIndex);
+                    if (!symbol.undefinedExternal() || symbol.name.empty())
+                        continue;
+                    observedSymbols.insert(symbol.name);
+                    const auto ordinal = symbol.libraryOrdinal();
+                    const auto library = dependencyName(image, ordinal);
+                    const auto target64 = static_cast<std::uint64_t>(section.address) +
+                                          static_cast<std::uint64_t>(index) * sizeof(std::uint32_t);
+                    const auto target = addGuestAddress(target64, slide, "indirect symbol pointer");
+                    if (!memory.contains(target, sizeof(std::uint32_t), MemoryPermission::Write)) {
+                        appendUnresolved(report, symbol.name, library, ordinal, target,
+                                         symbol.weakImport(),
+                                         "indirect symbol pointer is outside writable guest memory",
+                                         "indirect-symbol");
+                        continue;
+                    }
+                    GuestAddress resolvedAddress = 0;
+                    std::optional<ShimBinding> binding;
+                    std::string resolutionError;
+                    if (!resolveRegisteredAddress(shims, memory, symbol, resolvedAddress,
+                                                  binding, resolutionError)) {
+                        appendUnresolved(report, symbol.name, library, ordinal, target,
+                                         symbol.weakImport(), resolutionError, "indirect-symbol");
+                        continue;
+                    }
+                    if (binding->resolveGuestAddress) {
+                        appendUnresolved(report, symbol.name, library, ordinal, target,
+                                         symbol.weakImport(),
+                                         "guest data symbol cannot occupy a function pointer slot",
+                                         "indirect-symbol");
+                        continue;
+                    }
+                    if (!memory.initialize(target, &resolvedAddress, sizeof(resolvedAddress))) {
+                        appendUnresolved(report, symbol.name, library, ordinal, target,
+                                         symbol.weakImport(),
+                                         "could not write the callout address into an indirect symbol pointer",
+                                         "indirect-symbol");
+                        continue;
+                    }
+                    binding->guestAddress = resolvedAddress;
+                    report.resolvedSymbols.push_back(makeSymbolRecord(
+                        symbol.name, "resolved", library, ordinal, target,
+                        symbol.weakImport(), &*binding, "", "indirect-symbol"));
+                }
+            }
+        }
+    }
+}
+
+void applyExternalRelocations(const Reader &reader, const ImageState &image,
+                              GuestAddress slide, GuestAddressSpace &memory,
+                              const ShimRegistry &shims, MachOLoadReport &report,
+                              std::set<std::string> &observedSymbols) {
+    if (!image.dynamicSymbols.present || image.dynamicSymbols.externalRelocationCount == 0)
+        return;
+    reader.range(image.dynamicSymbols.externalRelocationOffset,
+                 static_cast<std::uint64_t>(image.dynamicSymbols.externalRelocationCount) * 8);
+    std::set<std::string> unresolvedSymbols;
+    for (std::uint32_t index = 0; index < image.dynamicSymbols.externalRelocationCount; ++index) {
+        const auto relocation = static_cast<std::uint64_t>(
+            image.dynamicSymbols.externalRelocationOffset) + static_cast<std::uint64_t>(index) * 8;
+        const auto rawAddress = reader.u32le(static_cast<std::size_t>(relocation));
+        const auto info = reader.u32le(static_cast<std::size_t>(relocation + 4));
+        if ((rawAddress & 0x80000000U) != 0)
+            throw std::runtime_error("scattered relocations are invalid in the external relocation table");
+        const bool external = ((info >> 27) & 1U) != 0;
+        const auto length = (info >> 25) & 0x3U;
+        const bool pcRelative = ((info >> 24) & 1U) != 0;
+        const auto relocationType = (info >> 28) & 0xfU;
+        if (!external)
+            throw std::runtime_error("external relocation table contains a local relocation");
+        const auto symbolIndex = info & 0x00ffffffU;
+        const auto symbol = readNlistEntry(reader, image, symbolIndex);
+        if (!symbol.undefinedExternal() || symbol.name.empty())
+            continue;
+        observedSymbols.insert(symbol.name);
+        const auto ordinal = symbol.libraryOrdinal();
+        const auto library = dependencyName(image, ordinal);
+        const auto target = addGuestAddress(rawAddress, slide, "external relocation target");
+        if (!memory.contains(target, sizeof(std::uint32_t), MemoryPermission::Write)) {
+            if (unresolvedSymbols.insert(symbol.name).second)
+                appendUnresolved(report, symbol.name, library, ordinal, target,
+                                 symbol.weakImport(),
+                                 "external relocation target is outside writable guest memory",
+                                 "external-relocation");
+            continue;
+        }
+        if (relocationType != 0 || pcRelative || length != 2) {
+            if (unresolvedSymbols.insert(symbol.name).second)
+                appendUnresolved(report, symbol.name, library, ordinal, target,
+                                 symbol.weakImport(),
+                                 "only absolute 32-bit ARM vanilla external relocations are supported",
+                                 "external-relocation");
+            continue;
+        }
+        GuestAddress resolvedAddress = 0;
+        std::optional<ShimBinding> binding;
+        std::string resolutionError;
+        if (!resolveRegisteredAddress(shims, memory, symbol, resolvedAddress,
+                                      binding, resolutionError)) {
+            if (unresolvedSymbols.insert(symbol.name).second)
+                appendUnresolved(report, symbol.name, library, ordinal, target,
+                                 symbol.weakImport(), resolutionError, "external-relocation");
+            continue;
+        }
+        std::uint32_t rawAddend = 0;
+        if (!memory.read(target, &rawAddend, sizeof(rawAddend))) {
+            if (unresolvedSymbols.insert(symbol.name).second)
+                appendUnresolved(report, symbol.name, library, ordinal, target,
+                                 symbol.weakImport(),
+                                 "could not read the external relocation addend",
+                                 "external-relocation");
+            continue;
+        }
+        const auto addend = static_cast<std::int64_t>(static_cast<std::int32_t>(rawAddend));
+        const auto signedAddress = static_cast<std::int64_t>(resolvedAddress) + addend;
+        if (signedAddress < 0 ||
+            signedAddress > std::numeric_limits<GuestAddress>::max() ||
+            (addend != 0 && !binding->resolveGuestAddress)) {
+            if (unresolvedSymbols.insert(symbol.name).second)
+                appendUnresolved(report, symbol.name, library, ordinal, target,
+                                 symbol.weakImport(),
+                                 binding->resolveGuestAddress
+                                     ? "data-symbol relocation addend exceeds the guest address space"
+                                     : "non-zero relocation addend is unsupported for a native callout",
+                                 "external-relocation");
+            continue;
+        }
+        const auto finalAddress = static_cast<GuestAddress>(signedAddress);
+        if (!memory.initialize(target, &finalAddress, sizeof(finalAddress))) {
+            if (unresolvedSymbols.insert(symbol.name).second)
+                appendUnresolved(report, symbol.name, library, ordinal, target,
+                                 symbol.weakImport(),
+                                 "could not write the relocated guest symbol address",
+                                 "external-relocation");
+            continue;
+        }
+        binding->guestAddress = finalAddress;
+        report.resolvedSymbols.push_back(makeSymbolRecord(
+            symbol.name, "resolved", library, ordinal, target,
+            symbol.weakImport(), &*binding, "", "external-relocation"));
+    }
+}
+
 void appendUnboundNlistImports(const Reader &reader, const ImageState &image,
                                const ShimRegistry &shims, MachOLoadReport &report,
                                const std::set<std::string> &alreadyReported) {
     if (!image.symbols.present)
         return;
-    const std::uint64_t symbolBytes = static_cast<std::uint64_t>(image.symbols.symbolCount) * 12;
-    reader.range(image.symbols.symbolOffset, symbolBytes);
+    reader.range(image.symbols.symbolOffset,
+                 static_cast<std::uint64_t>(image.symbols.symbolCount) * 12);
     reader.range(image.symbols.stringOffset, image.symbols.stringSize);
     for (std::uint32_t index = 0; index < image.symbols.symbolCount; ++index) {
-        const auto entry = static_cast<std::size_t>(image.symbols.symbolOffset) + index * 12;
-        const auto stringIndex = reader.u32le(entry);
-        const auto type = reader.u8(entry + 4);
-        const auto description = reader.u16le(entry + 6);
-        if ((type & 0xe0) != 0 || (type & 0x0e) != 0 || (type & 0x01) == 0)
+        const auto symbol = readNlistEntry(reader, image, index);
+        if (!symbol.undefinedExternal() || symbol.name.empty() ||
+            alreadyReported.count(symbol.name) != 0)
             continue;
-        if (stringIndex >= image.symbols.stringSize)
-            throw std::runtime_error("Mach-O undefined symbol has an invalid string-table offset");
-        const auto stringStart = static_cast<std::uint64_t>(image.symbols.stringOffset) + stringIndex;
-        const auto stringEnd = static_cast<std::uint64_t>(image.symbols.stringOffset) +
-                               image.symbols.stringSize;
-        if (stringEnd > std::numeric_limits<std::size_t>::max())
-            throw std::runtime_error("Mach-O string-table range exceeds the host address space");
-        const auto symbol = reader.cstring(static_cast<std::size_t>(stringStart),
-                                           static_cast<std::size_t>(stringEnd));
-        if (symbol.empty() || alreadyReported.count(symbol))
-            continue;
-        const bool weak = (description & 0x0040) != 0;
-        const auto binding = shims.resolve(symbol);
+        const auto ordinal = symbol.libraryOrdinal();
+        const auto library = dependencyName(image, ordinal);
+        const auto binding = shims.resolve(symbol.name);
         if (binding) {
-            // Without a dyld bind location, the symbol is known but cannot be installed.
-            appendUnresolved(report, symbol, "nlist-undefined", 0, 0, weak,
-                             "undefined symbol has no dyld bind location", "nlist");
+            // Without an indirect pointer or relocation, the symbol is known but cannot be installed.
+            appendUnresolved(report, symbol.name, library, ordinal, 0, symbol.weakImport(),
+                             "undefined symbol has no loader binding location", "nlist");
         } else {
-            appendUnresolved(report, symbol, "nlist-undefined", 0, 0, weak,
+            appendUnresolved(report, symbol.name, library, ordinal, 0, symbol.weakImport(),
                              "no tested native call adapter is registered for this symbol", "nlist");
         }
     }
@@ -683,6 +952,27 @@ void parseLoadCommands(const Reader &reader, ImageState &image,
             if (static_cast<std::uint64_t>(segment.vmAddress) + segment.vmSize >
                 (std::uint64_t{1} << 32))
                 throw std::runtime_error("Mach-O segment exceeds the 32-bit address space");
+            std::size_t sectionCursor = cursor + kSegmentCommand32Size;
+            for (std::uint32_t sectionIndex = 0; sectionIndex < sectionCount; ++sectionIndex) {
+                Section section;
+                section.name = reader.fixedString(sectionCursor, 16);
+                section.segmentName = reader.fixedString(sectionCursor + 16, 16);
+                section.address = reader.u32le(sectionCursor + 32);
+                section.size = reader.u32le(sectionCursor + 36);
+                section.fileOffset = reader.u32le(sectionCursor + 40);
+                section.flags = reader.u32le(sectionCursor + 56);
+                section.reserved1 = reader.u32le(sectionCursor + 60);
+                section.reserved2 = reader.u32le(sectionCursor + 64);
+                if (section.segmentName != segment.name)
+                    throw std::runtime_error("Mach-O section " + section.name + " names segment " +
+                                             section.segmentName + " instead of " + segment.name);
+                if (section.address < segment.vmAddress ||
+                    static_cast<std::uint64_t>(section.address) + section.size >
+                        static_cast<std::uint64_t>(segment.vmAddress) + segment.vmSize)
+                    throw std::runtime_error("Mach-O section is outside its segment");
+                segment.sections.push_back(std::move(section));
+                sectionCursor += kSection32Size;
+            }
             image.segments.push_back(std::move(segment));
         } else if (command == kLcLoadDylib || command == kLcLazyLoadDylib ||
                    command == kLcLoadWeakDylib || command == kLcLoadUpwardDylib ||
@@ -717,6 +1007,16 @@ void parseLoadCommands(const Reader &reader, ImageState &image,
             image.symbols.stringOffset = reader.u32le(cursor + 16);
             image.symbols.stringSize = reader.u32le(cursor + 20);
             image.symbols.present = true;
+        } else if (command == kLcDysymtab) {
+            if (commandSize < 80)
+                throw std::runtime_error("Mach-O dynamic symbol-table command is truncated");
+            if (image.dynamicSymbols.present)
+                throw std::runtime_error("Mach-O has duplicate dynamic symbol-table commands");
+            image.dynamicSymbols.indirectSymbolOffset = reader.u32le(cursor + 56);
+            image.dynamicSymbols.indirectSymbolCount = reader.u32le(cursor + 60);
+            image.dynamicSymbols.externalRelocationOffset = reader.u32le(cursor + 64);
+            image.dynamicSymbols.externalRelocationCount = reader.u32le(cursor + 68);
+            image.dynamicSymbols.present = true;
         } else if (command == kLcEncryptionInfo) {
             if (commandSize < 20)
                 throw std::runtime_error("Mach-O encryption-info command is truncated");
@@ -810,6 +1110,7 @@ radek::Json MachOLoadReport::toJson() const {
     report["status"] = status;
     report["imageMapped"] = mapped;
     report["entryPoint"] = static_cast<std::uint64_t>(entryPoint);
+    report["entryPointSource"] = entryPointSource;
     report["thumb"] = thumb;
     report["segmentCount"] = static_cast<std::uint64_t>(segmentCount);
     report["rebasesApplied"] = static_cast<std::uint64_t>(rebasesApplied);
@@ -869,9 +1170,11 @@ MachOLoadReport MachOLoader::load(const std::vector<std::uint8_t> &mainBinary,
 
         if (image.mainEntryOffset) {
             image.entryPoint = segmentAddressAtFileOffset(image, *image.mainEntryOffset, slide);
+            image.entryPointSource = "LC_MAIN";
             image.registers.r[15] = image.entryPoint;
             image.hasEntryPoint = true;
         } else if (image.hasThreadEntry) {
+            image.entryPointSource = "LC_UNIXTHREAD";
             const auto thumbBit = image.entryPoint & 1;
             image.entryPoint = addGuestAddress(image.entryPoint & ~GuestAddress{1}, slide,
                                                "initial thread PC") | thumbBit;
@@ -902,12 +1205,38 @@ MachOLoadReport MachOLoader::load(const std::vector<std::uint8_t> &mainBinary,
             if (found != record.fields.end())
                 observedSymbols.insert(found->second.value);
         }
+        applyIndirectSymbolPointers(reader, image, slide, addressSpace, shims, report,
+                                    observedSymbols);
+        applyExternalRelocations(reader, image, slide, addressSpace, shims, report,
+                                 observedSymbols);
         appendUnboundNlistImports(reader, image, shims, report, observedSymbols);
 
         report.entryPoint = image.entryPoint;
+        report.entryPointSource = image.entryPointSource;
         report.thumb = (image.entryPoint & 1) != 0 || (image.registers.cpsr & (1U << 5)) != 0;
         report.initialRegisters = image.registers;
         report.initialRegisters.r[15] = image.entryPoint;
+
+        std::vector<GuestImageSection> guestSections;
+        for (const auto &segment : image.segments) {
+            if (!segment.mapped)
+                continue;
+            for (const auto &section : segment.sections) {
+                guestSections.push_back(GuestImageSection{
+                    segment.name, section.name,
+                    addGuestAddress(section.address, slide, "section address"),
+                    section.size,
+                });
+            }
+        }
+        std::string metadataError;
+        if (!shims.initializeImage(addressSpace, guestSections, metadataError)) {
+            report.status = "BLOCKED_RUNTIME_METADATA";
+            report.error = metadataError.empty()
+                ? "A registered runtime rejected the mapped Mach-O metadata."
+                : metadataError;
+            return report;
+        }
         report.status = report.unresolvedSymbols.empty() ? "LOADED" : "BLOCKED_UNRESOLVED_IMPORTS";
     } catch (const std::exception &error) {
         report.status = "BLOCKED";

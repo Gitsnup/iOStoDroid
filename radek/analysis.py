@@ -9,6 +9,12 @@ from pathlib import Path
 from .archive import InputError
 from .resources import MACH_MAGICS
 from .ir import Unsupported, Program, lift
+from .providers import (
+    STATUS_NO_EXECUTION_PATH_YET,
+    classify as classify_provider,
+    evidence_summary,
+)
+from .api_implementations import _SUPPORTED as _HOST_TESTED_SHIMS
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -32,6 +38,30 @@ def analyze(path: Path) -> dict:
     if len(proc.stdout) > 64 * 1024 * 1024:
         raise InputError("analysis output exceeds limit")
     return json.loads(proc.stdout)
+
+
+def _macho_import_ordinal(imported: dict) -> int | None:
+    """Return an import's dylib ordinal, including the nlist n_desc encoding."""
+    ordinal = imported.get("ordinal")
+    if isinstance(ordinal, int) and not isinstance(ordinal, bool):
+        return ordinal
+    if isinstance(ordinal, str):
+        try:
+            return int(ordinal, 0)
+        except ValueError:
+            try:
+                return int(ordinal, 10)
+            except ValueError:
+                return None
+    description = imported.get("description")
+    if isinstance(description, int) and not isinstance(description, bool):
+        return (description >> 8) & 0xFF
+    if isinstance(description, str):
+        try:
+            return (int(description, 0) >> 8) & 0xFF
+        except ValueError:
+            return None
+    return None
 
 
 def dependency_graph(app: Path, main: Path, report: dict) -> dict:
@@ -59,9 +89,13 @@ def dependency_graph(app: Path, main: Path, report: dict) -> dict:
         nodes.append({"path": path.relative_to(app).as_posix(), "analysis": analysis})
     edges = []
     by_path = {n["path"] for n in nodes}
+    from .compat_layer import classify as classify_compat_import, is_embeddable
+
     for node in nodes:
         for sl in node["analysis"]["slices"]:
-            for dep in sl["dependencies"]:
+            dependencies = sl.get("dependencies", []) or []
+            imports = sl.get("imports", []) or []
+            for dependency_index, dep in enumerate(dependencies, start=1):
                 name = dep["path"]
                 target = None
                 if name.startswith("@executable_path/"):
@@ -82,20 +116,50 @@ def dependency_graph(app: Path, main: Path, report: dict) -> dict:
                         candidate = (Path(prefix) / name[len("@rpath/") :]).as_posix()
                         if candidate in by_path:
                             target = candidate
-                edges.append(
-                    {
-                        "from": node["path"],
-                        "architecture": sl["architecture"],
-                        "installName": name,
-                        "resolvedBundlePath": target,
-                        "classification": "unsupported",
-                        "reason": (
-                            "embedded binary ABI/linking not implemented"
-                            if target
-                            else "no verified Darwin framework/ABI provider"
+
+                observed = sorted({
+                    item.get("name", "")
+                    for item in imports
+                    if isinstance(item, dict)
+                    and _macho_import_ordinal(item) == dependency_index
+                    and isinstance(item.get("name"), str)
+                    and item.get("name")
+                })
+                stub_only = {
+                    symbol for symbol in observed
+                    if symbol not in _HOST_TESTED_SHIMS
+                    and is_embeddable(symbol)
+                    and classify_compat_import(symbol) == "stubbed"
+                }
+                edge = classify_provider(name)
+                edge.update({
+                    "from": node["path"],
+                    "architecture": sl["architecture"],
+                    "installName": name,
+                    "dylibOrdinal": dependency_index,
+                    "resolvedBundlePath": target,
+                    "evidence": evidence_summary(
+                        observed,
+                        host_tested_symbols=_HOST_TESTED_SHIMS,
+                        stub_only_symbols=stub_only,
+                        association_complete=(
+                            sl.get("bindDecodingComplete", True)
+                            and not sl.get("importsTruncated", False)
+                            and all(
+                                isinstance(item, dict) and _macho_import_ordinal(item) is not None
+                                for item in imports
+                            )
                         ),
-                    }
-                )
+                    ),
+                })
+                if target:
+                    edge["status"] = STATUS_NO_EXECUTION_PATH_YET
+                    edge["classification"] = STATUS_NO_EXECUTION_PATH_YET
+                    edge["reason"] = (
+                        "This dependency resolves to an embedded Darwin image, but its loading, ABI, "
+                        "and callout/link execution path are not implemented."
+                    )
+                edges.append(edge)
     return {"nodes": nodes, "edges": edges}
 
 

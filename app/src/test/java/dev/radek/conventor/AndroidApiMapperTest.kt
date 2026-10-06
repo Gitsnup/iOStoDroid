@@ -266,13 +266,58 @@ class AndroidApiMapperTest {
         assertTrue(decoded.any { it.getString("reason").contains("does not provide a drop-in libgcc_s.so") })
     }
 
-    @Test fun libgccInstallNameAndSymbolHintsStayExplicitlyUnlinked() {
-        val mapping = Providers.classify("/usr/lib/libgcc_s.1.dylib")
-        assertEquals(Providers.STATUS_COMPATIBILITY, mapping.getString("status"))
-        assertEquals("libgcc_s", mapping.getString("framework"))
-        assertTrue(mapping.getString("provider").contains("compiler-rt"))
-        assertTrue(mapping.getString("reason").contains("not a loadable-library alias"))
+    @Test fun legacyCppRuntimeNamesStayCandidatesAndFrameworkSubsetsStayPartial() {
+        val gcc = Providers.classify("/usr/lib/libgcc_s.1.dylib")
+        assertEquals(Providers.STATUS_CANDIDATE, gcc.getString("status"))
+        assertEquals("libgcc_s", gcc.getString("framework"))
+        assertTrue(gcc.getString("provider").contains("compiler-rt"))
+        assertTrue(gcc.getString("reason").contains("no libgcc_s.so alias"))
+
+        val stdcxx = Providers.classify("/usr/lib/libstdc++.6.dylib")
+        assertEquals(Providers.STATUS_CANDIDATE, stdcxx.getString("status"))
+        assertTrue(stdcxx.getString("reason").contains("different C++ ABIs and mangling"))
+        assertFalse(stdcxx.getString("provider").contains("GNU C++ runtime served by libc++"))
+
+        for (framework in listOf("CoreFoundation", "QuartzCore")) {
+            val mapping = Providers.classify("/System/Library/Frameworks/$framework.framework/$framework")
+            assertEquals(Providers.STATUS_COMPATIBILITY, mapping.getString("status"))
+            assertTrue(mapping.getString("reason").contains("Partial only"))
+            assertFalse(Providers.describe("/System/Library/Frameworks/$framework.framework/$framework").startsWith("PROVIDED"))
+        }
+        for (framework in listOf("Foundation", "UIKit", "CoreGraphics", "OpenAL", "AudioToolbox")) {
+            val mapping = Providers.classify("/System/Library/Frameworks/$framework.framework/$framework")
+            assertEquals(Providers.STATUS_CANDIDATE, mapping.getString("status"))
+            assertTrue(mapping.getString("reason").contains("No ") || mapping.getString("reason").contains("not adapted"))
+        }
         assertTrue(Providers.forSymbol("___divti3")!!.contains("not linked"))
+    }
+
+    @Test fun providerEvidenceListsExportsHostTestsStubsAndNoneWithoutLinkClaims() {
+        val symbolEvidence = mapOf(
+            "_verified" to JSONObject().put("evidence", JSONObject()
+                .put("exportsVerifiedOnThisDevice", true).put("hostTestedImplementation", false).put("stubOnly", false)),
+            "_hostTested" to JSONObject().put("evidence", JSONObject()
+                .put("exportsVerifiedOnThisDevice", false).put("hostTestedImplementation", true).put("stubOnly", false)),
+            "_stub" to JSONObject().put("evidence", JSONObject()
+                .put("exportsVerifiedOnThisDevice", false).put("hostTestedImplementation", false).put("stubOnly", true)),
+        )
+        val evidence = Providers.evidenceForImports(
+            listOf("_verified", "_hostTested", "_stub", "_unknown"),
+            symbolEvidence,
+        )
+        assertEquals(1, evidence.getInt("exportsVerifiedOnThisDevice"))
+        assertEquals(1, evidence.getInt("hostTestedImplementations"))
+        assertEquals(1, evidence.getInt("stubOnlyCount"))
+        assertEquals(1, evidence.getInt("noneCount"))
+        assertFalse(evidence.getBoolean("none"))
+        assertFalse(evidence.getBoolean("runtimeBackingClaimed"))
+        assertEquals(0, evidence.getInt("linkedGameCallCount"))
+        assertEquals(0, evidence.getInt("recompiledBytesLinked"))
+
+        val noEvidence = Providers.classify("/usr/lib/libUnknown.dylib").getJSONObject("evidence")
+        assertEquals(Providers.STATUS_NO_EXECUTION_PATH_YET, Providers.classify("/usr/lib/libUnknown.dylib").getString("status"))
+        assertTrue(noEvidence.getBoolean("none"))
+        assertEquals("none", noEvidence.getJSONArray("evidenceKinds").getString(0))
     }
 
     @Test fun displayLinkSemanticHintStatesTheObjectiveCAbiIsNotImplemented() {
@@ -296,6 +341,11 @@ class AndroidApiMapperTest {
         assertEquals(0, mapping.getInt("classificationCoveragePercent"))
         assertEquals(0, mapping.getInt("generatedApiImplementationCount"))
         assertEquals(0, mapping.getInt("linkedImplementationCoveragePercent"))
+        val evidence = mapping.getJSONObject("evidence")
+        assertTrue(evidence.getBoolean("none"))
+        assertEquals(0, evidence.getInt("observedImportCount"))
+        assertEquals(0, evidence.getInt("recompiledBytesLinked"))
+        assertEquals(0, evidence.getInt("linkedGameCallCount"))
     }
 
     @Test fun compatStubHandlersAreRegisteredAndNeverCountedAsVerifiedImplementations() {
@@ -355,6 +405,16 @@ class AndroidApiMapperTest {
         val direct = items.single { it.getString("sourceSymbol") == "_glDrawArrays" }
         assertEquals("catalog symbol keeps direct classification", "BIONIC_SYMBOL_CANDIDATE", direct.getString("classification"))
         assertEquals("catalog symbol target library", "libGLESv2.so", direct.getString("targetLibrary"))
+        assertTrue(stub.getJSONObject("evidence").getBoolean("stubOnly"))
+        assertFalse(stub.getJSONObject("evidence").getBoolean("none"))
+        assertTrue(direct.getJSONObject("evidence").getBoolean("none"))
+        val evidence = mapping.getJSONObject("evidence")
+        assertEquals(4, evidence.getInt("observedImportCount"))
+        assertEquals(1, evidence.getInt("hostTestedImplementations"))
+        assertEquals(2, evidence.getInt("stubOnlyCount"))
+        assertEquals(1, evidence.getInt("noneCount"))
+        assertFalse(evidence.getBoolean("runtimeBackingClaimed"))
+        assertEquals(0, evidence.getInt("recompiledBytesLinked"))
     }
 
     @Test fun compatResolverExceptionsFallBackToUnmapped() {

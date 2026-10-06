@@ -24,6 +24,10 @@ typedef struct CPU {
     uint32_t fpscr;  /* only NZCV bits are modelled (never configured) */
 } CPU;
 
+void tdispatch(CPU *cpu, uint32_t x);
+int vret_site_ok(uint32_t s);
+void trabort(void);
+
 /* NZCV bits */
 #define F_N ((uint32_t)1u << 31)
 #define F_Z ((uint32_t)1u << 30)

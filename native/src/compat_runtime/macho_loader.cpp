@@ -44,7 +44,6 @@ constexpr std::uint8_t kBindTypePointer = 1;
 constexpr std::uint32_t kSectionTypeMask = 0xff;
 constexpr std::uint32_t kSectionNonLazySymbolPointers = 0x6;
 constexpr std::uint32_t kSectionLazySymbolPointers = 0x7;
-constexpr std::uint32_t kSectionSymbolStubs = 0x8;
 constexpr std::uint32_t kIndirectSymbolLocal = 0x80000000;
 constexpr std::uint32_t kIndirectSymbolAbsolute = 0x40000000;
 

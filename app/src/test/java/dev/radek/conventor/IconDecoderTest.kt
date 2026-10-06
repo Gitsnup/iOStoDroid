@@ -229,8 +229,10 @@ class IconDecoderTest {
 
             assertEquals("SUPPORTED", result.getString("status"))
             assertEquals("selection diagnostics: $result", "AppIcon@2x.png", result.getString("source"))
-            assertEquals(1024, result.getInt("sourceWidth"))
-            assertEquals(1024, result.getInt("sourceHeight"))
+            // extractIcon exposes source dimensions as width/height and the
+            // sampled bitmap size separately as decodedWidth/decodedHeight.
+            assertEquals(1024, result.getInt("width"))
+            assertEquals(1024, result.getInt("height"))
             assertEquals(512, result.getInt("decodedWidth"))
             assertEquals(512, result.getInt("decodedHeight"))
         } finally {

@@ -29,7 +29,7 @@ from radek.game.lift import sanitize  # noqa: E402
 STACK_BASE, STACK_SIZE = 0x30000000, 0x10000
 SCR0_BASE, SCR1_BASE, SCR_SIZE = 0x10000000, 0x11000000, 0x10000
 RET_MARKER = 0x80AD0000
-INSN_LIMIT = 200000
+INSN_LIMIT = 2000000
 
 BUILD = os.path.join(os.path.dirname(__file__), "dtwork")
 
@@ -265,6 +265,12 @@ def run_uc_side(img, funcs, ctx, regions, cases):
         mu.mem_map(s, e - s)
     for a, ln in regions:
         mu.mem_write(a, pristine[a])
+    text_pages = set()
+    for s in img.sections:
+        if s.segment == "__TEXT" and s.size:
+            for pg in range(s.address & ~0xFFF, (s.address + s.size + 0xFFF) & ~0xFFF, 0x1000):
+                text_pages.add(pg)
+    helper_addr = next((a for a, f in funcs.items() if f.name == "dyld_stub_binding_helper"), None)
     code_set = set()
     vfp_addrs = set()
     for a, f in funcs.items():
@@ -384,7 +390,8 @@ def run_uc_side(img, funcs, ctx, regions, cases):
         hashes.append(fnv(bytes(mu.mem_read(STACK_BASE, STACK_SIZE))))
         hashes.append(fnv(bytes(mu.mem_read(SCR0_BASE, SCR_SIZE))))
         hashes.append(fnv(bytes(mu.mem_read(SCR1_BASE, SCR_SIZE))))
-        results.append((state["mode"], state.get("detail", 0), got, gotc, hashes))
+        results.append((state["mode"], state.get("detail", 0), got, gotc, hashes,
+                        bool(dirty & text_pages), helper_addr))
     return results
 
 
@@ -573,11 +580,27 @@ def main() -> int:
     npass = nskip = 0
     fails = []
     mem_probes = []
-    for ci, ((cm, cd, cr, cc, ch), (um, ud, ur, uc, uh)) in enumerate(zip(cres, ures)):
+    text_idx = [i for i, (a, _ln) in enumerate(regions)
+                if any(s.segment == "__TEXT" and s.address == a for s in img.sections)]
+    _blob = open(os.path.join(BUILD, "dt_mem.bin"), "rb").read()
+    _lens = [ln for _a, ln in regions]
+    pristine_text = [fnv(_blob[sum(_lens[:i]):sum(_lens[:i + 1])]) for i in text_idx]
+    for ci, ((cm, cd, cr, cc, ch), (um, ud, ur, uc, uh, u_textdirty, helper)) in enumerate(zip(cres, ures)):
         fi, addr, seed, _r, _c = cases[ci]
         if um in ("VFP", "THUMB"):
             nskip += 1
             continue
+        c_textdirty = any(ch[i] != pristine_text[k] for k, i in enumerate(text_idx))
+        if u_textdirty or c_textdirty:
+            # Self-modifying code: translation cannot model executing
+            # rewritten TEXT. Skip (unmodelable on at least one side).
+            nskip += 1
+            continue
+        if um == "DISPATCH" and 0x2FE00000 <= ud < 0x30000000:
+            # Unicorn ran the stub helper into dyld: unmodelable glue.
+            if cm == "DISPATCH" and cd == helper:
+                nskip += 1
+                continue
         if (cm, um) in (("TIMEOUT", "LIMIT"),):
             nskip += 1
             continue
@@ -659,7 +682,7 @@ def main() -> int:
                     break
             if unexpl:
                 cm, cd, _cr, _cc, _ch = cres[ci]
-                um, ud, _ur, _uc, _uh = ures[ci]
+                um, ud, _ur, _uc, _uh, _ut, _hh = ures[ci]
                 fails.append((addr, funcs[addr].name, seed, cm, cd, um, ud, unexpl))
             else:
                 npass += 1

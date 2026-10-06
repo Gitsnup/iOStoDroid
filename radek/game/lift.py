@@ -410,6 +410,11 @@ class _Emitter:
         )
         ops = insn.operands
         setflags = _writes_flags(insn)
+        if insn.id in (ARM_INS_ADC, ARM_INS_SBC, ARM_INS_RSC):
+            # Capstone reports update_flags=True for every ADC/SBC/RSC
+            # (they read C); trust the encoding's S bit instead.
+            word = int.from_bytes(self.raw_by_addr[addr], "little")
+            setflags = bool((word >> 20) & 1)
         lines: list[str] = []
 
         def dst_reg() -> int:
@@ -563,7 +568,17 @@ class _Emitter:
 
     def emit_shifter_carry(self, addr, insn, op, lines: list[str]) -> None:
         """Update the C flag from a data-processing shifter when exact."""
-        from capstone.arm import ARM_OP_REG, ARM_SFT_INVALID
+        from capstone.arm import ARM_OP_IMM, ARM_OP_REG, ARM_SFT_INVALID
+        if op.type == ARM_OP_IMM:
+            # Rotated data-processing immediate with rotate != 0 sets C to
+            # bit 31 of the shifter operand; rotate == 0 leaves C alone.
+            word = int.from_bytes(self.raw_by_addr[addr], "little")
+            if ((word >> 8) & 0xF) != 0:
+                if (int(op.imm) >> 31) & 1:
+                    lines.append("cpu->cpsr |= 0x20000000u;")
+                else:
+                    lines.append("cpu->cpsr &= ~0x20000000u;")
+            return
         if op.type != ARM_OP_REG or op.shift.type == ARM_SFT_INVALID:
             return
         stype = op.shift.type
@@ -909,24 +924,18 @@ class _Emitter:
         word = int.from_bytes(raw, "little")
         if "^" in op_str:
             raise LiftError("user-mode (^) block transfer")
-        is_load = insn.id in (ARM_INS_LDM, ARM_INS_POP) or (word >> 20) & 1
-        if insn.id not in (ARM_INS_LDM, ARM_INS_POP):
-            # STM-family (or POP/PUSH alias already classified): trust the id.
-            is_load = insn.id in (ARM_INS_LDM, ARM_INS_POP)
+        # The L bit (20) is authoritative for every block-transfer
+        # encoding, including the LDMDA/LDMDB/LDMIB aliases.
+        is_load = bool((word >> 20) & 1)
         regs = [o for o in insn.operands if o.type == ARM_OP_REG]
-        if insn.id in (ARM_INS_LDM,) or (not is_load and len(regs) > 1
-                                         and insn.id not in (ARM_INS_POP,)):
-            # LDM/STM carry the base first; POP/PUSH are span-only.
-            from capstone.arm_const import (
-                ARM_INS_LDMDA, ARM_INS_LDMDB, ARM_INS_LDMIB, ARM_INS_STM,
-                ARM_INS_STMDA, ARM_INS_STMDB, ARM_INS_STMIB,
-            )
-            multi_ids = (ARM_INS_LDM, ARM_INS_STM, ARM_INS_LDMIB,
-                         ARM_INS_STMIB, ARM_INS_LDMDA, ARM_INS_STMDA,
-                         ARM_INS_LDMDB, ARM_INS_STMDB)
-            has_base = insn.id in multi_ids
-        else:
-            has_base = False
+        from capstone.arm_const import (
+            ARM_INS_LDMDA, ARM_INS_LDMDB, ARM_INS_LDMIB, ARM_INS_STM,
+            ARM_INS_STMDA, ARM_INS_STMDB, ARM_INS_STMIB,
+        )
+        # LDM/STM carry the base first; POP/PUSH are span-only (base = sp).
+        has_base = insn.id in (ARM_INS_LDM, ARM_INS_STM, ARM_INS_LDMIB,
+                               ARM_INS_STMIB, ARM_INS_LDMDA, ARM_INS_STMDA,
+                               ARM_INS_LDMDB, ARM_INS_STMDB)
         if has_base:
             base_no = _reg_no(_cs(), regs[0].reg)
             rlist = [_reg_no(_cs(), o.reg) for o in regs[1:]]

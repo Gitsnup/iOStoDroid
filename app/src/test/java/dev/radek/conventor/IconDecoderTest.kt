@@ -216,21 +216,23 @@ class IconDecoderTest {
         try {
             val app = File(root, "Fixture.app").apply { mkdirs() }
             val threeX = File(app, "AppIcon@3x.png").apply {
-                writeBytes(platformPng(Color.BLUE, 1024, 1024))
+                writeBytes(platformPng(Color.BLUE, 512, 512))
             }
             val twoX = File(app, "AppIcon@2x.png").apply {
-                writeBytes(platformPng(Color.MAGENTA, 2048, 2048))
+                writeBytes(platformPng(Color.MAGENTA, 1024, 1024))
             }
-            assertEquals(1024 to 1024, IconDecoder.dimensions(threeX))
-            assertEquals(2048 to 2048, IconDecoder.dimensions(twoX))
+            assertEquals(512 to 512, IconDecoder.dimensions(threeX))
+            assertEquals(1024 to 1024, IconDecoder.dimensions(twoX))
             val output = File(root, "result").apply { mkdirs() }
 
             val result = extractIcon(app, listOf("AppIcon"), output)
 
             assertEquals("SUPPORTED", result.getString("status"))
             assertEquals("selection diagnostics: $result", "AppIcon@2x.png", result.getString("source"))
-            assertEquals(2048, result.getInt("sourceWidth"))
-            assertEquals(2048, result.getInt("sourceHeight"))
+            assertEquals(1024, result.getInt("sourceWidth"))
+            assertEquals(1024, result.getInt("sourceHeight"))
+            assertEquals(512, result.getInt("decodedWidth"))
+            assertEquals(512, result.getInt("decodedHeight"))
         } finally {
             root.deleteRecursively()
         }

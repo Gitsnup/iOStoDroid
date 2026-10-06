@@ -21,8 +21,15 @@ uint8_t *MEMBASE;
 /* generated tables (dt_gen.c) */
 extern void (*DT_FUNCS[])(CPU *cpu);
 extern unsigned DT_NFUNCS;
+extern const uint32_t DT_ADDRS[];
+extern void (*DT_SHIM_FUNCS[])(CPU *cpu);
 extern const char *DT_SHIM_NAMES[];
 extern unsigned DT_NSHIMS;
+typedef struct { uint32_t addr; unsigned shim; } DT_STUB;
+extern const DT_STUB DT_STUBS[];
+extern unsigned DT_NSTUBS;
+extern unsigned DT_CALL_LO, DT_CALL_HI;
+extern const unsigned char CALLSITE_MAP[];
 
 #define STACK_BASE ((uint32_t)0x30000000u)
 #define STACK_SIZE ((uint32_t)0x10000u)
@@ -41,10 +48,21 @@ static sigjmp_buf JB;
 static volatile int MODE;
 static volatile uint32_t DETAIL;
 
+/* The reservation covers the full 32-bit guest range, so every guest fault
+ * computes si_addr-MEMBASE < 2^32. Anything else is host damage (runaway
+ * recursion smashing the host stack) and reports TIMEOUT. With MEMBASE
+ * pinned low the two can never be confused. */
 static void on_segv(int sig, siginfo_t *si, void *uc) {
+    uint64_t d;
     (void)sig; (void)uc;
-    MODE = M_FAULT;
-    DETAIL = (uint32_t)((uintptr_t)si->si_addr - (uintptr_t)MEMBASE);
+    d = (uint64_t)((uintptr_t)si->si_addr - (uintptr_t)MEMBASE);
+    if (d < 0x100000000ull) {
+        MODE = M_FAULT;
+        DETAIL = (uint32_t)d;
+    } else {
+        MODE = M_TIMEOUT;
+        DETAIL = 0;
+    }
     siglongjmp(JB, 1);
 }
 static void on_alrm(int sig) {
@@ -54,8 +72,50 @@ static void on_alrm(int sig) {
     siglongjmp(JB, 1);
 }
 
+/* A VRET-tagged value is a genuine return continuation only if its site
+ * part is a real bl/blx address. Wild high-bit values (e.g. loaded data)
+ * must fall through to tdispatch, exactly like real ARM would fault. */
+int vret_site_ok(uint32_t s) {
+    uint32_t o = s - DT_CALL_LO;
+    if (o >= DT_CALL_HI - DT_CALL_LO || (s & 3))
+        return 0;
+    return CALLSITE_MAP[o >> 2];
+}
+
+/* Indirect branch: call through to compiled code (ARM entries only; odd
+ * targets would enter Thumb, which the translator does not model), route
+ * computed stub targets to their shims, and stop otherwise. A resolved
+ * call returns here and the caller resumes, mirroring real ARM. */
 void tdispatch(CPU *cpu, uint32_t v) {
-    (void)cpu;
+    if (v == RET_MARKER) {
+        /* branched back to the harness token: the case is over */
+        MODE = M_RET;
+        DETAIL = 0;
+        siglongjmp(JB, 1);
+    }
+    if (!(v & 1)) {
+        unsigned lo = 0, hi = DT_NFUNCS;
+        while (lo < hi) {
+            unsigned mid = lo + (hi - lo) / 2;
+            uint32_t a = DT_ADDRS[mid];
+            if (a == v) {
+                DT_FUNCS[mid](cpu);
+                return;
+            } else if (a < v) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        {
+            unsigned i;
+            for (i = 0; i < DT_NSTUBS; i++)
+                if (DT_STUBS[i].addr == v) {
+                    DT_SHIM_FUNCS[DT_STUBS[i].shim](cpu);
+                    return;
+                }
+        }
+    }
     MODE = M_DISPATCH;
     DETAIL = v;
     siglongjmp(JB, 1);
@@ -106,14 +166,22 @@ static void load_manifest(const char *dir) {
     fclose(f);
 }
 
+#define DT_MEMSIZE 0x100000000ull  /* full 32-bit guest range */
+#define DT_WANTBASE ((uint64_t)0x100000000ull)  /* pin low: unambiguous faults */
+
 static void map_all(void) {
-    MEMBASE = mmap(NULL, MEM_SIZE, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+#ifdef MAP_FIXED_NOREPLACE
+    MEMBASE = mmap((void *)DT_WANTBASE, DT_MEMSIZE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+    if (MEMBASE == MAP_FAILED)
+#endif
+        MEMBASE = mmap(NULL, DT_MEMSIZE, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (MEMBASE == MAP_FAILED) { perror("mmap"); exit(1); }
     /* deny everything ... */
     {
         uint64_t off;
-        for (off = 0; off < MEM_SIZE; off += (1u << 20))
+        for (off = 0; off < DT_MEMSIZE; off += (1u << 20))
             mprotect(MEMBASE + off, 1u << 20, PROT_NONE);
     }
     /* ... then allow exactly the mapped regions (page granularity) */
@@ -137,6 +205,14 @@ static void map_all(void) {
 static void reset_memory(uint32_t seed) {
     unsigned i;
     uint64_t off = 0;
+    /* Zero all mapped pages first: page slack outside the manifest regions
+     * is readable by both sides, and unicorn's restore zeroes it. Without
+     * this, C reads stale slack from previous cases. */
+    for (i = 0; i < NREGS; i++) {
+        uint32_t a = REGS[i].addr & ~0xFFFu;
+        uint32_t e = (REGS[i].addr + REGS[i].len + 0xFFFu) & ~0xFFFu;
+        memset(MEMBASE + a, 0, e - a);
+    }
     for (i = 0; i < NREGS; i++) {
         memcpy(MEMBASE + REGS[i].addr, PRISTINE + off, REGS[i].len);
         off += REGS[i].len;

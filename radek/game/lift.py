@@ -446,7 +446,7 @@ class _Emitter:
             if setflags:
                 # Data-processing with S and a shifted operand also updates C
                 # from the shifter; model the common cases exactly.
-                lines.append("cpu->cpsr = (cpu->cpsr & ~0xF0000000u) | fl_nz(_t0);")
+                lines.append("cpu->cpsr = (cpu->cpsr & ~0xC0000000u) | fl_nz(_t0);")
                 self.emit_shifter_carry(addr, insn, ops[1], lines)
             lines.append(f"cpu->r[{d}] = _t0;")
             return lines
@@ -503,11 +503,11 @@ class _Emitter:
                 lines.append("cpu->cpsr = (cpu->cpsr & ~0xF0000000u) | fl_add(_t0, _t1, _t2);")
             elif iid == ARM_INS_TST:
                 lines.append("_t2 = _t0 & _t1;")
-                lines.append("cpu->cpsr = (cpu->cpsr & ~0xF0000000u) | fl_nz(_t2);")
+                lines.append("cpu->cpsr = (cpu->cpsr & ~0xC0000000u) | fl_nz(_t2);")
                 self.emit_shifter_carry(addr, insn, ops[1], lines)
             else:
                 lines.append("_t2 = _t0 ^ _t1;")
-                lines.append("cpu->cpsr = (cpu->cpsr & ~0xF0000000u) | fl_nz(_t2);")
+                lines.append("cpu->cpsr = (cpu->cpsr & ~0xC0000000u) | fl_nz(_t2);")
                 self.emit_shifter_carry(addr, insn, ops[1], lines)
             return lines
 
@@ -554,7 +554,7 @@ class _Emitter:
         if setflags:
             if iid in (ARM_INS_AND, ARM_INS_ORR, ARM_INS_EOR, ARM_INS_BIC,
                         ARM_INS_MOV, ARM_INS_MVN):
-                lines.append("cpu->cpsr = (cpu->cpsr & ~0xF0000000u) | fl_nz(_t2);")
+                lines.append("cpu->cpsr = (cpu->cpsr & ~0xC0000000u) | fl_nz(_t2);")
                 self.emit_shifter_carry(addr, insn, ops[2], lines)
             else:
                 lines.append(f"cpu->cpsr = (cpu->cpsr & ~0xF0000000u) | {flag};")
@@ -666,13 +666,13 @@ class _Emitter:
         if no == 14:
             return ["return;"]
         return [f"_t0 = cpu->r[{no}];",
-                "if (_t0 & VRET_BIT) return;",
+                "if ((_t0 & VRET_BIT) && vret_site_ok(_t0 & ~VRET_BIT)) return;",
                 "tdispatch(cpu, _t0);",
                 "return;"]
 
     def emit_mov_pc(self, addr: int, value_expr: str) -> list[str]:
         return [f"_t0 = ({value_expr});",
-                "if (_t0 & VRET_BIT) return;",
+                "if ((_t0 & VRET_BIT) && vret_site_ok(_t0 & ~VRET_BIT)) return;",
                 "tdispatch(cpu, _t0);",
                 "return;"]
 
@@ -713,7 +713,7 @@ class _Emitter:
         if d == 15:
             raise LiftError("shift-alias into pc")
         if _writes_flags(insn):
-            lines.append("cpu->cpsr = (cpu->cpsr & ~0xF0000000u) | fl_nz(_t1);")
+            lines.append("cpu->cpsr = (cpu->cpsr & ~0xC0000000u) | fl_nz(_t1);")
             lines.extend(carry)
         lines.append(f"cpu->r[{d}] = _t1;")
         return lines
@@ -730,7 +730,7 @@ class _Emitter:
         lines = [f"_t0 = ({rm});",
                  "_t1 = ((((cpu->cpsr >> 29) & 1u) << 31) | (_t0 >> 1));"]
         if _writes_flags(insn):
-            lines.append("cpu->cpsr = (cpu->cpsr & ~0xF0000000u) | fl_nz(_t1) | (((_t0 & 1u)) << 29);")
+            lines.append("cpu->cpsr = (cpu->cpsr & ~0xC0000000u) | fl_nz(_t1) | (((_t0 & 1u)) << 29);")
         lines.append(f"cpu->r[{d}] = _t1;")
         return lines
 
@@ -877,7 +877,7 @@ class _Emitter:
             lines.append("tdispatch(cpu, rd32(_t2));")
             return lines
         lines.append("_t0 = rd32(_t2);")
-        lines.append("if (_t0 & VRET_BIT) return;")
+        lines.append("if ((_t0 & VRET_BIT) && vret_site_ok(_t0 & ~VRET_BIT)) return;")
         lines.append("tdispatch(cpu, _t0);")
         lines.append("return;")
         return lines
@@ -968,7 +968,7 @@ class _Emitter:
                 lines.append(f"cpu->r[{base_no}] = ({end});")
             if 15 in rlist:
                 lines.append(f"_t0 = rd32(({start}) + {4 * (n - 1)});")
-                lines.append("if (_t0 & VRET_BIT) return;")
+                lines.append("if ((_t0 & VRET_BIT) && vret_site_ok(_t0 & ~VRET_BIT)) return;")
                 lines.append("tdispatch(cpu, _t0);")
                 lines.append("return;")
         else:

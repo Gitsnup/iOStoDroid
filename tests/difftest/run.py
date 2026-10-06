@@ -29,7 +29,6 @@ from radek.game.lift import sanitize  # noqa: E402
 STACK_BASE, STACK_SIZE = 0x30000000, 0x10000
 SCR0_BASE, SCR1_BASE, SCR_SIZE = 0x10000000, 0x11000000, 0x10000
 RET_MARKER = 0x80AD0000
-MEM_SIZE = 0xE0800000
 INSN_LIMIT = 200000
 
 BUILD = os.path.join(os.path.dirname(__file__), "dtwork")
@@ -94,6 +93,47 @@ def write_build(img, funcs, ctx, out, shims):
         for a in addrs:
             f.write(f"    {ctx.cname[a]},\n")
         f.write("};\nunsigned DT_NFUNCS = sizeof(DT_FUNCS)/sizeof(DT_FUNCS[0]);\n")
+        f.write("const uint32_t DT_ADDRS[] = {\n")
+        for a in addrs:
+            f.write(f"    0x{a:x}u,\n")
+        f.write("};\n")
+        for n in shims:
+            f.write(f"void {n}(CPU *cpu);\n")
+        f.write("void (*DT_SHIM_FUNCS[])(CPU *cpu) = {\n")
+        for n in shims:
+            f.write(f"    {n},\n")
+        f.write("};\n")
+        f.write("typedef struct { uint32_t addr; unsigned shim; } DT_STUB;\n")
+        f.write("const DT_STUB DT_STUBS[] = {\n")
+        for sa, sym in sorted(ctx.import_of_stub.items()):
+            nm = "shim_" + sanitize(sym.lstrip("_"))
+            f.write(f"    {{0x{sa:x}u, {shims.index(nm)}u}},\n")
+        f.write("};\nunsigned DT_NSTUBS = sizeof(DT_STUBS)/sizeof(DT_STUBS[0]);\n")
+        # call-site bitmap: every bl/blx address in lifted code creates a
+        # VRET continuation; vret_site_ok() uses it to reject forged ones.
+        sites = set()
+        for a in addrs:
+            for (x, m, _o, b) in funcs[a].instructions:
+                w = int.from_bytes(b, "little")
+                if ((w >> 25) & 7) == 5 and (w >> 24) & 1:
+                    sites.add(x)  # B/BL encoding with L bit
+                elif m == "blx":
+                    sites.add(x)  # register (and imm) blx
+        if sites:
+            lo = min(sites) & ~3
+            hi = (max(sites) + 7) & ~3
+            f.write(f"unsigned DT_CALL_LO = 0x{lo:x}u;\n")
+            f.write(f"unsigned DT_CALL_HI = 0x{hi:x}u;\n")
+            f.write("const unsigned char CALLSITE_MAP[] = {\n")
+            row = []
+            for s in range(lo, hi, 4):
+                row.append("1" if s in sites else "0")
+                if len(row) == 32:
+                    f.write("    " + ",".join(row) + ",\n")
+                    row = []
+            if row:
+                f.write("    " + ",".join(row) + ",\n")
+            f.write("};\n")
         f.write("static const char *NAMES[] = {\n")
         for n in shims:
             f.write(f"    \"{n}\",\n")
@@ -109,13 +149,17 @@ def write_build(img, funcs, ctx, out, shims):
         for n in shims:
             f.write(f"void {n}(CPU *cpu);\n")
         f.write("void tdispatch(CPU *cpu, uint32_t x);\n")
+        f.write("int vret_site_ok(uint32_t s);\n")
         for a in addrs:
             f.write(out[a])
             f.write("\n")
     shutil.copy("radek/game/rt/cpu.h", os.path.join(BUILD, "cpu.h"))
     shutil.copy(os.path.join(os.path.dirname(__file__), "dt_main.c"),
                 os.path.join(BUILD, "dt_main.c"))
-    r = subprocess.run(["gcc", "-O1", "-o", os.path.join(BUILD, "dt_run"),
+    # -O0 on purpose: fault-time CPU-struct readback must reflect the latest
+    # register state. At -O1 gcc keeps cpu->r[] in host registers across the
+    # inlined rd/wr builtins, so a SIGSEGV mid-instruction reports stale regs.
+    r = subprocess.run(["gcc", "-O0", "-o", os.path.join(BUILD, "dt_run"),
                         os.path.join(BUILD, "dt_main.c"),
                         os.path.join(BUILD, "game_all.c"),
                         os.path.join(BUILD, "dt_gen.c"), "-lm"],
@@ -235,35 +279,36 @@ def run_uc_side(img, funcs, ctx, regions, cases):
 
     def h_code(u, pc, size, data):
         state["n"] += 1
-        if state["n"] > INSN_LIMIT:
-            state["mode"] = "LIMIT"
+        if state["n"] > INSN_LIMIT or pc in stub_of or pc in vfp_addrs or pc not in code_set:
+            if u.reg_read(UC_ARM_REG_CPSR) & 0x20:
+                state["mode"] = "THUMB"  # executed Thumb: unmodelable, skip
+            elif state["n"] > INSN_LIMIT:
+                state["mode"] = "LIMIT"
+            elif pc in stub_of:
+                state["mode"] = "SHIM"
+                state["detail"] = pc
+            elif pc in vfp_addrs:
+                state["mode"] = "VFP"
+            else:
+                state["mode"] = "RET" if pc == RET_MARKER else "DISPATCH"
+                state["detail"] = pc
             u.emu_stop()
             return
-        if pc in stub_of:
-            state["mode"] = "SHIM"
-            state["detail"] = pc
-            u.emu_stop()
-            return
-        if pc in vfp_addrs:
-            state["mode"] = "VFP"
-            u.emu_stop()
-            return
-        if pc not in code_set:
-            state["mode"] = "RET" if pc == RET_MARKER else "DISPATCH"
-            state["detail"] = pc
-            u.emu_stop()
 
     def h_write(u, access, addr, size, value, data):
         # NOTE: unicorn also fires this hook for unmapped writes (the
         # unmapped hook fires too); only mapped pages need restoring.
-        pg = addr & ~0xFFF
-        if pg in pages:
-            dirty.add(pg)
+        # Multi-byte accesses can straddle a page boundary: record both.
+        for pg in (addr & ~0xFFF, (addr + size - 1) & ~0xFFF):
+            if pg in pages:
+                dirty.add(pg)
 
     def h_fault(u, access, addr, size, value, data):
         if access == UC_MEM_FETCH_UNMAPPED:
             state["mode"] = "RET" if addr == RET_MARKER else "DISPATCH"
             state["detail"] = addr & ~1
+        elif u.reg_read(UC_ARM_REG_CPSR) & 0x20:
+            state["mode"] = "THUMB"  # faulted out of Thumb code: skip
         else:
             state["mode"] = "FAULT"
             state["detail"] = addr
@@ -318,12 +363,21 @@ def run_uc_side(img, funcs, ctx, regions, cases):
         try:
             mu.emu_start(addr, 0)
         except Exception:
-            if "mode" not in state:
-                state["mode"] = "UCERR"
-                state["detail"] = 0
+            pass
         if "mode" not in state:
-            state["mode"] = "UCERR"
-            state["detail"] = 0
+            # emu_start(begin, 0) stops cleanly (no hook, no error) when
+            # execution reaches pc == until == 0: a branch to NULL, which
+            # the C side reports as DISPATCH/0 via tdispatch.
+            pc = mu.reg_read(AC.UC_ARM_REG_PC) & 0xFFFFFFFF
+            if pc == RET_MARKER:
+                state["mode"] = "RET"
+                state["detail"] = 0
+            elif pc == 0:
+                state["mode"] = "DISPATCH"
+                state["detail"] = 0
+            else:
+                state["mode"] = "UCERR"
+                state["detail"] = pc
         got = [mu.reg_read(RIDS[k]) & 0xFFFFFFFF for k in range(15)]
         gotc = mu.reg_read(UC_ARM_REG_CPSR) & 0xFFFFFFFF
         hashes = [fnv(bytes(mu.mem_read(a, ln))) for a, ln in regions]
@@ -469,6 +523,13 @@ def main() -> int:
                    "vcvt_u32_f", "vcvt_u32_d", "vfp_nzcv_f", "vfp_nzcv_d",
                    "memcpy", "tdispatch"}
         shims = sorted(n for n in calls - defined - helpers if n.startswith("shim_"))
+        # Every import stub gets a shim (not just directly-called ones) so
+        # computed branches to stubs route correctly through tdispatch.
+        for sym in ctx.import_of_stub.values():
+            nm = "shim_" + sanitize(sym.lstrip("_"))
+            if nm not in shims:
+                shims.append(nm)
+        shims.sort()
         print(f"shims: {len(shims)}", flush=True)
         addrs, regions = write_build(img, funcs, ctx, out, shims)
         import pickle
@@ -490,6 +551,10 @@ def main() -> int:
     data_addrs += [(STACK_BASE, STACK_SIZE), (SCR0_BASE, SCR_SIZE),
                    (SCR1_BASE, SCR_SIZE)]
     targets = sorted(clean)
+    addrs_env = os.environ.get("DIFFTEST_ADDRS")
+    if addrs_env:
+        want = {int(x, 16) for x in addrs_env.split(",")}
+        targets = [a for a in targets if a in want]
     if subset:
         targets = targets[:int(subset)]
     fi_of = {a: i for i, a in enumerate(addrs)}
@@ -510,9 +575,7 @@ def main() -> int:
     mem_probes = []
     for ci, ((cm, cd, cr, cc, ch), (um, ud, ur, uc, uh)) in enumerate(zip(cres, ures)):
         fi, addr, seed, _r, _c = cases[ci]
-        if cm == "FAULT" and cd >= MEM_SIZE:
-            cm = "TIMEOUT"  # host-stack overflow: runaway recursion, not a mem fault
-        if um == "VFP":
+        if um in ("VFP", "THUMB"):
             nskip += 1
             continue
         if (cm, um) in (("TIMEOUT", "LIMIT"),):
@@ -543,7 +606,11 @@ def main() -> int:
                 ok = False
                 for k in reg_bad[:6]:
                     why.append(f"r{k} {cr[k]:#x} vs {ur[k]:#x}")
-            if cc != uc:
+            # Bit 5 (T) is masked: lifted code can never set it (no
+            # MRS/MSR/CPS in the game; inputs always enter in ARM state),
+            # while unicorn sets it when a wild odd branch enters Thumb.
+            # The dispatch target itself is still compared exactly.
+            if (cc & ~0x20) != (uc & ~0x20):
                 ok = False
                 why.append(f"cpsr {cc:#x} vs {uc:#x}")
             if ch != uh:
@@ -597,7 +664,7 @@ def main() -> int:
             else:
                 npass += 1
     print(f"PASS {npass} SKIP {nskip} FAIL {len(fails)} / {len(cases)}", flush=True)
-    for addr, name, seed, cm, cd, um, ud, why in fails[:25]:
+    for addr, name, seed, cm, cd, um, ud, why in fails:
         print(f"FAIL {addr:#x} {name} seed={seed} C={cm}/{cd:#x} U={um}/{ud:#x}")
         for w in why[:8]:
             print(f"    {w}")

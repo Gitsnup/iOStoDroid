@@ -1,0 +1,10 @@
+functions: 2838
+lifted 2837, failures 0
+shims: 220
+regions: 22, build ok
+VFP funcs: 897, clean-closure funcs: 1046
+cases: 40
+C side done
+unicorn side done
+phase 2: word-diffing 2 mem mismatches
+PASS 40 SKIP 0 FAIL 0 / 40

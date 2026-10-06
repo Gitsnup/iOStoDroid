@@ -1,0 +1,101 @@
+functions: 2838
+reusing cached build
+VFP funcs: 897, clean-closure funcs: 1046
+cases: 3138
+C side done
+unicorn side done
+phase 2: word-diffing 259 mem mismatches
+PASS 3093 SKIP 15 FAIL 30 / 3138
+FAIL 0xc8d4c _png_zfree seed=1 C=DISPATCH/0x436c U=DISPATCH/0x2fe01000
+    dis 0x436c vs 0x2fe01000
+FAIL 0xc8dc4 _png_calculate_crc seed=3 C=FAULT/0x153000 U=LIMIT/0x0
+    mode FAULT/0x153000 vs LIMIT/0x0
+FAIL 0xc8e3c _png_set_sig_bytes seed=2 C=DISPATCH/0x436c U=DISPATCH/0x2fe01000
+    dis 0x436c vs 0x2fe01000
+FAIL 0xca030 _png_malloc seed=3 C=DISPATCH/0x436c U=DISPATCH/0x2fe01000
+    dis 0x436c vs 0x2fe01000
+FAIL 0xdc42c _png_crc_finish seed=1 C=DISPATCH/0x436c U=DISPATCH/0x2fe01000
+    dis 0x436c vs 0x2fe01000
+FAIL 0xdcd44 _png_handle_tEXt seed=3 C=DISPATCH/0x436c U=DISPATCH/0x2fe01000
+    dis 0x436c vs 0x2fe01000
+FAIL 0xdf754 _png_handle_sBIT seed=1 C=DISPATCH/0x436c U=DISPATCH/0x2fe01000
+    dis 0x436c vs 0x2fe01000
+FAIL 0xdf91c _png_set_sCAL seed=2 C=FAULT/0x550 U=FAULT/0x550
+    r4 0x143c18 vs 0x8372a169
+    mem@stack d2b69fda2795a72 vs 9cd0d7eef1ae550b
+FAIL 0xdf91c _png_set_sCAL seed=3 C=FAULT/0x2de U=FAULT/0x2de
+    r4 0x9e2 vs 0xde816595
+    mem@stack 7efe66bc6525142d vs 14c7538bccf0fc61
+FAIL 0xdf998 _png_set_tIME seed=1 C=SHIM/0x90 U=SHIM/0x132ca8
+    cpsr 0x60000010 vs 0x40000010
+FAIL 0xe7100 _crc32 seed=2 C=FAULT/0x153000 U=LIMIT/0x0
+    mode FAULT/0x153000 vs LIMIT/0x0
+FAIL 0xe7100 _crc32 seed=3 C=FAULT/0x153000 U=LIMIT/0x0
+    mode FAULT/0x153000 vs LIMIT/0x0
+FAIL 0x103e08 __ZN4lang5Func1IvMN5audio15AudioBufferPumpEFvvEPS2_EclEv seed=1 C=DISPATCH/0x436c U=DISPATCH/0x2fe01000
+    dis 0x436c vs 0x2fe01000
+FAIL 0x108550 _frame_gapless_realinit seed=1 C=RET/0x0 U=RET/0x80ad0000
+    r3 0x14a1e4 vs 0x0
+    mem@1456d0 81f8fe813b39c633 vs ef400c1579368fa3
+FAIL 0x108550 _frame_gapless_realinit seed=3 C=RET/0x0 U=RET/0x80ad0000
+    r3 0x149cd0 vs 0x0
+    mem@1456d0 4e9b5d91584b6c4f vs ef400c1579368fa3
+FAIL 0x108ca0 _frame_set_frameseek seed=1 C=RET/0x0 U=RET/0x80ad0000
+    r2 0x6428f600 vs 0xb75d2248
+    r3 0x1 vs 0x14aca8
+    cpsr 0x20000010 vs 0x90000010
+    mem@2c78 638fa91c8524e2df vs adcb2f10d116a032
+FAIL 0x108ca0 _frame_set_frameseek seed=2 C=RET/0x0 U=RET/0x80ad0000
+    r2 0x7f0f1743 vs 0x7f0f1e8d
+    r3 0x1 vs 0x8b2
+    cpsr 0x20000010 vs 0x10
+    mem@2c78 f501f50ae3fdc5ff vs 6d870a6c666c3d59
+FAIL 0x112d20 _decode_the_frame seed=1 C=DISPATCH/0x0 U=DISPATCH/0x0
+    cpsr 0x60000010 vs 0x20000010
+    mem@stack 18f45beee47c84d4 vs 2e5bb71eb328c788
+FAIL 0x112d20 _decode_the_frame seed=2 C=DISPATCH/0x0 U=DISPATCH/0x0
+    cpsr 0x60000010 vs 0x20000010
+    mem@stack f9f19ac3f8705ce3 vs 4fbd968e8eaac017
+FAIL 0x116084 _generic_tell seed=2 C=RET/0x0 U=RET/0x80ad0000
+    r0 0x143c04 vs 0x0
+    r1 0x152834 vs 0x0
+    mem@1456d0 e8066156c13f1696 vs ef400c1579368fa3
+FAIL 0x116084 _generic_tell seed=3 C=RET/0x0 U=RET/0x80ad0000
+    r0 0x143628 vs 0x0
+    r1 0x4ae vs 0x0
+    mem@1456d0 9cc7d142047b589b vs ef400c1579368fa3
+FAIL 0x1160dc _feed_skip_bytes seed=2 C=RET/0x0 U=RET/0x80ad0000
+    r0 0x918 vs 0xe58d402a
+    r1 0x1000c3c8 vs 0xeafffe85
+    cpsr 0x10 vs 0xa0000010
+    mem@2c78 dd0eb49dce8f900c vs f221525bc25c3de4
+FAIL 0x116368 _buffered_forget seed=3 C=RET/0x0 U=RET/0x80ad0000
+    r2 0x5a4b0ac8 vs 0x0
+    r3 0x145c18 vs 0x0
+    cpsr 0x10 vs 0x40000010
+    mem@1456d0 67b36c39437024e3 vs ef400c1579368fa3
+FAIL 0x116eac _feed_set_pos seed=1 C=RET/0x0 U=RET/0x80ad0000
+    r3 0x145eac vs 0x0
+FAIL 0x116eac _feed_set_pos seed=3 C=SHIM/0x47 U=SHIM/0x132948
+    r3 0x762e vs 0x10b2e58d
+    r8 0x13bf3a vs 0xef614fdb
+    r9 0x1000a140 vs 0x10fec673
+    mem@2c78 a093f9668792696e vs f221525bc25c3de4
+FAIL 0xdf91c _png_set_sCAL seed=1 C=RET/0x0 U=RET/0x80ad0000
+    stack+b600 @0x3000b600: 0xaea vs 0x5df3c4fc
+    stack+ffc0 @0x3000ffc0: 0xaea vs 0x5df3c4fc
+FAIL 0x108550 _frame_gapless_realinit seed=2 C=RET/0x0 U=RET/0x80ad0000
+    2c78+4f70 @0x7be8: 0x7bac vs 0x7bc8
+    2c78+4f74 @0x7bec: 0x784 vs 0x13f054
+    2c78+4f80 @0x7bf8: 0xe24dd044 vs 0x13f5c8
+    2c78+4f84 @0x7bfc: 0x7bec vs 0xe92d40f0
+FAIL 0x108adc _frame_set_seek seed=1 C=RET/0x0 U=RET/0x80ad0000
+    2c78+4474 @0x70ec: 0x70fac00e vs 0xc00e
+    2c78+4478 @0x70f0: 0x20000 vs 0x0
+FAIL 0x108adc _frame_set_seek seed=3 C=RET/0x0 U=RET/0x80ad0000
+    scr0+9924 @0x10009924: 0x10009930 vs 0x0
+    scr0+9928 @0x10009928: 0xbaf69f36 vs 0x0
+FAIL 0x112bb0 _mpg123_tell seed=1 C=SHIM/0x32 U=SHIM/0x13266c
+    2c78+4eec @0x7b64: 0x7b50 vs 0xe59de1a4
+    2c78+4ef0 @0x7b68: 0x5b70 vs 0xe59dc1a8
+EXIT:1

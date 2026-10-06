@@ -13,3 +13,4 @@ local.properties
 *.keystore
 *.jks
 workspace/
+tests/difftest/dtwork/

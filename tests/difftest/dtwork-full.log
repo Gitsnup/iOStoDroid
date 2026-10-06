@@ -1,0 +1,59 @@
+functions: 2838
+reusing cached build
+VFP funcs: 897, clean-closure funcs: 1046
+cases: 3138
+C side done
+unicorn side done
+phase 2: word-diffing 242 mem mismatches
+PASS 2985 SKIP 14 FAIL 139 / 3138
+FAIL 0x1bc10 __ZN3hgr22DefaultResourceManager9getShaderERKN4lang6StringEi seed=1 C=DISPATCH/0x0 U=UCERR/0x0
+    mode DISPATCH/0x0 vs UCERR/0x0
+FAIL 0x234d4 __ZN3hgr4Node10setEnabledEb seed=1 C=FAULT/0x98c U=FAULT/0x98c
+    cpsr 0x10 vs 0x10000010
+FAIL 0x234d4 __ZN3hgr4Node10setEnabledEb seed=2 C=FAULT/0xa9c U=FAULT/0xa9c
+    cpsr 0x10 vs 0x10000010
+FAIL 0x234d4 __ZN3hgr4Node10setEnabledEb seed=3 C=FAULT/0xda U=FAULT/0xda
+    cpsr 0x10 vs 0x20000010
+FAIL 0x34f90 __ZN2gr7Context10Statistics5resetEv seed=3 C=FAULT/0x4e8 U=FAULT/0x4e8
+    r3 0xb2c vs 0x4e8
+FAIL 0x35a00 __ZN2gr11DIPrimitive10setIndicesEiPKii seed=3 C=TIMEOUT/0xfff7013e U=FAULT/0xfff7013e
+    mode TIMEOUT/0xfff7013e vs FAULT/0xfff7013e
+FAIL 0x35c50 __ZNK2gr11DIPrimitive22getVertexDiffuseColorsEiPN4math6float4Ei seed=3 C=DISPATCH/0x456d U=DISPATCH/0x456e
+    dis 0x456d vs 0x456e
+FAIL 0x35d68 __ZNK2gr11DIPrimitive27getVertexTextureCoordinatesEiiPN4math6float4Ei seed=2 C=RET/0x0 U=DISPATCH/0xe24dd008
+    mode RET/0x0 vs DISPATCH/0xe24dd008
+FAIL 0x386a0 __ZN2gr11DIPrimitive22setVertexDiffuseColorsEiPKN4math6float4Ei seed=1 C=DISPATCH/0x3030405 U=DISPATCH/0x3030404
+    cpsr 0x10000010 vs 0x10000030
+FAIL 0x386dc __ZN2gr11DIPrimitive16setVertexNormalsEiPKN4math6float4Ei seed=2 C=TIMEOUT/0xe52af715 U=FAULT/0xe52af715
+    mode TIMEOUT/0xe52af715 vs FAULT/0xe52af715
+FAIL 0x4390c __ZN4lang9Huffman168getDepthEPNS0_13HuffmanNode16E seed=1 C=TIMEOUT/0xf020fa7a U=FAULT/0xf020fa7a
+    mode TIMEOUT/0xf020fa7a vs FAULT/0xf020fa7a
+FAIL 0x49880 __ZN4lang6String3cpyEPciPKc seed=2 C=FAULT/0xa4a U=FAULT/0xa4a
+    cpsr 0x10 vs 0x20000010
+FAIL 0x49880 __ZN4lang6String3cpyEPciPKc seed=3 C=FAULT/0x8e0 U=FAULT/0x8e0
+    cpsr 0x10 vs 0x20000010
+FAIL 0x49d08 __ZN4lang6String10scanStringEPKcPciPS2_ seed=1 C=FAULT/0x144 U=FAULT/0x144
+    cpsr 0x40000010 vs 0x60000010
+FAIL 0x4d5f0 __ZNK4lang12UTFConverter6encodeEPvS1_Pii seed=2 C=FAULT/0x2d6 U=FAULT/0x2d6
+    r3 0x8 vs 0x2d6
+FAIL 0x4e39c __ZN2io20ByteArrayInputStreamC1EPKvi$pad seed=1 C=TIMEOUT/0xfe1c0997 U=FAULT/0xfe1c0997
+    mode TIMEOUT/0xfe1c0997 vs FAULT/0xfe1c0997
+FAIL 0x4e39c __ZN2io20ByteArrayInputStreamC1EPKvi$pad seed=3 C=TIMEOUT/0xee8b7abc U=FAULT/0xee8b7abc
+    mode TIMEOUT/0xee8b7abc vs FAULT/0xee8b7abc
+FAIL 0x4e400 __ZThn16_N2io15DataInputStream11readBooleanEv seed=2 C=DISPATCH/0x0 U=UCERR/0x0
+    mode DISPATCH/0x0 vs UCERR/0x0
+FAIL 0x4e630 __ZThn16_N2io15DataInputStream4readEPvi seed=1 C=TIMEOUT/0xe3a00009 U=FAULT/0xe3a00009
+    mode TIMEOUT/0xe3a00009 vs FAULT/0xe3a00009
+FAIL 0x4e660 __ZN2io15DataInputStream4skipEi seed=2 C=TIMEOUT/0xe3a0000d U=FAULT/0xe3a0000d
+    mode TIMEOUT/0xe3a0000d vs FAULT/0xe3a0000d
+FAIL 0x4e6a8 __ZThn16_N2io15DataInputStream9readShortEv seed=1 C=TIMEOUT/0xffff002a U=FAULT/0xffff002a
+    mode TIMEOUT/0xffff002a vs FAULT/0xffff002a
+FAIL 0x4e764 __ZThn16_N2io15DataInputStream9readFloatEv seed=3 C=DISPATCH/0x0 U=UCERR/0x0
+    mode DISPATCH/0x0 vs UCERR/0x0
+FAIL 0x4e7cc __ZThn16_N2io15DataInputStream10readDoubleEv seed=2 C=DISPATCH/0x4fec4 U=FAULT/0x58
+    mode DISPATCH/0x4fec4 vs FAULT/0x58
+FAIL 0x4e7d4 __ZN2io15DataInputStream10readDoubleEv seed=1 C=TIMEOUT/0xeef21ba4 U=FAULT/0xeef21ba4
+    mode TIMEOUT/0xeef21ba4 vs FAULT/0xeef21ba4
+FAIL 0x4fe20 __ZN2io17FilterInputStream4readEPvi seed=2 C=TIMEOUT/0xe7b3d0ef U=FAULT/0xe7b3d0ef
+    mode TIMEOUT/0xe7b3d0ef vs FAULT/0xe7b3d0ef
+EXIT:1

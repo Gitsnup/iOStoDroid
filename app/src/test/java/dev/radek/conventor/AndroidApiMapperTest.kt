@@ -271,7 +271,7 @@ class AndroidApiMapperTest {
         assertEquals(Providers.STATUS_CANDIDATE, gcc.getString("status"))
         assertEquals("libgcc_s", gcc.getString("framework"))
         assertTrue(gcc.getString("provider").contains("compiler-rt"))
-        assertTrue(gcc.getString("reason").contains("no libgcc_s.so alias"))
+        assertTrue(gcc.getString("reason").contains("drop-in libgcc_s.so"))
 
         val stdcxx = Providers.classify("/usr/lib/libstdc++.6.dylib")
         assertEquals(Providers.STATUS_CANDIDATE, stdcxx.getString("status"))

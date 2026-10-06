@@ -19,6 +19,8 @@ const char *executionStatusName(CpuExecutionStatus status) {
         return "INVALID_FUNCTION";
     case CpuExecutionStatus::MemoryFault:
         return "MEMORY_FAULT";
+    case CpuExecutionStatus::GuestExceptionRaised:
+        return "GUEST_EXCEPTION_RAISED";
     case CpuExecutionStatus::ExecutionFault:
         return "EXECUTION_FAULT";
     case CpuExecutionStatus::InstructionLimit:
@@ -56,6 +58,7 @@ radek::Json GuestRunner::runMainBinary(const std::vector<std::uint8_t> &mainBina
     report["authorizationConfirmed"] = authorizationConfirmed;
     report["inputEmbeddedInRuntimeArtifact"] = false;
     report["firstMissingImport"] = radek::Json();
+    report["functionOrigin"] = radek::Json();
     report["resolvedSymbols"] = radek::Json::array();
     report["unresolvedSymbols"] = radek::Json::array();
 
@@ -91,7 +94,22 @@ radek::Json GuestRunner::runMainBinary(const std::vector<std::uint8_t> &mainBina
     radek::Json execution = radek::Json::object();
     execution["status"] = "NOT_ATTEMPTED";
     execution["entryPointReached"] = false;
+    execution["functionOrigin"] = radek::Json();
     report["execution"] = execution;
+
+    radek::Json functionOrigin;
+    if (load.entryPoint != 0) {
+        functionOrigin = radek::Json::object();
+        functionOrigin["kind"] = "macho-entrypoint";
+        functionOrigin["sourceImage"] = "main-executable";
+        functionOrigin["loadCommand"] = load.entryPointSource;
+        functionOrigin["guestAddress"] = static_cast<std::uint64_t>(load.entryPoint);
+        functionOrigin["instructionSet"] = load.thumb ? "Thumb" : "ARM";
+        functionOrigin["selectedBackend"] = cpu_.name();
+        functionOrigin["executionAttempted"] = false;
+        report["functionOrigin"] = functionOrigin;
+        report["execution"]["functionOrigin"] = functionOrigin;
+    }
 
     if (!load.imageMapped() || (load.status != "LOADED" && load.status != "BLOCKED_UNRESOLVED_IMPORTS")) {
         report["reason"] = load.error.empty() ? "Mach-O main executable could not be loaded." : load.error;
@@ -115,6 +133,8 @@ radek::Json GuestRunner::runMainBinary(const std::vector<std::uint8_t> &mainBina
         const auto bindings = shims_.snapshot();
         std::set<GuestAddress> thunkPages;
         for (const auto &binding : bindings) {
+            if (binding.resolveGuestAddress)
+                continue;
             const auto thunk = binding.guestAddress & ~GuestAddress{1};
             const auto page = thunk & ~GuestAddress{0xfff};
             if (thunkPages.insert(page).second)
@@ -130,6 +150,7 @@ radek::Json GuestRunner::runMainBinary(const std::vector<std::uint8_t> &mainBina
     GuestFunction guestFunction;
     guestFunction.entryPoint = load.entryPoint;
     guestFunction.thumb = load.thumb;
+    guestFunction.origin = "main-executable/" + load.entryPointSource;
     auto memory = addressSpace.callbacks();
     memory.invokeGuestCallout = [this, &addressSpace](GuestAddress address,
                                                       CpuRegisterState &state,
@@ -144,10 +165,20 @@ radek::Json GuestRunner::runMainBinary(const std::vector<std::uint8_t> &mainBina
         report["reason"] = preparationError;
         return report;
     }
+    if (prepared.origin.empty())
+        prepared.origin = guestFunction.origin;
     report["cpu"]["status"] = "READY";
     report["cpu"]["backend"] = prepared.backendName;
+    functionOrigin["function"] = prepared.origin;
+    functionOrigin["backend"] = prepared.backendName;
+    report["functionOrigin"] = functionOrigin;
+    report["execution"]["functionOrigin"] = functionOrigin;
 
     const auto result = cpu_.executeGuestFunction(prepared, memory, registers);
+    functionOrigin["executionAttempted"] = result.started;
+    functionOrigin["executionStatus"] = executionStatusName(result.status);
+    report["functionOrigin"] = functionOrigin;
+    report["execution"]["functionOrigin"] = functionOrigin;
     report["cpu"]["status"] = executionStatusName(result.status);
     report["cpu"]["instructions"] = result.instructions;
     report["cpu"]["message"] = result.message;

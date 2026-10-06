@@ -310,6 +310,53 @@ class Library(private val context: Context) {
             val analysisErrors = JSONArray()
             var encrypted = false; var incompatible = false
             var hasCandidate = false
+            val machoMagics = setOf("cffaedfe", "cefaedfe", "feedface", "feedfacf", "cafebabe", "cafebabf", "bebafeca", "bfbafeca")
+            val embeddedFiles = app.walkTopDown().filter { file ->
+                if (!file.isFile || file == binary) return@filter false
+                val head = ByteArray(4)
+                val size = file.inputStream().use { it.read(head) }
+                size == 4 && head.joinToString("") { "%02x".format(it.toInt() and 255) } in machoMagics
+            }.toList()
+            val embeddedPaths = embeddedFiles.map { it.relativeTo(app).path.replace(File.separatorChar, '/') }.toSet()
+            val executableDirectory = binary.relativeTo(app).parentFile?.path?.replace(File.separatorChar, '/').orEmpty()
+            fun normalizedBundlePath(base: String, suffix: String): String? = try {
+                val basePath = if (base.isBlank()) java.nio.file.Paths.get("") else java.nio.file.Paths.get(base)
+                basePath.resolve(suffix).normalize().toString().replace(File.separatorChar, '/')
+                    .takeIf { it.isNotBlank() && !it.startsWith("../") && it != ".." && !it.startsWith("/") }
+            } catch (_: Exception) { null }
+            fun resolveBundledDependency(file: File, installName: String, slice: JSONObject): String? {
+                val relativeFile = file.relativeTo(app).path.replace(File.separatorChar, '/')
+                val loaderDirectory = File(relativeFile).parent.orEmpty()
+                if (installName.startsWith("@executable_path/")) {
+                    return normalizedBundlePath(executableDirectory, installName.removePrefix("@executable_path/"))
+                        ?.takeIf { it in embeddedPaths }
+                }
+                if (installName.startsWith("@loader_path/")) {
+                    return normalizedBundlePath(loaderDirectory, installName.removePrefix("@loader_path/"))
+                        ?.takeIf { it in embeddedPaths }
+                }
+                if (installName.startsWith("@rpath/")) {
+                    val tail = installName.removePrefix("@rpath/")
+                    val rpaths = slice.optJSONArray("rpaths") ?: JSONArray()
+                    for (index in 0 until rpaths.length()) {
+                        val rpath = rpaths.optString(index)
+                        val prefix = when {
+                            rpath == "@executable_path" -> executableDirectory
+                            rpath.startsWith("@executable_path/") -> normalizedBundlePath(
+                                executableDirectory, rpath.removePrefix("@executable_path/"),
+                            ) ?: continue
+                            rpath == "@loader_path" -> loaderDirectory
+                            rpath.startsWith("@loader_path/") -> normalizedBundlePath(
+                                loaderDirectory, rpath.removePrefix("@loader_path/"),
+                            ) ?: continue
+                            rpath.startsWith("/") -> continue
+                            else -> rpath
+                        }
+                        normalizedBundlePath(prefix, tail)?.takeIf { it in embeddedPaths }?.let { return it }
+                    }
+                }
+                return null
+            }
             fun inspect(file: File, analysis: JSONObject) {
                 nodes.put(JSONObject().put("path", file.relativeTo(app).path).put("analysis", analysis))
                 val slices = analysis.optJSONArray("slices")
@@ -327,11 +374,36 @@ class Library(private val context: Context) {
                     val arch = slice.optString("architecture")
                     if (file == binary && arch in listOf("arm64", "armv7", "armv7s", "armv6")) hasCandidate = true
                     val deps = slice.optJSONArray("dependencies") ?: JSONArray()
+                    val imports = slice.optJSONArray("imports") ?: JSONArray()
+                    val associationComplete = !slice.optBoolean("importsTruncated", false) &&
+                        slice.optBoolean("bindDecodingComplete", true) &&
+                        (0 until imports.length()).all { index -> imports.optJSONObject(index)?.has("ordinal") == true }
                     for (d in 0 until deps.length()) {
                         val installName = deps.getJSONObject(d).optString("path")
-                        graph.put(Providers.classify(installName).put("from", file.relativeTo(app).path))
+                        val ordinal = d + 1
+                        val observedSymbols = sortedSetOf<String>()
+                        for (importIndex in 0 until imports.length()) {
+                            val imported = imports.optJSONObject(importIndex) ?: continue
+                            if (imported.optLong("ordinal", Long.MIN_VALUE) == ordinal.toLong()) {
+                                imported.optString("name").takeIf { it.isNotBlank() }?.let(observedSymbols::add)
+                            }
+                        }
+                        val observedJson = JSONArray().apply { observedSymbols.forEach(::put) }
+                        val resolvedBundlePath = resolveBundledDependency(file, installName, slice)
+                        val edge = Providers.classify(installName)
+                            .put("from", file.relativeTo(app).path)
+                            .put("architecture", arch)
+                            .put("dylibOrdinal", ordinal)
+                            .put("resolvedBundlePath", resolvedBundlePath ?: JSONObject.NULL)
+                            .put("_observedImportSymbols", observedJson)
+                            .put("_importsAssociationComplete", associationComplete)
+                        if (resolvedBundlePath != null) {
+                            edge.put("status", Providers.STATUS_NO_EXECUTION_PATH_YET)
+                                .put("classification", Providers.STATUS_NO_EXECUTION_PATH_YET)
+                                .put("reason", "This dependency resolves to an embedded Darwin image, but its loading, ABI, and callout/link execution path are not implemented.")
+                        }
+                        graph.put(edge)
                     }
-                    val imports = slice.optJSONArray("imports") ?: JSONArray()
                     val metadata = slice.optJSONArray("metadata") ?: JSONArray()
                     if (imports.length() > 0 || metadata.length() > 0 || slice.has("chainedFixups") || !slice.optBoolean("bindDecodingComplete", true)) {
                         incompatible = true
@@ -339,31 +411,26 @@ class Library(private val context: Context) {
                 }
             }
             inspect(binary, macho)
-            val magics = setOf("cffaedfe", "cefaedfe", "feedface", "feedfacf", "cafebabe", "cafebabf", "bebafeca", "bfbafeca")
-            app.walkTopDown().filter { it.isFile && it != binary }.forEach { file ->
-                val head = ByteArray(4)
-                val size = file.inputStream().use { it.read(head) }
-                if (size == 4 && head.joinToString("") { "%02x".format(it.toInt() and 255) } in magics) {
-                    val relative = file.relativeTo(app).path
-                    val embedded = try {
-                        if (file.length() > MAX_EXECUTABLE_BYTES) {
-                            analysisErrors.put(JSONObject().put("path", relative)
-                                .put("reason", "embedded image exceeds the on-device ${MAX_EXECUTABLE_BYTES / (1024 * 1024)} MiB analysis limit"))
-                            null
-                        } else {
-                            JSONObject(NativeBridge.analyzeCompact(file.readBytes()))
-                        }
-                    } catch (error: Throwable) {
+            for (file in embeddedFiles) {
+                val relative = file.relativeTo(app).path
+                val embedded = try {
+                    if (file.length() > MAX_EXECUTABLE_BYTES) {
                         analysisErrors.put(JSONObject().put("path", relative)
-                            .put("reason", error.message ?: error.javaClass.simpleName))
+                            .put("reason", "embedded image exceeds the on-device ${MAX_EXECUTABLE_BYTES / (1024 * 1024)} MiB analysis limit"))
                         null
+                    } else {
+                        JSONObject(NativeBridge.analyzeCompact(file.readBytes()))
                     }
-                    if (embedded != null) inspect(file, embedded) else incompatible = true
-                    // An embedded framework or dylib still means the bundle is
-                    // outside the bounded on-device subset; that is a conversion
-                    // blocker, never an analysis failure.
-                    incompatible = true
+                } catch (error: Throwable) {
+                    analysisErrors.put(JSONObject().put("path", relative)
+                        .put("reason", error.message ?: error.javaClass.simpleName))
+                    null
                 }
+                if (embedded != null) inspect(file, embedded) else incompatible = true
+                // An embedded framework or dylib still means the bundle is
+                // outside the bounded on-device subset; that is a conversion
+                // blocker, never an analysis failure.
+                incompatible = true
             }
             updateProgress(45, "ANALYZING", "Dependency inventory complete; cataloging API candidates only", forceSave = true)
             report.put("dependencies", JSONObject().put("nodes", nodes).put("edges", graph)
@@ -381,6 +448,27 @@ class Library(private val context: Context) {
                     NativeBridge.compatClassify(symbol)
                 },
             )
+            val mappedSymbolEvidence = linkedMapOf<String, JSONObject>()
+            val mappedSymbols = apiMapping.optJSONArray("symbols") ?: JSONArray()
+            for (index in 0 until mappedSymbols.length()) {
+                val item = mappedSymbols.optJSONObject(index) ?: continue
+                val sourceSymbol = item.optString("sourceSymbol")
+                if (sourceSymbol.isNotBlank()) mappedSymbolEvidence[sourceSymbol] = item
+            }
+            for (index in 0 until graph.length()) {
+                val edge = graph.optJSONObject(index) ?: continue
+                val observed = edge.optJSONArray("_observedImportSymbols") ?: JSONArray()
+                val observedSymbols = (0 until observed.length()).mapNotNull { index ->
+                    observed.optString(index).takeIf { symbol -> symbol.isNotBlank() }
+                }
+                edge.put("evidence", Providers.evidenceForImports(
+                    observedSymbols,
+                    mappedSymbolEvidence,
+                    edge.optBoolean("_importsAssociationComplete", false),
+                ))
+                edge.remove("_observedImportSymbols")
+                edge.remove("_importsAssociationComplete")
+            }
             report.put("apiMapping", apiMapping)
             // Persist a compact dependency inventory. A game bundle can carry
             // hundreds of embedded images, and holding every full Mach-O
@@ -508,7 +596,7 @@ class Library(private val context: Context) {
     }
 }
 
-/** Icon suffixes, highest scale first: the best available representation wins. */
+/** Icon suffixes to probe; decoded source pixel dimensions, not suffix scale, choose the winner. */
 private val ICON_SUFFIXES = listOf(
     "@3x.png", "@2x.png", ".png", "@3x~ipad.png", "@2x~ipad.png", "~ipad.png",
     "@3x~iphone.png", "@2x~iphone.png", "~iphone.png",
@@ -553,6 +641,13 @@ internal fun extractIcon(app: File, names: List<String>, dir: File): JSONObject 
         addCandidate(File(app, name))
     }
 
+    val dimensionCache = mutableMapOf<String, Pair<Int, Int>?>()
+    fun sourceDimensions(file: File): Pair<Int, Int>? = dimensionCache.getOrPut(file.path) { IconDecoder.dimensions(file) }
+    fun scaleOf(file: File): Double = when {
+        "@3x" in file.name -> 3.0
+        "@2x" in file.name -> 2.0
+        else -> 1.0
+    }
     fun saveBitmap(
         bitmap: android.graphics.Bitmap,
         source: String,
@@ -560,9 +655,11 @@ internal fun extractIcon(app: File, names: List<String>, dir: File): JSONObject 
         decoder: String,
         scale: Double,
         kind: String,
+        sourceWidth: Int = bitmap.width,
+        sourceHeight: Int = bitmap.height,
     ): JSONObject {
-        val width = bitmap.width
-        val height = bitmap.height
+        val decodedWidth = bitmap.width
+        val decodedHeight = bitmap.height
         File(dir, "icon.png").outputStream().use {
             require(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) { "cannot save recovered icon" }
         }
@@ -570,13 +667,27 @@ internal fun extractIcon(app: File, names: List<String>, dir: File): JSONObject 
         return JSONObject().put("status", "SUPPORTED")
             .put("source", source).put("path", "icon.png").put("kind", kind)
             .put("format", format).put("decoder", decoder)
-            .put("width", width).put("height", height).put("scale", scale)
-            .put("reason", "Decoded bundle icon ($source, ${width}x${height})")
+            .put("width", sourceWidth).put("height", sourceHeight)
+            .put("decodedWidth", decodedWidth).put("decodedHeight", decodedHeight).put("scale", scale)
+            .put("reason", "Decoded bundle icon ($source, ${sourceWidth}x${sourceHeight})")
             .put("attempts", attempts)
     }
 
-    fun tryFiles(files: List<File>): JSONObject? {
-        for (candidate in files.take(48)) {
+    fun tryFiles(files: List<File>, priority: (File) -> Int = { 0 }): JSONObject? {
+        val ordered = files.asSequence()
+            .filter { it.isFile }
+            .distinctBy { it.relativeTo(app).path.lowercase(java.util.Locale.ROOT) }
+            .map { it to sourceDimensions(it) }
+            .sortedWith(compareBy<Pair<File, Pair<Int, Int>?>>(
+                { priority(it.first) },
+                { -((it.second?.first?.toLong() ?: 0L) * (it.second?.second?.toLong() ?: 0L)) },
+                { -maxOf(it.second?.first ?: 0, it.second?.second ?: 0) },
+                { -scaleOf(it.first) },
+                { it.first.path },
+            ))
+            .take(48)
+            .toList()
+        for ((candidate, dimensions) in ordered) {
             val relative = candidate.relativeTo(app).path
             if (candidate.length() > ICON_MAX_BYTES) {
                 attempt(relative, false, "image exceeds size limit")
@@ -585,59 +696,102 @@ internal fun extractIcon(app: File, names: List<String>, dir: File): JSONObject 
             val applePng = IconDecoder.isCgbi(candidate)
             val bitmap = try { IconDecoder.decode(candidate, ICON_TARGET) } catch (_: Exception) { null }
             if (bitmap == null) {
-                attempt(relative, false, "unsupported or corrupt image; tried Android PNG/JPEG and Apple CgBI decoders")
+                attempt(relative, false, "unsupported or corrupt image; tried Android PNG/JPEG and Apple CgBI decoders",
+                    dimensions?.first ?: 0, dimensions?.second ?: 0)
                 continue
             }
-            attempt(relative, true, if (applePng) "decoded and normalized Apple CgBI channel order/alpha" else "decoded image", bitmap.width, bitmap.height)
-            val scale = when { "@3x" in candidate.name -> 3.0; "@2x" in candidate.name -> 2.0; else -> 1.0 }
+            val sourceWidth = dimensions?.first ?: bitmap.width
+            val sourceHeight = dimensions?.second ?: bitmap.height
+            attempt(relative, true, if (applePng) "decoded and normalized Apple CgBI channel order/alpha" else "decoded image",
+                sourceWidth, sourceHeight)
+            val scale = scaleOf(candidate)
             val format = when {
                 applePng -> "cgbi-png"
-                candidate.name.endsWith(".jpeg", true) -> "jpeg"
-                candidate.name.endsWith(".jpg", true) -> "jpeg"
+                candidate.name.endsWith(".jpeg", true) || candidate.name.endsWith(".jpg", true) -> "jpeg"
                 else -> "png"
             }
             val decoder = if (applePng) "radek-cgbi+android.graphics.Bitmap" else "android.graphics.BitmapFactory"
-            return saveBitmap(bitmap, relative, format, decoder, scale, "file")
+            return saveBitmap(bitmap, relative, format, decoder, scale, "file", sourceWidth, sourceHeight)
         }
         return null
     }
 
-    // Prefer the explicit bundle icon, but tolerate a broken or missing file.
-    // This pass occurs before reading the executable, so arm32, arm64 and FAT
-    // archives all follow the same icon path.
-    tryFiles(candidates)?.let { return it }
+    // Prefer the explicit bundle icon, but rank all device/scale variants by
+    // source pixel dimensions so an unusually small @3x file cannot beat a
+    // larger @2x rendition. This is independent of Mach-O CPU slices.
+    val declaredIcon = tryFiles(candidates)
 
     // Modern iOS games commonly keep their only app icon in a compiled asset
-    // catalog. Try it before arbitrary bundle textures/screenshots.
+    // catalog. Inspect every bounded catalog and retain the largest usable
+    // rendition, comparing its source dimensions with any loose declared icon.
     val preferred = names.firstOrNull()?.substringBeforeLast('.', names.firstOrNull().orEmpty())
+    fun catalogMatchesPreferred(source: String): Boolean {
+        if (preferred.isNullOrBlank()) return true
+        val stem = source.substringAfter(':').substringBeforeLast('.', source.substringAfter(':'))
+            .lowercase(java.util.Locale.ROOT)
+        val wanted = preferred.substringAfterLast('/').substringBeforeLast('.', preferred).lowercase(java.util.Locale.ROOT)
+        if (stem == wanted) return true
+        if (!stem.startsWith(wanted)) return false
+        val suffix = stem.drop(wanted.length)
+        return suffix.isNotEmpty() && (suffix.first() in "@~_-" || suffix.first().isDigit())
+    }
     val catalogs = app.walkTopDown().filter {
         it.isFile && (it.name.equals("Assets.car", ignoreCase = true) || it.extension.equals("car", ignoreCase = true))
     }.sortedWith(compareBy<File>({ if (it.name.equals("Assets.car", ignoreCase = true)) 0 else 1 }, { it.path }))
-    for (catalog in catalogs.take(8)) {
+    var catalogBest: AssetCatalogIcon.Extraction? = null
+    for (catalog in catalogs.take(32)) {
         val extracted = AssetCatalogIcon.extract(catalog, preferred, ICON_TARGET)
         val prefix = catalog.relativeTo(app).path
         for (item in extracted.attempts) {
             attempt("$prefix:${item.asset}", item.ok, item.detail)
         }
-        if (extracted.bitmap != null) {
+        val bitmap = extracted.bitmap
+        if (bitmap != null) {
             val source = extracted.asset ?: prefix
-            attempt(source, true, "decoded compiled asset-catalog rendition", extracted.bitmap.width, extracted.bitmap.height)
-            return saveBitmap(
-                extracted.bitmap,
+            attempt(source, true, "decoded compiled asset-catalog rendition", extracted.width, extracted.height)
+            val current = catalogBest
+            val currentArea = (current?.width ?: 0).toLong() * (current?.height ?: 0)
+            val candidateArea = extracted.width.toLong() * extracted.height
+            if (current == null || candidateArea > currentArea) {
+                current?.bitmap?.recycle()
+                catalogBest = extracted
+            } else {
+                bitmap.recycle()
+            }
+        } else {
+            attempt(prefix, false, extracted.error ?: "no usable icon rendition")
+        }
+    }
+    val catalogReport = catalogBest?.let { extracted ->
+        val source = extracted.asset ?: "Assets.car"
+        val fileArea = declaredIcon?.let {
+            it.optLong("width", 0L) * it.optLong("height", 0L)
+        } ?: 0L
+        val catalogArea = extracted.width.toLong() * extracted.height
+        val matchesPreferred = catalogMatchesPreferred(source)
+        if (declaredIcon == null || (matchesPreferred && catalogArea > fileArea)) {
+            val bitmap = extracted.bitmap ?: return@let null
+            saveBitmap(
+                bitmap,
                 source,
                 extracted.format ?: "asset-catalog-image",
                 "assetcatalog+android.graphics.Bitmap",
                 extracted.scale,
                 "assets.car",
+                extracted.width,
+                extracted.height,
             )
+        } else {
+            extracted.bitmap?.recycle()
+            null
         }
-        attempt(prefix, false, extracted.error ?: "no usable icon rendition")
     }
+    (catalogReport ?: declaredIcon)?.let { return it }
 
     // Some games ship the launch artwork as an unlisted loose resource. Rank
-    // icon-like filenames above backgrounds and generic textures, then try all
-    // image files. `iTunesArtwork` is often extensionless, so the decoder sniffs
-    // its actual file signature rather than trusting the suffix.
+    // icon-like filenames above backgrounds and generic textures, then source
+    // pixel dimensions within each tier. `iTunesArtwork` is often extensionless,
+    // so the decoder sniffs its actual file signature rather than trusting suffix.
     val fallbackImages = app.walkTopDown()
         .filter {
             it.isFile && (it.extension.lowercase() in setOf("png", "jpg", "jpeg") || it.name.equals("iTunesArtwork", true))
@@ -652,7 +806,15 @@ internal fun extractIcon(app: File, names: List<String>, dir: File): JSONObject 
             }
         }, { -it.length() }, { it.path }))
         .toList()
-    tryFiles(fallbackImages)?.let { return it }
+    tryFiles(fallbackImages) { file ->
+        val lower = file.name.lowercase()
+        when {
+            "appicon" in lower || lower.startsWith("itunesartwork") -> 0
+            "icon" in lower -> 1
+            "artwork" in lower || "logo" in lower -> 2
+            else -> 3
+        }
+    }?.let { return it }
 
     return JSONObject().put("status", "UNAVAILABLE")
         .put("reason", "Icon unavailable: no decodable icon image was found in the bundle")

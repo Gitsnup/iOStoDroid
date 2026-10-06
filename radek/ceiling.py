@@ -180,15 +180,19 @@ def _selected_slice(reconstruction: dict, architecture: str) -> dict | None:
     return None
 
 
-def _reachable_imports(reconstruction: dict) -> list[dict]:
-    used: list[dict] = []
+def _reachable_imports(reconstruction: dict, architecture: str | None = None) -> list[dict]:
+    """Return selected-slice imports reached by its recovered direct-call graph."""
+    reachable: list[dict] = []
     for image in reconstruction.get("images", []):
         for slice_data in image.get("slices", []):
+            if architecture and slice_data.get("architecture") != architecture:
+                continue
             apis = slice_data.get("apis") or {}
-            for item in apis.get("used", []):
+            entry_graph = apis.get("entryReachability") or {}
+            for item in entry_graph.get("imports", []):
                 if isinstance(item, dict) and item.get("name"):
-                    used.append(item)
-    return used
+                    reachable.append(item)
+    return reachable
 
 
 def assess(
@@ -353,7 +357,8 @@ def assess(
             if slice_data.get("architecture") == convertible.get("architecture"):
                 imports = list(slice_data.get("imports", []))
                 break
-    used = _reachable_imports(reconstruction)
+    selected_architecture = (convertible or {}).get("architecture") or deepest_arch
+    used = _reachable_imports(reconstruction, selected_architecture)
     verified = [u["name"] for u in used if classify_import(u["name"]) == "verified"]
     stubbed = [u["name"] for u in used if classify_import(u["name"]) == "stubbed"]
     blocked_feasibility = [
@@ -364,13 +369,14 @@ def assess(
         api_detail = "the executable declares no imports, so no API binding has to be linked"
     elif not used:
         api_detail = (
-            f"{len(imports)} import symbol(s) are declared by the Mach-O image; none is reached by a "
-            "reconstructed call, but a complete-game build still requires the import table to be "
-            "resolvable or absent"
+            f"{len(imports)} import symbol(s) are declared by the Mach-O image; none is reachable from the "
+            "selected entry through recovered direct calls. Indirect dyld transfers, Objective-C dispatch, "
+            "callbacks, and loader initializers are not inferred; a complete-game build still requires the "
+            "import table to be resolvable or absent"
         )
     else:
         api_detail = (
-            f"{len(imports)} declared import(s), {len(used)} reached by reconstructed calls: "
+            f"{len(imports)} declared import(s), {len(used)} statically entry-reachable through recovered direct calls: "
             f"{len(verified)} have a host-tested implementation available but none is linked into a game, "
             f"{len(stubbed)} resolve to explicit unimplemented stubs, "
             f"{len(blocked_feasibility)} have no identified Android target"

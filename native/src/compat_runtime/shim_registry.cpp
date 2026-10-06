@@ -5,18 +5,61 @@
 namespace radek::compat_runtime {
 
 void ShimRegistry::registerBinding(ShimBinding binding) {
+    const bool dataBinding = static_cast<bool>(binding.resolveGuestAddress);
+    const auto callbackCount = static_cast<unsigned>(static_cast<bool>(binding.invoke)) +
+                               static_cast<unsigned>(static_cast<bool>(binding.invokeTransfer)) +
+                               static_cast<unsigned>(static_cast<bool>(binding.invokeException));
+    const bool invalidCallout = !dataBinding &&
+                                (binding.guestAddress < 0xf0000000 || callbackCount != 1);
+    const bool invalidDataBinding = dataBinding &&
+                                    (binding.guestAddress != 0 || binding.invoke ||
+                                     binding.invokeTransfer || binding.invokeException);
     if (binding.darwinSymbol.empty() || binding.library.empty() || binding.adapterName.empty() ||
-        binding.guestAddress < 0xf0000000 || !binding.invoke)
+        invalidCallout || invalidDataBinding)
         throw std::invalid_argument(
-            "shim binding requires a named library, reserved guest entry and native call adapter");
+            "shim binding requires a named library and either a reserved native callout or guest-data resolver");
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto address = binding.guestAddress & ~GuestAddress{1};
-    if (callouts_.find(address) != callouts_.end())
-        throw std::runtime_error("duplicate native shim callout address");
+    if (!dataBinding) {
+        const auto address = binding.guestAddress & ~GuestAddress{1};
+        if (callouts_.find(address) != callouts_.end())
+            throw std::runtime_error("duplicate native shim callout address");
+    }
     const auto symbol = binding.darwinSymbol;
     if (!bindings_.emplace(symbol, std::move(binding)).second)
         throw std::runtime_error("duplicate Darwin shim symbol");
-    callouts_.emplace(address, symbol);
+    const auto &stored = bindings_.at(symbol);
+    if (!stored.resolveGuestAddress)
+        callouts_.emplace(stored.guestAddress & ~GuestAddress{1}, symbol);
+}
+
+void ShimRegistry::registerImageInitializer(const std::string &name,
+                                            GuestImageInitializer initializer) {
+    if (name.empty() || !initializer)
+        throw std::invalid_argument("guest image initializer requires a name and callback");
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!imageInitializers_.emplace(name, std::move(initializer)).second)
+        throw std::runtime_error("duplicate guest image initializer: " + name);
+}
+
+bool ShimRegistry::initializeImage(GuestAddressSpace &memory,
+                                  const std::vector<GuestImageSection> &sections,
+                                  std::string &reason) const {
+    std::vector<std::pair<std::string, GuestImageInitializer>> initializers;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        initializers.reserve(imageInitializers_.size());
+        for (const auto &initializer : imageInitializers_)
+            initializers.push_back(initializer);
+    }
+    for (const auto &initializer : initializers) {
+        std::string detail;
+        if (!initializer.second(memory, sections, detail)) {
+            reason = detail.empty() ? "guest image initializer failed: " + initializer.first
+                                    : initializer.first + ": " + detail;
+            return false;
+        }
+    }
+    return true;
 }
 
 std::optional<ShimBinding> ShimRegistry::resolve(const std::string &darwinSymbol) const {
@@ -53,7 +96,39 @@ GuestCalloutResult ShimRegistry::invokeCallout(GuestAddress address,
         }
         binding = found->second;
     }
-    if (!binding.invoke(registers, memory, reason)) {
+    if (binding.invokeException) {
+        if (!binding.invokeException(registers, memory, reason)) {
+            if (reason.empty())
+                reason = "native exception adapter failed for " + binding.darwinSymbol;
+            return GuestCalloutResult::Failed;
+        }
+        if (reason.empty())
+            reason = "guest exception raised by " + binding.darwinSymbol;
+        return GuestCalloutResult::ExceptionRaised;
+    }
+    if (binding.invokeTransfer) {
+        GuestAddress target = 0;
+        if (!binding.invokeTransfer(registers, memory, target, reason)) {
+            if (reason.empty())
+                reason = "native adapter failed for " + binding.darwinSymbol;
+            return GuestCalloutResult::Failed;
+        }
+        if (target == 0)
+            return GuestCalloutResult::Returned;
+        const auto codeAddress = target & ~GuestAddress{1};
+        if (!memory.contains(codeAddress, 2, MemoryPermission::Execute)) {
+            reason = "native adapter selected a guest IMP outside executable guest memory";
+            return GuestCalloutResult::Failed;
+        }
+        registers.r[15] = codeAddress;
+        constexpr std::uint32_t thumbStateBit = 1U << 5;
+        if ((target & 1U) != 0)
+            registers.cpsr |= thumbStateBit;
+        else
+            registers.cpsr &= ~thumbStateBit;
+        return GuestCalloutResult::Transferred;
+    }
+    if (!binding.invoke || !binding.invoke(registers, memory, reason)) {
         if (reason.empty())
             reason = "native adapter failed for " + binding.darwinSymbol;
         return GuestCalloutResult::Failed;

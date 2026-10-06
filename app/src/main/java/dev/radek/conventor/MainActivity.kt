@@ -527,6 +527,17 @@ class MainActivity : Activity() {
                 else -> "$triageNote The analyzer runtime contains concrete compatibility exports, but no matching export was verified for this IPA; no per-game replacement was linked. Other candidates do not predict gameplay compatibility or stability."
             }
             text(mapping.optString("measure") + " $mappingDisclosure", 13f, muted, parent = mappingCard)
+            mapping.optJSONObject("evidence")?.let { evidence ->
+                text(
+                    "Per-import evidence · ${evidence.optInt("exportsVerifiedOnThisDevice", 0)} device exports verified · " +
+                        "${evidence.optInt("hostTestedImplementations", 0)} host-tested implementations · " +
+                        "${evidence.optInt("stubOnlyCount", 0)} stub-only · ${evidence.optInt("noneCount", 0)} none · " +
+                        "0 game callsites linked",
+                    12f,
+                    muted,
+                    parent = mappingCard,
+                )
+            }
         }
         report.optJSONObject("portProgress")?.let { port ->
             val portCard = card()
@@ -561,9 +572,22 @@ class MainActivity : Activity() {
         val edges = report.optJSONObject("dependencies")?.optJSONArray("edges")
         if (edges != null) for (i in 0 until edges.length()) {
             val dep = edges.getJSONObject(i)
-            val classification = dep.optString("classification", "unverified").uppercase()
-            text("$classification · ${dep.getString("installName")}", 13f, muted)
+            val grade = dep.optString("status", "no-execution-path-yet").uppercase()
+            text("$grade · ${dep.getString("installName")}", 13f, muted)
             text(dep.optString("reason"), 11f, muted)
+            dep.optJSONObject("evidence")?.let { evidence ->
+                val observed = evidence.optInt("observedImportCount", 0)
+                val note = if (observed == 0) "no per-import evidence" else
+                    "${evidence.optInt("exportsVerifiedOnThisDevice", 0)} device exports verified, " +
+                        "${evidence.optInt("hostTestedImplementations", 0)} host-tested implementations, " +
+                        "${evidence.optInt("stubOnlyCount", 0)} stub-only, ${evidence.optInt("noneCount", 0)} none"
+                text(
+                    "Evidence: $note · ${evidence.optString("associationStatus", "UNKNOWN").lowercase()} import association · " +
+                        "0 callsites linked; 0 recompiled bytes linked",
+                    11f,
+                    muted,
+                )
+            }
         }
         button("View full machine-readable report") { showText("Conversion report", report.toString(2)) }
         button("View real conversion logs") { showText("Logs", File(dir, "conversion.jsonl").takeIf { it.isFile }?.readText() ?: "No logs") }

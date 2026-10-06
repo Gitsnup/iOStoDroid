@@ -333,15 +333,27 @@ def _entry_reachable_functions(slice_data: dict) -> set[str]:
     return reachable
 
 
-def reachable_imports(reconstruction: dict) -> set[str]:
-    """Collect supported imports called by a function reachable from LC_MAIN."""
+def reachable_imports(reconstruction: dict, architecture: str | None = None) -> set[str]:
+    """Collect supported imports in one slice's recovered direct-call graph from its entry."""
     names: set[str] = set()
     for image in reconstruction.get("images", []) or []:
         for slice_data in image.get("slices", []) or []:
+            if architecture and slice_data.get("architecture") != architecture:
+                continue
+            apis = slice_data.get("apis") or {}
+            entry_graph = apis.get("entryReachability")
+            if isinstance(entry_graph, dict):
+                for use in entry_graph.get("imports", []) or []:
+                    name = use.get("name") if isinstance(use, dict) else None
+                    if isinstance(name, str) and name in _SUPPORTED:
+                        names.add(name)
+                continue
+            # Backward-compatible path for older reconstruction fixtures that do
+            # not carry the entry-rooted direct-call graph yet.
             callers = _entry_reachable_functions(slice_data)
             if not callers:
                 continue
-            for use in ((slice_data.get("apis") or {}).get("used") or []):
+            for use in (apis.get("used") or []):
                 if not isinstance(use, dict):
                     continue
                 name = use.get("name")
@@ -351,9 +363,9 @@ def reachable_imports(reconstruction: dict) -> set[str]:
     return names
 
 
-def generate(reconstruction: dict, output: Path) -> dict:
-    """Write compilable replacement source for exact supported entry-reachable APIs."""
-    selected = sorted(reachable_imports(reconstruction))
+def generate(reconstruction: dict, output: Path, architecture: str | None = None) -> dict:
+    """Write replacement source for exact supported imports in a recovered entry call graph."""
+    selected = sorted(reachable_imports(reconstruction, architecture))
     if not selected:
         return {
             "status": "NO_ENTRY_REACHABLE_IMPLEMENTED_API",

@@ -16,5 +16,10 @@ with subprocess.Popen(
     code = process.wait()
 if code:
     message = "".join(lines).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    # GitHub truncates workflow-command annotations at roughly 4 KiB. Preserve
+    # the end of the output, where Gradle and test runners print the failure,
+    # rather than losing it behind warnings and successful task lines.
+    if len(message) > 3500:
+        message = "[earlier output truncated]%0A" + message[-3470:]
     print(f"::error title=Command failed ({code})::{message}")
 sys.exit(code if code >= 0 else 128 - code)

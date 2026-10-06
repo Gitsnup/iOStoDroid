@@ -15,14 +15,13 @@
       "family": "Objective-C runtime startup, class/selector lookup, message dispatch, and memory management",
       "candidateImports": [
         "_objc_msgSend",
-        "_objc_getClass",
-        "_sel_registerName",
-        "_objc_retain",
-        "_objc_release",
-        "_objc_autoreleasePoolPush",
-        "_objc_autoreleasePoolPop"
+        "_objc_msgSendSuper2",
+        "_objc_msgSend_stret",
+        "_objc_setProperty",
+        "_objc_enumerationMutation",
+        "_OBJC_CLASS_$_NSAutoreleasePool"
       ],
-      "priorityBasis": "Provisional startup dependency; must be reprioritized from the first authorized IPA import report.",
+      "priorityBasis": "Static Angry Birds v1.0 startup evidence: _objc_msgSend is the first recovered direct import call in _main (42 recovered callsites overall), followed by _UIApplicationMain; the loader probe does not execute guest code.",
       "gamesUnblocked": [],
       "gamesUnblockedMeasured": false
     },
@@ -31,33 +30,139 @@
       "familyId": "foundation-core",
       "family": "CoreFoundation/Foundation strings, collections, data, and bundle services",
       "candidateImports": [
-        "_CFStringCreateWithCString",
-        "_CFRetain",
-        "_CFRelease",
-        "_CFArrayCreate",
-        "_CFDictionaryCreate",
-        "_CFBundleGetMainBundle",
-        "_CFBundleCopyExecutableURL"
+        "_NSSearchPathForDirectoriesInDomains",
+        "_OBJC_CLASS_$_NSAutoreleasePool",
+        "_OBJC_CLASS_$_NSBundle",
+        "_OBJC_CLASS_$_NSDictionary",
+        "_OBJC_CLASS_$_NSString",
+        "_OBJC_CLASS_$_NSURL"
       ],
-      "priorityBasis": "Provisional app-startup and asset-loading dependency; validate against observed imports before implementation.",
+      "priorityBasis": "Static evidence includes _NSSearchPathForDirectoriesInDomains and Foundation/CoreFoundation class imports, plus an _NSAutoreleasePool +new startup trace; method behavior remains unimplemented and unmeasured.",
       "gamesUnblocked": [],
       "gamesUnblockedMeasured": false
     },
     {
       "rank": 3,
-      "familyId": "uikit-rendering-input",
-      "family": "UIApplication lifecycle, CoreGraphics/CoreAnimation rendering, and touch/input delivery",
+      "familyId": "cxx-abi-runtime",
+      "family": "C++ ABI allocation/deallocation, exception, unwind, and compiler-runtime support",
       "candidateImports": [
-        "_UIApplicationMain",
-        "_CGContextDrawImage",
-        "_CGImageCreateWithPNGDataProvider",
-        "_OBJC_CLASS_$_UIApplication",
-        "_OBJC_CLASS_$_CADisplayLink"
+        "__ZdaPv",
+        "__ZdlPv",
+        "__Znam",
+        "__Znwm",
+        "__Unwind_SjLj_Register",
+        "__Unwind_SjLj_Resume",
+        "__Unwind_SjLj_Unregister",
+        "___cxa_allocate_exception",
+        "___cxa_throw",
+        "___divdi3",
+        "___divsi3",
+        "___udivsi3"
       ],
-      "priorityBasis": "Provisional first-menu/play loop dependency; validate from an actual title's import and smoke traces.",
+      "priorityBasis": "The static call ranking contains __ZdaPv (61), __ZdlPv (59), and __Znam (43) recovered direct callsites; compiler-runtime and exception imports are also present. These are static counts, not execution counts.",
       "gamesUnblocked": [],
       "gamesUnblockedMeasured": false
     }
   ],
-  "measurementNote": "No real app IPA has been supplied or smoke-tested in this session. Candidate import names and ranks are hypotheses, not observed blockers; gamesUnblocked remains empty and unmeasured until evidence-backed runs are recorded."
+  "measurementNote": "One authorized Angry Birds v1.0 IPA has static-analysis and host-loader evidence recorded separately in staticEvidence. It has not been launched on Android or smoke-tested; apps and gamesUnblocked remain empty. Import rankings, the _main trace, and the loader first-missing import are static/host evidence, not guest execution.",
+  "staticEvidence": [
+    {
+      "evidenceId": "angrybirds-v1.0-static-2026-10-05",
+      "appId": "com.clickgamer.AngryBirds",
+      "name": "Angry Birds",
+      "version": "1.0",
+      "inputSha256": "cdea1290dcaa67ec75cf555e78caaa8d90cfaa90021ec7f05e40089fb87944cf",
+      "analysisDate": "2026-10-05",
+      "evidenceKind": "static-analysis-and-host-loader-probe",
+      "architecture": "armv6",
+      "decodedTextPercent": 31.49,
+      "importCount": 254,
+      "symbolsWithRecoveredDirectCalls": 160,
+      "rankedRecoveredDirectCallImports": [
+        {
+          "rank": 1,
+          "symbol": "_memcpy",
+          "callSites": 184
+        },
+        {
+          "rank": 2,
+          "symbol": "__ZdaPv",
+          "callSites": 61
+        },
+        {
+          "rank": 3,
+          "symbol": "__ZdlPv",
+          "callSites": 59
+        },
+        {
+          "rank": 4,
+          "symbol": "_strlen",
+          "callSites": 55
+        },
+        {
+          "rank": 5,
+          "symbol": "_memcmp",
+          "callSites": 54
+        },
+        {
+          "rank": 6,
+          "symbol": "__Znam",
+          "callSites": 43
+        },
+        {
+          "rank": 7,
+          "symbol": "_objc_msgSend",
+          "callSites": 42
+        },
+        {
+          "rank": 8,
+          "symbol": "_strcmp",
+          "callSites": 38
+        },
+        {
+          "rank": 9,
+          "symbol": "_memset",
+          "callSites": 31
+        },
+        {
+          "rank": 10,
+          "symbol": "_free",
+          "callSites": 26
+        }
+      ],
+      "firstStaticApplicationImport": {
+        "symbol": "_objc_msgSend",
+        "function": "_main",
+        "functionAddress": "0x74358",
+        "callSite": "0x74378",
+        "stub": "0x132cf0",
+        "receiverClass": "_OBJC_CLASS_$_NSAutoreleasePool",
+        "receiverImportSlot": "0x14365c",
+        "selector": "new",
+        "selectorSlot": "0x143620",
+        "nextObservedImport": {
+          "symbol": "_UIApplicationMain",
+          "callSite": "0x74390"
+        },
+        "evidenceLimit": "Recovered static call/register-flow evidence; not an executed call or globally first startup import."
+      },
+      "loaderProbe": {
+        "status": "BLOCKED_UNRESOLVED_IMPORTS",
+        "entryPoint": "0x4320",
+        "entrySource": "LC_UNIXTHREAD",
+        "resolvedFixupRecords": 34,
+        "resolvedUniqueSymbols": 25,
+        "unresolvedFixupRecords": 230,
+        "unresolvedUniqueSymbols": 229,
+        "firstMissingImport": "_AudioSessionSetActive",
+        "dependency": "AudioToolbox",
+        "dependencyOrdinal": 7,
+        "lazyPointerSlot": "0x13f17c",
+        "guestInstructionsExecuted": false,
+        "evidenceLimit": "First unresolved symbol in indirect-symbol-pointer order; not a runtime call trace."
+      },
+      "runtimeSmokeStatus": null,
+      "detailsPath": "docs/ANGRY_BIRDS_V1_FINDINGS.md"
+    }
+  ]
 }

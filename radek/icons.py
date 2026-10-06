@@ -5,14 +5,16 @@ recorded, so a report can show which source was used, which were tried, and why
 others failed. Nothing is invented: when no decodable icon exists the result is
 ``UNAVAILABLE`` and callers show that state instead of a fake image.
 
-Order (first decodable match wins):
+The declared icon family is resolved as a whole and the largest decodable
+rendition is selected by pixel dimensions (scale labels are only tie-breakers).
+The fallback order is:
 
 1. icons named directly by ``Info.plist`` (``CFBundleIconFile``,
-   ``CFBundleIconFiles``, ``CFBundleIcons``/``CFBundleIcons~ipad``)
-2. those names with device/scale variants (``@2x``, ``@3x``, ``~ipad``, ...)
-3. compiled asset catalogs (``Assets.car``), preferring ``CFBundleIconName``
-4. other icon-like resources inside the bundle (``iTunesArtwork``, ``*Icon*``)
-5. any remaining image resource in the bundle, ranked by icon likelihood
+   ``CFBundleIconFiles``, ``CFBundleIcons``/``CFBundleIcons~ipad``) and their
+   device/scale variants
+2. compiled asset catalogs (``Assets.car``), preferring ``CFBundleIconName``
+3. other icon-like resources inside the bundle (``iTunesArtwork``, ``*Icon*``)
+4. any remaining image resource in the bundle, ranked by icon likelihood
 """
 
 from __future__ import annotations
@@ -181,31 +183,46 @@ def _file_candidates(app: Path, names: list[str]) -> list[Path]:
                     continue
                 seen.add(key)
                 found.append(candidate)
-    found.sort(key=lambda path: (-_scale_of(path.name), -_pixels(path), path.name.lower()))
+    found.sort(key=lambda path: (-_pixels(path), -_scale_of(path.name), path.name.lower()))
     return found
 
 
 def _pixels(path: Path) -> int:
     """Pixel count of an image, best effort, without decoding it."""
     try:
-        if path.stat().st_size > (1 << 20):
+        size = path.stat().st_size
+        if size > (1 << 20):
             return 0
         with path.open("rb") as handle:
-            head = handle.read(64)
+            data = handle.read()
     except OSError:
         return 0
     try:
-        width, height = pngcodec.dimensions(head)
+        if data.startswith(pngcodec.PNG_MAGIC):
+            width, height = pngcodec.dimensions(data[:33])
+        elif data.startswith(pngcodec.JPEG_MAGIC):
+            width, height = pngcodec.jpeg_dimensions(data)
+        else:
+            return 0
     except (pngcodec.PngError, struct.error, ValueError):
         return 0
     return width * height
 
 
+def _bundle_icon_rank(path: Path) -> int:
+    lowered = path.name.lower()
+    if lowered.startswith("itunesartwork") or "appicon" in lowered:
+        return 0
+    if "icon" in lowered:
+        return 1
+    return 2
+
+
 def _bundle_image_candidates(app: Path, limit: int = MAX_FILE_CANDIDATES) -> list[Path]:
-    """Loose images in the bundle, ranked by how icon-like they look."""
-    candidates: list[tuple[tuple[int, int, int], Path]] = []
+    """Loose images in the bundle, ranked by icon family, pixel size and path."""
+    candidates: list[tuple[tuple[int, int, int, int], Path]] = []
     for path in app.rglob("*"):
-        if not path.is_file() or len(candidates) >= limit:
+        if not path.is_file():
             continue
         suffix = path.suffix.lower()
         if suffix not in (".png", ".jpg", ".jpeg"):
@@ -214,15 +231,55 @@ def _bundle_image_candidates(app: Path, limit: int = MAX_FILE_CANDIDATES) -> lis
         if "assets.car" in lowered or lowered.endswith(".car"):
             continue
         depth = len(path.relative_to(app).parts)
-        named = 0 if "appicon" in lowered else 1 if "icon" in lowered else 2
-        if lowered.startswith("itunesartwork"):
-            named = 0
         try:
             size = path.stat().st_size
         except OSError:
             continue
-        candidates.append(((named, depth, -size), path))
-    return [path for _rank, path in sorted(candidates)]
+        candidates.append(((_bundle_icon_rank(path), -_pixels(path), depth, -size), path))
+    candidates.sort(key=lambda item: item[0])
+    return [path for _rank, path in candidates[:limit]]
+
+
+def _resolution_key(result: IconResult) -> tuple[int, int, float]:
+    width, height = result.width or 0, result.height or 0
+    return width * height, max(width, height), result.scale
+
+
+def _best_file_result(
+    candidates: list[Path],
+    app: Path,
+    attempts: list[Attempt],
+    priority=lambda _path: 0,
+) -> IconResult | None:
+    """Try an ordered candidate family and retain its highest-resolution image."""
+    best: IconResult | None = None
+    best_priority: int | None = None
+    partial: IconResult | None = None
+    partial_priority: int | None = None
+    for candidate in candidates:
+        current_priority = priority(candidate)
+        if best is not None and current_priority > best_priority:
+            break
+        found, attempt = _from_file(candidate, app)
+        attempts.append(attempt)
+        if found is None:
+            continue
+        if found.image is not None:
+            if (
+                best is None
+                or current_priority < best_priority
+                or (current_priority == best_priority and _resolution_key(found) > _resolution_key(best))
+            ):
+                best = found
+                best_priority = current_priority
+        elif (
+            partial is None
+            or current_priority < partial_priority
+            or (current_priority == partial_priority and _resolution_key(found) > _resolution_key(partial))
+        ):
+            partial = found
+            partial_priority = current_priority
+    return best or partial
 
 
 def _decode_image(data: bytes, source: str, kind: str) -> tuple[pngcodec.Image | None, str, str, str]:
@@ -299,6 +356,19 @@ def _rel(path: Path, app: Path) -> str:
         return path.as_posix()
 
 
+def _matches_catalog_name(preferred: str, source: str | None) -> bool:
+    if not source:
+        return False
+    stem = Path(source.split(":", 1)[-1]).stem.casefold()
+    wanted = Path(preferred).stem.casefold()
+    if stem == wanted:
+        return True
+    if not stem.startswith(wanted):
+        return False
+    suffix = stem[len(wanted) :]
+    return bool(suffix) and (suffix[0] in "@~_-" or suffix[0].isdigit())
+
+
 def _from_catalog(path: Path, app: Path, preferred: str | None) -> tuple[IconResult | None, list[Attempt], assetcatalog.Catalog | None]:
     attempts: list[Attempt] = []
     try:
@@ -351,39 +421,46 @@ def extract(app: Path, info: dict, log=None) -> IconResult:
     catalogs = sorted(app.rglob("Assets.car"))
     result: IconResult | None = None
 
-    # 1-2. Info.plist declared files and their device/scale variants.
-    for candidate in _file_candidates(app, names):
-        found, attempt = _from_file(candidate, app)
-        attempts.append(attempt)
-        if found is not None and found.image is not None:
-            result = found
-            break
-        if found is not None and result is None:
-            result = found  # decodable but not PNG (e.g. JPEG); keep as a fallback
+    # 1. Info.plist declared files and all device/scale variants. Do not stop
+    # at the first match: @2x may contain more pixels than an @3x rendition.
+    result = _best_file_result(_file_candidates(app, names), app, attempts)
 
-    # 3. Compiled asset catalogs.
+    # 2. Compiled asset catalogs. Inspect all candidate catalogs and keep the
+    # highest-resolution decodable icon rather than the first bundle path.
     preferred = catalog_icon_name(info) or (names[0] if names else None)
     catalog: assetcatalog.Catalog | None = None
-    if result is None or result.image is None:
-        for path in catalogs:
-            found, extra, catalog = _from_catalog(path, app, preferred)
-            attempts.extend(extra)
-            if found is not None:
-                result = found
-                break
-            catalog = catalog or catalog
+    catalog_best: IconResult | None = None
+    for path in catalogs:
+        found, extra, parsed_catalog = _from_catalog(path, app, preferred)
+        attempts.extend(extra)
+        if catalog is None and parsed_catalog is not None:
+            catalog = parsed_catalog
+        if found is not None and (
+            catalog_best is None or _resolution_key(found) > _resolution_key(catalog_best)
+        ):
+            catalog_best = found
+    catalog_matches_declared_icon = (
+        preferred is None or _matches_catalog_name(preferred, catalog_best.source)
+    ) if catalog_best is not None else False
+    if catalog_best is not None and (
+        result is None
+        or result.image is None
+        or (catalog_matches_declared_icon and _resolution_key(catalog_best) > _resolution_key(result))
+    ):
+        result = catalog_best
+        catalog = catalog_best.catalog or catalog
 
-    # 4-5. Any other icon-like resource, then any other image.
+    # 3-4. Any other icon-like resource, then any other image. Only the best
+    # icon-likelihood tier is considered once a valid image exists.
     if result is None or result.image is None:
-        for candidate in _bundle_image_candidates(app):
-            found, attempt = _from_file(candidate, app)
-            attempts.append(attempt)
-            if found is not None:
-                if found.image is not None:
-                    result = found
-                    break
-                if result is None:
-                    result = found
+        fallback = _best_file_result(
+            _bundle_image_candidates(app),
+            app,
+            attempts,
+            priority=_bundle_icon_rank,
+        )
+        if fallback is not None and (result is None or result.image is None):
+            result = fallback
 
     if result is None:
         result = IconResult(

@@ -18,6 +18,7 @@ struct MachOLoadReport {
     std::string status = "BLOCKED";
     std::string error;
     GuestAddress entryPoint = 0;
+    std::string entryPointSource;
     bool thumb = false;
     CpuRegisterState initialRegisters;
     std::uint32_t segmentCount = 0;

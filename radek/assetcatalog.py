@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .archive import InputError
 
@@ -147,14 +148,22 @@ class Catalog:
         images = [r for r in self.renditions if r.encoding in ("png", "jpeg") or r.decoded]
         if not images:
             return []
-        named = []
-        if preferred:
-            wanted = preferred.casefold()
-            named = [
-                r
-                for r in images
-                if wanted in r.name.casefold() or wanted in r.filename.casefold()
-            ]
+
+        def matches(value: str, wanted: str) -> bool:
+            stem = Path(value).name.rsplit(".", 1)[0].casefold()
+            prefix = wanted.casefold()
+            if stem == prefix:
+                return True
+            if not stem.startswith(prefix):
+                return False
+            suffix = stem[len(prefix) :]
+            return bool(suffix) and (suffix[0] in "@~_-" or suffix[0].isdigit())
+
+        named = [
+            r
+            for r in images
+            if preferred and (matches(r.name, preferred) or matches(r.filename, preferred))
+        ]
 
         def rank(item: Rendition) -> tuple:
             facet = item.name.casefold()
@@ -163,8 +172,8 @@ class Catalog:
             return (
                 0 if named else 1,  # named matches first when a preferred name exists
                 0 if is_icon else 1,
-                -item.scale,
                 -item.pixels,
+                -item.scale,
                 -square,
                 item.name,
             )

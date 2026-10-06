@@ -210,6 +210,68 @@ std::vector<uint8_t> imageWithImportCount(uint32_t count) {
     return image;
 }
 
+std::vector<uint8_t> imageWithBindImport() {
+    constexpr size_t headerSize = 32;
+    constexpr size_t segmentCommandSize = 72;
+    constexpr size_t dyldInfoCommandSize = 48;
+    const std::string dependency = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+    const size_t dependencyCommandSize = (24 + dependency.size() + 1 + 7) & ~size_t(7);
+    const size_t commandBytes = segmentCommandSize + dependencyCommandSize + dyldInfoCommandSize;
+    const size_t dyldInfoCommand = headerSize + segmentCommandSize + dependencyCommandSize;
+    const std::string importedSymbol = "_CFRelease";
+    std::vector<uint8_t> bind = {0x11, 0x40}; // dylib ordinal 1, symbol name
+    bind.insert(bind.end(), importedSymbol.begin(), importedSymbol.end());
+    bind.insert(bind.end(), {0, 0x70, 0, 0x90, 0}); // segment 0, offset 0, bind, done
+    const size_t bindOffset = headerSize + commandBytes;
+    const size_t imageSize = bindOffset + bind.size();
+    std::vector<uint8_t> image(imageSize, 0);
+
+    image[0] = 0xcf; image[1] = 0xfa; image[2] = 0xed; image[3] = 0xfe;
+    writeLe32(image, 4, 0x0100000c);
+    writeLe32(image, 12, 2);
+    writeLe32(image, 16, 3);
+    writeLe32(image, 20, commandBytes);
+
+    const size_t segment = headerSize;
+    writeLe32(image, segment, 0x19); // LC_SEGMENT_64
+    writeLe32(image, segment + 4, segmentCommandSize);
+    std::copy_n("__TEXT", 6, image.begin() + segment + 8);
+    writeLe64(image, segment + 24, 0x100000000);
+    writeLe64(image, segment + 32, 0x10000);
+    writeLe64(image, segment + 40, 0);
+    writeLe64(image, segment + 48, imageSize);
+    writeLe32(image, segment + 56, 7);
+    writeLe32(image, segment + 60, 5);
+
+    const size_t dylib = segment + segmentCommandSize;
+    writeLe32(image, dylib, 0xC); // LC_LOAD_DYLIB
+    writeLe32(image, dylib + 4, dependencyCommandSize);
+    writeLe32(image, dylib + 8, 24);
+    std::copy(dependency.begin(), dependency.end(), image.begin() + dylib + 24);
+
+    writeLe32(image, dyldInfoCommand, 0x80000022); // LC_DYLD_INFO_ONLY
+    writeLe32(image, dyldInfoCommand + 4, dyldInfoCommandSize);
+    writeLe32(image, dyldInfoCommand + 16, bindOffset);
+    writeLe32(image, dyldInfoCommand + 20, bind.size());
+    std::copy(bind.begin(), bind.end(), image.begin() + bindOffset);
+    return image;
+}
+
+void testCompactImportInventoryRetainsDylibOrdinal() {
+    const auto image = imageWithBindImport();
+    const auto full = radek::analyze(image);
+    const auto compact = radek::analyze(image, false);
+    for (const auto *result : {&full, &compact}) {
+        const auto &slice = result->fields.at("slices").items.front();
+        assert(slice.fields.at("dependencies").items.size() == 1);
+        assert(slice.fields.at("imports").items.size() == 1);
+        const auto &import = slice.fields.at("imports").items.front();
+        assert(import.fields.at("name").value == "_CFRelease");
+        assert(import.fields.at("ordinal").value == "1");
+        assert(slice.fields.at("bindDecodingComplete").value == "true");
+    }
+}
+
 std::vector<uint8_t> imageWithSymbolCount(uint32_t count) {
     constexpr size_t headerSize = 32;
     constexpr size_t commandSize = 24;
@@ -234,6 +296,7 @@ std::vector<uint8_t> imageWithSymbolCount(uint32_t count) {
     const size_t importedEntry = symbolOffset + static_cast<size_t>(count - 1) * symbolEntrySize;
     writeLe32(image, importedEntry, 1); // n_strx points past the empty string
     image[importedEntry + 4] = 1;       // N_EXT | N_UNDF
+    image[importedEntry + 7] = 2;       // n_desc high byte: dylib ordinal 2
     std::copy(importedName.begin(), importedName.end(), image.begin() + stringsOffset + 1);
     return image;
 }
@@ -265,6 +328,7 @@ void testSymbolTablesAboveFormerLimitAreParsed() {
     assert(slice.fields.at("symbols").items.size() == kSymbols);
     assert(slice.fields.at("symbolCount").value == std::to_string(kSymbols));
     assert(slice.fields.at("imports").items.size() == 1);
+    assert(slice.fields.at("imports").items.front().fields.at("ordinal").value == "2");
 
     // The Android importer uses the compact path: it still counts and scans the
     // entire table and retains the one undefined import, but does not retain
@@ -275,6 +339,7 @@ void testSymbolTablesAboveFormerLimitAreParsed() {
     assert(compactSlice.fields.at("symbols").items.empty());
     assert(compactSlice.fields.at("imports").items.size() == 1);
     assert(compactSlice.fields.at("imports").items.front().fields.at("name").value == "_mach_absolute_time");
+    assert(compactSlice.fields.at("imports").items.front().fields.at("ordinal").value == "2");
 }
 } // namespace
 
@@ -294,6 +359,7 @@ int main() {
     testRecompileTrivialRejectsGarbage();
     testTextRelocationsRejectConversion();
     testCompactImportInventoryIsBoundedAndMarkedTruncated();
+    testCompactImportInventoryRetainsDylibOrdinal();
     testSymbolTablesAboveFormerLimitAreParsed();
     std::printf("bounded conversion prover tests passed\n");
     return 0;

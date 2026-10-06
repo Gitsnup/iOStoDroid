@@ -133,6 +133,26 @@ class MachOImage:
         order = "<" + ("Q" if self.pointer_size == 8 else "I")
         return struct.unpack(order, raw)[0]
 
+    def external_relocation_symbol(self, address: int) -> str | None:
+        """Return an exact nlist name for an external relocation at a guest address."""
+        dynamic = self.slice.get("dynamicSymbols", {})
+        relocations = dynamic.get("externalRelocations", []) if isinstance(dynamic, dict) else []
+        symbols = self.slice.get("symbols", [])
+        if not isinstance(relocations, list) or not isinstance(symbols, list):
+            return None
+        for relocation in relocations:
+            if not isinstance(relocation, dict) or relocation.get("address") != address:
+                continue
+            if not relocation.get("external"):
+                return None
+            index = relocation.get("symbolIndex")
+            if not isinstance(index, int) or not 0 <= index < len(symbols):
+                return None
+            symbol = symbols[index]
+            name = symbol.get("name") if isinstance(symbol, dict) else None
+            return name if isinstance(name, str) and name else None
+        return None
+
     def read_uint(self, address: int, width: int = 4) -> int | None:
         raw = self.try_read(address, width)
         if raw is None:

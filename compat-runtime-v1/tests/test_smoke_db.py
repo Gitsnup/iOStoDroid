@@ -28,12 +28,39 @@ class BuildScopeTests(unittest.TestCase):
 
 
 class SmokeDatabaseTests(unittest.TestCase):
-    def test_initial_database_is_explicitly_unmeasured(self):
+    def test_static_evidence_is_separate_from_unmeasured_smoke_records(self):
         data = smoke_db.load_database(smoke_db.DEFAULT_DATABASE)
         self.assertEqual(data["runtimeContract"], "compat-runtime-v1")
         self.assertEqual(data["apps"], [])
         self.assertEqual([family["rank"] for family in data["shimBacklog"]], [1, 2, 3])
+        self.assertEqual(
+            [family["familyId"] for family in data["shimBacklog"]],
+            ["objc-runtime-core", "foundation-core", "cxx-abi-runtime"],
+        )
         self.assertTrue(all(not family["gamesUnblockedMeasured"] for family in data["shimBacklog"]))
+        self.assertEqual(len(data["staticEvidence"]), 1)
+        evidence = data["staticEvidence"][0]
+        self.assertEqual(evidence["architecture"], "armv6")
+        self.assertEqual(evidence["rankedRecoveredDirectCallImports"][0]["symbol"], "_memcpy")
+        self.assertEqual(evidence["firstStaticApplicationImport"]["callSite"], "0x74378")
+        self.assertEqual(evidence["loaderProbe"]["resolvedFixupRecords"], 34)
+        self.assertEqual(evidence["loaderProbe"]["resolvedUniqueSymbols"], 25)
+        self.assertEqual(evidence["loaderProbe"]["unresolvedFixupRecords"], 230)
+        self.assertEqual(evidence["loaderProbe"]["unresolvedUniqueSymbols"], 229)
+        self.assertEqual(evidence["loaderProbe"]["firstMissingImport"], "_AudioSessionSetActive")
+        self.assertEqual(evidence["loaderProbe"]["lazyPointerSlot"], "0x13f17c")
+        self.assertFalse(evidence["loaderProbe"]["guestInstructionsExecuted"])
+        self.assertIsNone(evidence["runtimeSmokeStatus"])
+
+    def test_static_evidence_cannot_claim_guest_execution_or_smoke(self):
+        data = json.loads(smoke_db.DEFAULT_DATABASE.read_text(encoding="utf-8"))
+        data["staticEvidence"][0]["loaderProbe"]["guestInstructionsExecuted"] = True
+        with self.assertRaisesRegex(ValueError, "must not imply guest execution"):
+            smoke_db.validate_database(data)
+        data["staticEvidence"][0]["loaderProbe"]["guestInstructionsExecuted"] = False
+        data["staticEvidence"][0]["runtimeSmokeStatus"] = "menu"
+        with self.assertRaisesRegex(ValueError, "cannot claim a runtime smoke status"):
+            smoke_db.validate_database(data)
 
     def test_status_vocabulary_fails_closed(self):
         for status in ("not runnable", "crashes at _objc_msgSend", "menu", "playable"):

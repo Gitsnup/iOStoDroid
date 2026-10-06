@@ -315,6 +315,7 @@ internal object AndroidApiMapper {
                 .put("sourceSymbol", source)
                 .put("linkedOrRewritten", false)
                 .put("codeGenerated", false)
+            var stubOnlyEvidence = false
             when {
                 // Bionic already ships these symbols with the identical C ABI, so
                 // the NDK provider wins over the compatibility shim of the same
@@ -376,6 +377,7 @@ internal object AndroidApiMapper {
                     when {
                         compatHandler?.startsWith("stubbed:") == true -> {
                             compatStubHandlers++
+                            stubOnlyEvidence = true
                             val handler = compatHandler.removePrefix("stubbed:")
                             item
                                 .put("classification", "COMPAT_STUB_HANDLER_REGISTERED")
@@ -415,6 +417,17 @@ internal object AndroidApiMapper {
                     }
                 }
             }
+            val verifiedExportEvidence = verifiedOnDevice || replacementVerified
+            val hostTestedEvidence = replacementTarget != null
+            item.put("evidence", JSONObject()
+                .put("exportsVerifiedOnThisDevice", verifiedExportEvidence)
+                .put("hostTestedImplementation", hostTestedEvidence)
+                .put("stubOnly", stubOnlyEvidence)
+                .put("none", !verifiedExportEvidence && !hostTestedEvidence && !stubOnlyEvidence)
+                .put("callsiteRewritten", false)
+                .put("linkedIntoGame", false)
+                .put("runtimeCallsObserved", false)
+                .put("recompiledBytesLinked", 0))
             result.put(item)
         }
         val total = symbols.size
@@ -423,9 +436,35 @@ internal object AndroidApiMapper {
         val runtimeVerifiedImportCoveragePercent = coveragePercent(runtimeVerifiedCandidates, total)
         val runtimeVerifiedCandidateCoveragePercent = if (resolveNdkLibrary == null) 0
             else coveragePercent(runtimeVerifiedCandidates, directCandidates)
+        val evidenceRows = (0 until result.length()).mapNotNull { result.optJSONObject(it)?.optJSONObject("evidence") }
+        val verifiedEvidenceCount = evidenceRows.count { it.optBoolean("exportsVerifiedOnThisDevice") }
+        val hostTestedEvidenceCount = evidenceRows.count { it.optBoolean("hostTestedImplementation") }
+        val stubOnlyEvidenceCount = evidenceRows.count { it.optBoolean("stubOnly") }
+        val noneEvidenceCount = evidenceRows.count { it.optBoolean("none") }
+        val evidenceKinds = buildList {
+            if (verifiedEvidenceCount > 0) add("exports-verified-on-this-device")
+            if (hostTestedEvidenceCount > 0) add("host-tested-implementation")
+            if (stubOnlyEvidenceCount > 0) add("stub-only")
+            if (noneEvidenceCount > 0 || total == 0) add("none")
+        }
+        val evidenceSummary = JSONObject()
+            .put("observedImportCount", total)
+            .put("exportsVerifiedOnThisDevice", verifiedEvidenceCount)
+            .put("hostTestedImplementations", hostTestedEvidenceCount)
+            .put("stubOnlyCount", stubOnlyEvidenceCount)
+            .put("noneCount", noneEvidenceCount)
+            .put("none", verifiedEvidenceCount == 0 && hostTestedEvidenceCount == 0 && stubOnlyEvidenceCount == 0)
+            .put("evidenceKinds", JSONArray(evidenceKinds))
+            .put("associationStatus", if (classificationComplete) "COMPLETE" else "PARTIAL")
+            .put("runtimeBackingClaimed", false)
+            .put("linkedGameCallCount", 0)
+            .put("recompiledBytesLinked", 0)
+            .put("runtimeCallsObserved", false)
+            .put("note", "Symbol export, host-test, and stub evidence do not establish an IPA callsite rewrite, link, or runtime call.")
         return JSONObject()
             .put("schemaVersion", 7)
             .put("measure", "Direct NDK name candidates count same-named public NDK/system or shared C++ runtime exports found in the reviewed catalog or current-device lookup. Candidate coverage is divided by all distinct imports; exact runtime export verification is reported both against candidate names and against all imports, with separate denominators. A current-device dlsym hit proves only that the public-library export resolves on this device/API level, not that the iOS caller ABI, relocation, callsite rewrite, or game link is compatible. Compiler-rt/libunwind names are toolchain candidates, not a libgcc_s.so alias or completed link. Runtime compatibility-shim counts identify concrete exports in libioscompat.so, but none proves IPA callsite rewriting or game linking. Classification coverage is triage, not implementation coverage; no count represents playable Android code. Registered compat stub handlers are explicit unimplemented resolution targets; only verified handlers identify tested implementation bodies.")
+            .put("evidence", evidenceSummary)
             .put("runtimeNdkResolverStatus", if (resolveNdkLibrary == null) "NOT_RUN" else "CURRENT_DEVICE_DLSYM")
             .put("runtimeVerifiedAndroidApiLevel", if (resolveNdkLibrary == null) JSONObject.NULL else (runtimeApiLevel ?: JSONObject.NULL))
             .put("runtimeVerifiedNdkCandidates", runtimeVerifiedCandidates)

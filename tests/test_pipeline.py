@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from radek.pipeline import Pipeline
+from radek.analysis import _macho_import_ordinal
 from radek import pipeline as pipeline_module
 from .fixtures import ipa, macho, fat
 
@@ -18,6 +19,16 @@ class PipelineTests(unittest.TestCase):
     def run_fixture(self, exe=None, **kwargs):
         source = ipa(self.root / "input.ipa", exe)
         return Pipeline(self.root / "job").run(source, True, **kwargs)
+
+    def test_api_generation_source_architecture_matches_requested_abi(self):
+        mach_report = {"slices": [
+            {"architecture": "arm64"},
+            {"architecture": "armv7s"},
+            {"architecture": "armv6"},
+        ]}
+        self.assertEqual("arm64", pipeline_module._source_architecture_for_target(mach_report, "auto"))
+        self.assertEqual("armv7s", pipeline_module._source_architecture_for_target(mach_report, "armeabi-v7a"))
+        self.assertIsNone(pipeline_module._source_architecture_for_target(mach_report, "x86_64"))
 
     def test_synthetic_arm64_analysis_is_partial_not_ready(self):
         report = self.run_fixture(analyze_only=True)
@@ -70,6 +81,10 @@ class PipelineTests(unittest.TestCase):
                             "callers": entry_callers,
                         }
                     )
+                    apis["entryReachability"] = {
+                        **(apis.get("entryReachability") or {}),
+                        "imports": [{"name": "_CFAbsoluteTimeGetCurrent"}],
+                    }
                     apis["usedImportCount"] = apis.get("usedImportCount", 0) + 1
                     apis.setdefault("summary", {})["compatibility"] = apis.get("summary", {}).get("compatibility", 0) + 1
                     apis.setdefault("byFeasibility", {}).setdefault("compatibility", []).append(
@@ -102,8 +117,12 @@ class PipelineTests(unittest.TestCase):
             analyze_only=True,
         )
         self.assertEqual(result["state"], "PARTIAL")
-        self.assertEqual(result["dependencies"]["edges"][0]["classification"], "not-required-by-standalone-entry")
-        self.assertIn("does not implement the linked framework", result["dependencies"]["edges"][0]["reason"])
+        edge = result["dependencies"]["edges"][0]
+        self.assertEqual(edge["classification"], "candidate")
+        self.assertEqual(edge["status"], "candidate")
+        self.assertEqual(edge["standaloneEntryRequirement"], "not-required-by-standalone-entry")
+        self.assertIn("does not implement the linked framework", edge["standaloneEntryReason"])
+        self.assertIn("not adapted", edge["reason"])
         self.assertEqual(result["staticRecompilationAssessment"]["backend"], "preserved-arm64")
 
     def test_reachable_framework_call_remains_blocked(self):
@@ -167,7 +186,9 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(states["Metal"], "SUPPORTED")
         self.assertIn("no reachable API use", " ".join(c["detail"] for c in result["capabilities"]))
         self.assertIn("No complete iOS-to-Android game converter", " ".join(result["blockers"]))
-        self.assertEqual(result["dependencies"]["edges"][0]["classification"], "not-required-by-standalone-entry")
+        edge = result["dependencies"]["edges"][0]
+        self.assertEqual(edge["classification"], "candidate")
+        self.assertEqual(edge["standaloneEntryRequirement"], "not-required-by-standalone-entry")
 
     def test_icon_is_recovered_from_assets_car(self):
         from .test_icons import catalog_bytes
@@ -217,9 +238,49 @@ class PipelineTests(unittest.TestCase):
         )
         result = Pipeline(self.root / "job").run(source, True, True)
         self.assertEqual(result["state"], "BLOCKED")
-        self.assertEqual(
-            result["dependencies"]["edges"][0]["resolvedBundlePath"], "Frameworks/Embedded.framework/Embedded"
+        edge = result["dependencies"]["edges"][0]
+        self.assertEqual(edge["resolvedBundlePath"], "Frameworks/Embedded.framework/Embedded")
+        self.assertEqual("no-execution-path-yet", edge["status"])
+        self.assertEqual("no-execution-path-yet", edge["classification"])
+        self.assertEqual(0, edge["evidence"]["recompiledBytesLinked"])
+        self.assertFalse(edge["evidence"]["runtimeBackingClaimed"])
+
+    def test_nlist_import_ordinal_is_decoded_from_n_desc(self):
+        self.assertEqual(2, _macho_import_ordinal({"description": 0x0200}))
+        self.assertEqual(3, _macho_import_ordinal({"ordinal": "3"}))
+        self.assertIsNone(_macho_import_ordinal({"name": "_CFRelease"}))
+
+    def test_dependency_edges_include_ordinal_scoped_import_evidence(self):
+        dependency = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        bind = b"\x11\x40_CFRelease\x00\x70\x00\x90\x00"
+        bind_command = struct.pack(
+            "<12I", 0x80000022, 48, 0, 0, 0x2000, len(bind), 0, 0, 0, 0, 0, 0
         )
+        bound = self.run_fixture(
+            macho(dependencies=[dependency], extras=[bind_command], blobs={0x2000: bind}),
+            analyze_only=True,
+        )
+        edge = bound["dependencies"]["edges"][0]
+        self.assertEqual("compatibility", edge["status"])
+        self.assertEqual(1, edge["dylibOrdinal"])
+        self.assertEqual("COMPLETE", edge["evidence"]["associationStatus"])
+        self.assertEqual(1, edge["evidence"]["observedImportCount"])
+        self.assertEqual(1, edge["evidence"]["hostTestedImplementations"])
+        self.assertFalse(edge["evidence"]["runtimeBackingClaimed"])
+        self.assertEqual(0, edge["evidence"]["linkedGameCallCount"])
+        self.assertFalse(edge["evidence"]["runtimeCallsObserved"])
+        self.assertEqual(0, edge["evidence"]["recompiledBytesLinked"])
+
+        nlist_source = ipa(
+            self.root / "nlist-import.ipa",
+            macho(dependencies=[dependency], imports=("_CFRelease",)),
+        )
+        nlist_report = Pipeline(self.root / "job-nlist-import").run(nlist_source, True, analyze_only=True)
+        nlist_edge = nlist_report["dependencies"]["edges"][0]
+        self.assertEqual("COMPLETE", nlist_edge["evidence"]["associationStatus"])
+        self.assertEqual(1, nlist_edge["evidence"]["observedImportCount"])
+        self.assertEqual(1, nlist_edge["evidence"]["hostTestedImplementations"])
+        self.assertEqual(0, nlist_edge["evidence"]["recompiledBytesLinked"])
 
     def test_damaged_bind_stream_is_analyzed_but_remains_blocked(self):
         bind = b"\x40_symbol\x00\x70" + b"\xff" * 9 + b"\x01\x80\x01\x00"

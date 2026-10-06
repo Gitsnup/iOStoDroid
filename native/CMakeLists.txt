@@ -72,6 +72,9 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
         src/compat_runtime/runner.cpp
         src/compat_runtime/cpu.cpp
         src/compat_runtime/objc_runtime.cpp
+        src/compat_runtime/objc_shims.cpp
+        src/compat_runtime/audio_session_shims.cpp
+        src/compat_runtime/sjlj_unwind.cpp
     )
     if(RADEK_FETCH_UNICORN)
         include(FetchContent)
@@ -89,6 +92,15 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
         )
         FetchContent_MakeAvailable(unicorn)
         set_target_properties(unicorn unicorn-common PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        if(UNIX OR ANDROID)
+            # Keep QEMU's guest-memory protection code on its POSIX path without
+            # requiring callers to inject a global CMAKE_C_FLAGS workaround.
+            foreach(unicorn_target IN ITEMS unicorn unicorn-common arm-softmmu)
+                if(TARGET ${unicorn_target})
+                    target_compile_definitions(${unicorn_target} PRIVATE CONFIG_POSIX)
+                endif()
+            endforeach()
+        endif()
         if(ANDROID)
             target_link_options(unicorn PRIVATE "-Wl,-z,max-page-size=16384")
         endif()
@@ -115,6 +127,9 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
         add_executable(compat-runtime-tests tests/compat_runtime.cpp)
         target_include_directories(compat-runtime-tests PRIVATE include)
         target_compile_options(compat-runtime-tests PRIVATE -Wall -Wextra -Werror)
+        if(RADEK_FETCH_UNICORN)
+            target_compile_definitions(compat-runtime-tests PRIVATE RADEK_TEST_REQUIRE_UNICORN=1)
+        endif()
         target_link_libraries(compat-runtime-tests PRIVATE compat_runtime_core)
         add_test(NAME compat-runtime COMMAND compat-runtime-tests)
 

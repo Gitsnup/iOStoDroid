@@ -87,10 +87,10 @@ def objc_image() -> tuple[Builder, dict]:
     lazy = builder.section("__DATA", "__la_symbol_ptr", flags=S_LAZY_SYMBOL_POINTERS, at=0x4700)
     ivars_section = builder.section("__DATA", "__objc_ivar", at=0x4800)
 
-    cstring.data.extend(b"hello from fixture\x00")
+    cstring.data.extend(b"hello from fixture\x00second fixture ivar\x00")
     methname.data.extend(b"doWork\x00other:\x00")
     classname.data.extend(b"MyClass\x00")
-    methtype.data.extend(b"v16@0:8\x00")
+    methtype.data.extend(b"v16@0:8\x00int\x00")
     swift_refl.data.extend(b"Widget\x00field\x00")
 
     # Swift field descriptor: named "Widget" with one stored property.
@@ -106,10 +106,20 @@ def objc_image() -> tuple[Builder, dict]:
     for selector in (0x100001200, 0x100001207):
         const.data.extend(struct.pack("<QQQ", selector, 0x100001320, second))
     ivar_slot = builder.address(ivars_section, len(ivars_section.data))
-    ivars_section.data.extend(struct.pack("<I", 8))
+    ivars_section.data.extend(struct.pack("<II", 8, 12))
     ivar_list = builder.address(const, len(const.data))
-    const.data.extend(struct.pack("<II", 32, 1))
-    const.data.extend(struct.pack("<QQQII", ivar_slot, 0x100001100, 0x100001320, 3, 8))
+    const.data.extend(struct.pack("<II", 32, 2))
+    const.data.extend(struct.pack("<QQQII", ivar_slot, 0x100001100, 0x100001328, 2, 4))
+    const.data.extend(
+        struct.pack(
+            "<QQQII",
+            ivar_slot + 4,
+            0x100001100 + len(b"hello from fixture\x00"),
+            0x100001328,
+            2,
+            4,
+        )
+    )
     class_ro = builder.address(const, len(const.data))
     const.data.extend(
         struct.pack("<IIIIQQQQQQQ", 0, 8, 16, 0, 0, 0x100001300, method_list, 0, ivar_list, 0, 0)
@@ -195,14 +205,41 @@ class ReconstructionTests(Base):
         builder, _ = objc_image()
         path, info = self.analyze(builder.build())
         image = load(path, info["slices"][0])
+        classlist = image.section("__DATA", "__objc_classlist")
+        class_object = int.from_bytes(
+            image.section_bytes(classlist)[: image.pointer_size],
+            "little" if image.little_endian else "big",
+        )
+        classrefs_address = image.section("__DATA", "__objc_classrefs").address
+        image.slice["symbols"] = [
+            {"name": "_OBJC_CLASS_$_NSObject"},
+            {"name": "_OBJC_CLASS_$_UIKitReference"},
+        ]
+        image.slice["dynamicSymbols"] = {
+            "externalRelocations": [
+                {"address": class_object + image.pointer_size, "external": True, "symbolIndex": 0},
+                {"address": classrefs_address, "external": True, "symbolIndex": 1},
+            ]
+        }
+        self.assertEqual(
+            image.external_relocation_symbol(class_object + image.pointer_size),
+            "_OBJC_CLASS_$_NSObject",
+        )
         runtime = objc_mod.recover(image)
         self.assertEqual([c.name for c in runtime.classes], ["MyClass"])
+        self.assertEqual(runtime.classes[0].superclass, "NSObject")
+        self.assertIn("UIKitReference", runtime.class_references)
         selectors = {m.selector for m in runtime.classes[0].methods}
         self.assertIn("doWork", selectors)
         self.assertIn("other:", selectors)
-        self.assertEqual([i.name for i in runtime.classes[0].ivars], ["hello from fixture"])
+        self.assertEqual(
+            [(i.name, i.type, i.offset, i.size) for i in runtime.classes[0].ivars],
+            [
+                ("hello from fixture", "int", 8, 4),
+                ("second fixture ivar", "int", 12, 4),
+            ],
+        )
         self.assertIn("doWork", runtime.selectors)
-        self.assertIn("MyClass", runtime.class_references)
         self.assertIn("doWork", runtime.message_selectors)
         self.assertEqual(runtime.message_references[0]["selector"], "doWork")
         self.assertEqual(runtime.message_references[0]["selectorReference"], "0x100004400")
@@ -240,6 +277,17 @@ class ReconstructionTests(Base):
         slice_data = result["images"][0]["slices"][0]
         stats = slice_data["disassembly"]
         self.assertEqual(stats["functions"], 2)
+        from radek.recon.disasm import disassemble
+
+        decoded_functions, decoded_stats = disassemble(load(path, info["slices"][0]))
+        self.assertEqual(decoded_stats["instructions"], len({
+            (function.address, instruction.address)
+            for function in decoded_functions
+            for instruction in function.instructions
+        }))
+        for function in decoded_functions:
+            addresses = [instruction.address for instruction in function.instructions]
+            self.assertEqual(len(addresses), len(set(addresses)))
         self.assertGreaterEqual(stats["instructions"], 10)
         # The shifted-register add/sub and logical decoders now cover SUBS/ORR,
         # so the fixture's cmp decodes; only genuinely unallocated encodings are
@@ -269,6 +317,14 @@ class ReconstructionTests(Base):
         used = {item["name"]: item for item in apis["used"]}
         self.assertIn("_objc_msgSend", used)
         self.assertEqual(used["_objc_msgSend"]["feasibility"], "compatibility")
+        self.assertEqual(used["_objc_msgSend"]["callSiteCount"], 1)
+        self.assertEqual(apis["rankedImports"][0]["callSiteCount"], 1)
+        self.assertEqual(apis["entryImportTrace"]["firstApplicationImportCall"]["symbol"], "_objc_msgSend")
+        self.assertEqual(apis["entryImportTrace"]["status"], "static-entry-match")
+        self.assertEqual(
+            {item["name"] for item in apis["entryReachability"]["imports"]},
+            {"_objc_msgSend", "_UIApplicationMain"},
+        )
         self.assertIn("_printf", apis["unused"])
         self.assertIn("UIKit", apis["linkedFrameworks"])
         self.assertGreaterEqual(apis["linkedFrameworks"]["UIKit"]["symbolsUsed"], 1)
@@ -366,8 +422,33 @@ class ReconstructionTests(Base):
 
 
 class DisassemblyTests(Base):
+    def test_arm32_branch_and_pc_relative_loads(self):
+        from radek.recon.disasm import decode_arm
+
+        start = 0x4000
+        target = 0x5000
+        displacement = (target - (start + 8)) // 4
+        arm_bl = 0xEB000000 | (displacement & 0x00FFFFFF)
+        call = decode_arm(arm_bl, start)
+        self.assertEqual((call.mnemonic, call.kind, call.target), ("bl", "call", target))
+        self.assertIsNone(call.condition)
+
+        displacement = (target - (start + 8)) // 4
+        arm_bne = 0x1A000000 | (displacement & 0x00FFFFFF)
+        branch = decode_arm(arm_bne, start)
+        self.assertEqual((branch.kind, branch.target, branch.condition), ("branch", target, "ne"))
+
+        blx_register = decode_arm(0xE12FFF3C, start)
+        self.assertEqual((blx_register.mnemonic, blx_register.kind, blx_register.sources), ("blx", "call", (12,)))
+
+        ldr_literal = decode_arm(0xE59FC018, start)
+        self.assertEqual((ldr_literal.kind, ldr_literal.target, ldr_literal.dst), ("loadlit", start + 8 + 24, 12))
+
+        add_sp = decode_arm(0xE28D1004, start)
+        self.assertEqual((add_sp.mnemonic, add_sp.kind, add_sp.immediate), ("add", "arith", 4))
+
     def test_branch_targets_and_returns(self):
-        from radek.recon.disasm import decode_arm64, decode_thumb
+        from radek.recon.disasm import decode_arm, decode_arm64, decode_thumb
 
         self.assertEqual(decode_arm64(ret(), 0x1000).kind, "ret")
         self.assertEqual(decode_arm64(movz(0, 42), 0x1000).immediate, 42)

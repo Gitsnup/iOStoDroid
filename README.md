@@ -14,8 +14,10 @@ Authorized imports are analyzed before compatibility is assessed:
   register/constant/reference tracking and reconstructed pseudocode listings.
 - Objective-C classes, categories, protocols, ivars, properties, selectors and message-send
   targets; Swift type/field metadata and symbol demangling.
-- Static API-call attribution: which reconstructed functions directly reference imports and, more
-  conservatively, which such calls lie on resolved internal call paths from the selected entry.
+- Static API-call attribution: unique direct import callsites ranked across recovered functions,
+  plus a separate direct-call graph rooted at the selected entry. Indirect/dyld transfers,
+  Objective-C message dispatch, callbacks and loader initializers are not guessed; rankings are
+  limited to the decoded fraction of `__text` and are never treated as runtime execution evidence.
 
 Results are written as `reconstruction.json` and `reconstruction.md` beside `report.json`. Every
 run also records a **conversion ceiling** (`report.json` → `conversionCeiling`, plus a
@@ -101,6 +103,17 @@ The Android mapper reports same-named NDK symbols and semantic rewrite targets (
 imports; device `dlsym` export verification is shown both as a fraction of those candidates and as a
 fraction of all imports (167/264 is 63%, not 65%). This is evidence for the current device/API only.
 A name resolving at runtime does not prove Darwin/Android ABI compatibility or link the imported code.
+Dependency grades are deliberately distinct: `provided` means a reviewed Android system ABI is a
+possible target; `compatibility` is reserved for bounded, tested implementation subsets;
+`candidate` means only a semantic/API target exists; `no-execution-path-yet` means no Android
+provider or adapter is identified. Each dependency edge reports imports associated by Mach-O dylib
+ordinal, with association completeness and separate counts for device-verified exports,
+host-tested implementation bodies, stub-only handlers, and imports with none of those facts. These
+counts always keep callsites linked, runtime calls observed, and recompiled bytes linked at zero.
+Foundation, UIKit, CoreGraphics, audio/media, networking, and other framework mappings without ABI
+adapters are candidates only. CoreFoundation is a limited C subset; QuartzCore has only the C time /
+frame-callback slice, not Apple Objective-C classes or game integration.
+
 `libioscompat.so` contains host-tested
 C/time/POSIX compatibility functions and a limited CoreFoundation C object/collection/run-loop
 subset, alongside the four Darwin time APIs (`_CFAbsoluteTimeGetCurrent`, `_CACurrentMediaTime`,
@@ -114,7 +127,9 @@ A native C frame-callback service is driven by Android `Choreographer` in the bo
 lifecycle. It is not the Objective-C `CADisplayLink` class/selector ABI, and no game callsite uses
 it yet. The `libgcc_s.1.dylib` mapping is only triage: Android has no drop-in `libgcc_s.so`; compiler
 helpers and unwind/personality symbols need NDK compiler-rt/libunwind toolchain integration and ABI
-validation before a link can be claimed.
+validation before a link can be claimed. GNU `libstdc++.6.dylib` is also only a candidate: LLVM
+`libc++_shared.so` is not a drop-in GNU C++ ABI substitute, and low-level symbol overlap is not
+proof of compatible C++ objects, exceptions, or linkage.
 
 `libioscompat.so` also carries a dynamic symbol-resolution registry: individually verified
 implementation entries plus a pool of stub trampolines. Symbols that would otherwise stay unmapped
@@ -124,8 +139,10 @@ then resolve to an explicit stub handler instead of nothing. The on-device triag
 toward verified implementations or generated API implementations. The host likewise generates a per-IPA
 registry source in which every observed import is classified exactly as `verified` or
 `stubbed-unimplemented`. Symbol-triage percentages describe categorization, not static recompilation
-coverage. The full Foundation/CoreFoundation and Objective-C ABIs, UIKit, graphics, audio, input,
-game lifecycle and general resource APIs remain unsupported when required.
+coverage. Foundation has no Foundation/Objective-C ABI adapter; UIKit, CoreGraphics, audio, input,
+game lifecycle and general resource APIs remain candidate targets or unsupported when required.
+CoreFoundation support is only the tested C object/collection/run-loop subset above; the full
+CoreFoundation ABI remains unsupported.
 
 ## Build and test
 

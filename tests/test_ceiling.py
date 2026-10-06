@@ -134,20 +134,23 @@ class ConversionCeilingTests(unittest.TestCase):
         reconstruction = json.loads((self.root / "job" / "reconstruction.json").read_text())
         for image in reconstruction["images"]:
             for slice_data in image["slices"]:
-                slice_data.setdefault("apis", {})["used"] = [
-                    {
-                        "name": "_CFAbsoluteTimeGetCurrent",
-                        "framework": "CoreFoundation",
-                        "area": "foundation",
-                        "feasibility": "compatibility",
-                    },
-                    {
-                        "name": "_MTLCreateSystemDefaultDevice",
-                        "framework": "Metal",
-                        "area": "graphics",
-                        "feasibility": "blocked",
-                    },
-                ]
+                slice_data.setdefault("apis", {})["entryReachability"] = {
+                    "status": "direct-call-graph-only",
+                    "imports": [
+                        {
+                            "name": "_CFAbsoluteTimeGetCurrent",
+                            "framework": "CoreFoundation",
+                            "area": "foundation",
+                            "feasibility": "compatibility",
+                        },
+                        {
+                            "name": "_MTLCreateSystemDefaultDevice",
+                            "framework": "Metal",
+                            "area": "graphics",
+                            "feasibility": "blocked",
+                        },
+                    ],
+                }
         ceiling = assess(
             report["machO"], report["dependencies"], reconstruction, executable_data=executable_data
         )

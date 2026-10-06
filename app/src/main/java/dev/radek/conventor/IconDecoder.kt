@@ -39,6 +39,54 @@ internal object IconDecoder {
         }
     }
 
+    fun dimensions(file: File): Pair<Int, Int>? {
+        if (!file.isFile || file.length() !in 1..MAX_FILE_BYTES.toLong()) return null
+        return try {
+            // Read PNG dimensions from IHDR before asking BitmapFactory. Some Android
+            // decoders report density-adjusted bounds, which can make differently
+            // sized source renditions look tied after decode/downsampling.
+            val head = ByteArray(512)
+            val count = file.inputStream().use { input ->
+                var total = 0
+                while (total < head.size) {
+                    val read = input.read(head, total, head.size - total)
+                    if (read <= 0) break
+                    total += read
+                }
+                total
+            }
+            if (count >= 33 && head.copyOfRange(0, signature.size).contentEquals(signature)) {
+                // CgBI may add its private chunk before IHDR, so walk only the
+                // bounded header prefix and leave compressed image payload untouched.
+                var offset = signature.size
+                while (offset + 12 <= count) {
+                    val length = readU32(head, offset)
+                    if (length > Int.MAX_VALUE || offset.toLong() + 12 + length > count) break
+                    val chunkLength = length.toInt()
+                    val type = String(head, offset + 4, 4, Charsets.US_ASCII)
+                    if (type == "IHDR" && chunkLength == 13) {
+                        val width = readU32(head, offset + 8).toInt()
+                        val height = readU32(head, offset + 12).toInt()
+                        return if (width in 1..MAX_DIMENSION && height in 1..MAX_DIMENSION) width to height else null
+                    }
+                    offset += 12 + chunkLength
+                }
+            }
+
+            // JPEG and other Android-supported formats use the platform bounds
+            // decoder; malformed/unsupported input will still be rejected at decode.
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth in 1..MAX_DIMENSION && bounds.outHeight in 1..MAX_DIMENSION) {
+                bounds.outWidth to bounds.outHeight
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     fun decode(file: File, targetSize: Int): Bitmap? {
         if (!file.isFile || file.length() !in 1..MAX_FILE_BYTES.toLong() || targetSize < 1) return null
         return try { decode(file.readBytes(), targetSize) } catch (_: Exception) { null }

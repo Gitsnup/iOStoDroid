@@ -52,6 +52,20 @@ TRANSITIONS = {
 }
 
 
+def _source_architecture_for_target(mach_report: dict, target_abi: str) -> str | None:
+    """Match the entry-call analysis to the source slice the converter would prefer."""
+    if target_abi == "arm64-v8a":
+        order = ("arm64",)
+    elif target_abi == "armeabi-v7a":
+        order = ("armv7s", "armv7", "armv6")
+    elif target_abi == "auto":
+        order = ("arm64", "armv7s", "armv7", "armv6")
+    else:
+        return None
+    available = {item.get("architecture") for item in mach_report.get("slices", [])}
+    return next((architecture for architecture in order if architecture in available), None)
+
+
 class Pipeline:
     def __init__(self, output: Path):
         self.output = output.resolve()
@@ -395,10 +409,14 @@ class Pipeline:
                     + ", ".join(
                         f'{key}={value}'
                         for key, value in self.report["reconstructionSummary"].items()
-                        if key in ("functionCount", "objectiveCClasses", "swiftTypes", "usedApis")
+                        if key in ("functionCount", "objectiveCClasses", "swiftTypes", "observedCallImports", "entryReachableApis")
                     ),
                 )
-                api_implementations = generate_api_replacements(reconstruction, self.output)
+                api_implementations = generate_api_replacements(
+                    reconstruction,
+                    self.output,
+                    architecture=_source_architecture_for_target(mach, target_abi),
+                )
                 api_implementations["reconstructedApiUseCount"] = self.report["reconstructionSummary"].get("usedApis", 0)
                 self.report["apiImplementationGeneration"] = api_implementations
                 # Full resolution registry: every observed Darwin import gets a
@@ -537,8 +555,8 @@ class Pipeline:
                 # so its standalone library needs no dependency edges. That does not
                 # implement any linked framework or other game code.
                 for edge in self.report.get("dependencies", {}).get("edges", []):
-                    edge["classification"] = "not-required-by-standalone-entry"
-                    edge["reason"] = (
+                    edge["standaloneEntryRequirement"] = "not-required-by-standalone-entry"
+                    edge["standaloneEntryReason"] = (
                         "The isolated statically recompiled entry function has no calls, memory accesses, or address "
                         "references. This does not implement the linked framework or the rest of the game."
                     )

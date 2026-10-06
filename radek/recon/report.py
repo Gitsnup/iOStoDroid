@@ -148,12 +148,13 @@ def markdown(reconstruction: dict, application: dict | None = None) -> str:
 
             apis_data = slice_data.get("apis") or {}
             if apis_data:
-                lines.append("#### Framework API usage (reachable imports only)")
+                lines.append("#### Observed API callsites (not proof of entry reachability)")
                 lines.append("")
                 summary = apis_data.get("summary", {})
                 lines.append(
-                    f"- imports: {apis_data.get('importCount', 0)}; reachable: {apis_data.get('usedImportCount', 0)}; "
-                    f"unreferenced: {apis_data.get('unusedImportCount', 0)}"
+                    f"- declared imports: {apis_data.get('importCount', 0)}; symbols targeted by recovered direct calls: "
+                    f"{apis_data.get('usedImportCount', 0)}; imports with no recovered direct call: "
+                    f"{apis_data.get('unusedImportCount', 0)}"
                 )
                 lines.append(
                     f"- same-name Android native candidates: {summary.get('native', 0)}; "
@@ -163,25 +164,87 @@ def markdown(reconstruction: dict, application: dict | None = None) -> str:
                 for name, entry in (apis_data.get("linkedFrameworks") or {}).items():
                     lines.append(
                         f"- linked `{name}` (weak: {entry.get('weak')}) - "
-                        f"{entry.get('symbolsUsed', 0)} reachable symbol(s); {entry.get('installName')}"
+                        f"{entry.get('symbolsUsed', 0)} statically referenced symbol(s); {entry.get('installName')}"
                     )
                 for area, entry in (apis_data.get("capabilities") or {}).items():
                     lines.append(f"- capability {area}: {entry.get('status')} ({', '.join(entry['frameworks'])})")
                 lines.append("")
+
+                entry_graph = apis_data.get("entryReachability") or {}
+                if entry_graph:
+                    entry_function = entry_graph.get("entryFunction") or {}
+                    lines.append("#### Recovered direct-call reachability from the Mach-O entry")
+                    lines.append("")
+                    lines.append(
+                        f"- status: {entry_graph.get('status')}; entry function: "
+                        f"`{entry_function.get('name', '?')}` at {entry_function.get('address', 'unknown')}; "
+                        f"functions: {entry_graph.get('functionCount', 0)}; imports: {entry_graph.get('importCount', 0)}"
+                    )
+                    lines.append(f"- limitation: {entry_graph.get('note', 'not available')}")
+                    lines.append("")
+
+                entry_trace = apis_data.get("entryImportTrace") or {}
+                if entry_trace.get("firstApplicationImportCall"):
+                    image_entry = entry_trace.get("imageEntry") or {}
+                    app_entry = entry_trace.get("applicationEntry") or {}
+                    handoff = entry_trace.get("entryToApplicationEntry") or {}
+                    first_call = entry_trace["firstApplicationImportCall"]
+                    arguments = first_call.get("arguments") or {}
+                    r0 = arguments.get("r0") or {}
+                    r1 = arguments.get("r1") or {}
+                    lines.append("#### First statically observed import call in `_main`")
+                    lines.append("")
+                    lines.append(
+                        f"- image entry: `{image_entry.get('symbol', '?')}` at {image_entry.get('address', 'unknown')}; "
+                        f"application entry: `{app_entry.get('symbol', '?')}` at {app_entry.get('address', 'unknown')}"
+                    )
+                    lines.append(f"- handoff: {handoff.get('status')}; {handoff.get('note', '')}")
+                    lines.append(
+                        f"- first direct import call: `{first_call.get('symbol')}` from "
+                        f"`{first_call.get('caller')}` at {first_call.get('callsite')}, "
+                        f"via stub {first_call.get('stubAddress')}"
+                    )
+                    if r0.get("name"):
+                        lines.append(f"- statically resolved r0 receiver: `{r0['name']}`")
+                    if r1.get("name"):
+                        lines.append(f"- statically resolved r1 selector: `{r1['name']}`")
+                    lines.append(f"- scope: {entry_trace.get('scopeNote', '')}")
+                    lines.append("")
+
+                ranked = apis_data.get("rankedImports") or []
+                if ranked:
+                    lines.append("#### Ranked direct import callsites across reconstructed functions")
+                    lines.append("")
+                    lines.append(
+                        f"Counts are unique decoded call instructions across the image ({coverage:.1f}% reconstructed `__text` coverage); "
+                        "undecoded/unrecovered code may change the order. This is not entry reachability or linkage evidence."
+                    )
+                    lines.append("")
+                    lines.append("| Rank | Import | Call sites | Area | Feasibility |")
+                    lines.append("|---:|---|---:|---|---|")
+                    for use in ranked[:20]:
+                        lines.append(
+                            f"| {use.get('rank')} | `{use.get('name')}` | {use.get('callSiteCount', 0)} | "
+                            f"{use.get('area')} | {use.get('feasibility')} |"
+                        )
+                    lines.append("")
+
                 for use in (apis_data.get("used") or [])[:40]:
                     lines.append(
-                        f"- `{use['name']}` -> {use['framework']} / {use['area']} / {use['feasibility']}"
-                        + (f" (called from {', '.join(use['callers'][:3])})" if use.get("callers") else "")
+                        f"- `{use['name']}` -> {use['framework']} / {use['area']} / {use['feasibility']} "
+                        f"({use.get('callSiteCount', 0)} direct callsite(s))"
+                        + (f"; called from {', '.join(use['callers'][:3])}" if use.get("callers") else "")
                     )
                 lines.append("")
                 unused = apis_data.get("unused") or []
                 if unused:
-                    lines.append("#### Imported but unreachable (no reconstructed caller)")
+                    lines.append("#### Declared imports with no recovered direct function call")
                     lines.append("")
+                    lines.append("Data relocations, including Objective-C class references, are reported separately and may still be present.")
                     for name in unused[:20]:
                         lines.append(f"- `{name}`")
                     if len(unused) > 20:
-                        lines.append(f"- … {len(unused) - 20} further unreferenced imports")
+                        lines.append(f"- … {len(unused) - 20} further imports without direct calls")
                     lines.append("")
 
             functions = slice_data.get("functions") or []
@@ -213,6 +276,7 @@ def summary(reconstruction: dict) -> dict:
     selectors = 0
     swift_types = 0
     used_apis = 0
+    entry_reachable_apis = 0
     blocked_apis = 0
     native_apis = 0
     for image in reconstruction.get("images", []):
@@ -229,6 +293,7 @@ def summary(reconstruction: dict) -> dict:
             swift_types += (slice_data.get("swift") or {}).get("typeCount", 0)
             apis_data = slice_data.get("apis") or {}
             used_apis += apis_data.get("usedImportCount", 0)
+            entry_reachable_apis += (apis_data.get("entryReachability") or {}).get("importCount", 0)
             summary_apis = apis_data.get("summary", {})
             blocked_apis += summary_apis.get("blocked", 0)
             native_apis += summary_apis.get("native", 0)
@@ -243,13 +308,15 @@ def summary(reconstruction: dict) -> dict:
         "objectiveCSelectors": selectors,
         "swiftTypes": swift_types,
         "usedApis": used_apis,
+        "observedCallImports": used_apis,
+        "entryReachableApis": entry_reachable_apis,
         "blockedApis": blocked_apis,
         "nativeApis": native_apis,
     }
 
 
 def blockers(reconstruction: dict) -> list[str]:
-    """Reachability-based blockers derived from the reconstructed APIs."""
+    """Surface target gaps among statically observed imports without claiming reachability."""
     messages: list[str] = []
     for image in reconstruction.get("images", []):
         for slice_data in image.get("slices", []):
@@ -259,12 +326,12 @@ def blockers(reconstruction: dict) -> list[str]:
             scope = f"{image['path']} ({slice_data['architecture']})"
             if blocked:
                 messages.append(
-                    f"{scope}: {len(blocked)} reachable symbol(s) have no Android mapping, e.g. "
+                    f"{scope}: {len(blocked)} statically called symbol(s) have no Android mapping, e.g. "
                     + ", ".join(blocked[:5])
                 )
             if compatibility:
                 messages.append(
-                    f"{scope}: {len(compatibility)} reachable symbol(s) require an unimplemented "
+                    f"{scope}: {len(compatibility)} statically called symbol(s) require an unimplemented "
                     "compatibility layer, e.g. " + ", ".join(compatibility[:5])
                 )
     return messages

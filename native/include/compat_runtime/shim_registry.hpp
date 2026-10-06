@@ -18,16 +18,41 @@ struct ShimBinding {
     std::string adapterName;
     GuestAddress guestAddress = 0;
     std::function<bool(CpuRegisterState &, GuestAddressSpace &, std::string &)> invoke;
+    // A bounded adapter may hand control to a validated guest IMP. The target
+    // carries the ARM/Thumb bit in bit zero; the CPU backend performs the transfer.
+    std::function<bool(CpuRegisterState &, GuestAddressSpace &, GuestAddress &,
+                       std::string &)> invokeTransfer;
+    // Data imports (for example, Objective-C class objects) are materialized in
+    // the guest address space when the loader binds them; they are not callouts.
+    std::function<bool(GuestAddressSpace &, GuestAddress &, std::string &)> resolveGuestAddress;
+    // Guest-language exceptions stop execution with a distinct status when the
+    // bounded runtime cannot perform the guest ABI's full unwind/catch protocol.
+    std::function<bool(CpuRegisterState &, GuestAddressSpace &, std::string &)> invokeException;
 };
 
-/** Exact-name registry: only entries with a native call adapter can resolve. */
+struct GuestImageSection {
+    std::string segmentName;
+    std::string name;
+    GuestAddress address = 0;
+    std::uint32_t size = 0;
+};
+
+using GuestImageInitializer = std::function<bool(
+    GuestAddressSpace &, const std::vector<GuestImageSection> &, std::string &)>;
+
+/** Exact-name registry of native callouts and guest-address data resolvers. */
 class ShimRegistry {
     mutable std::mutex mutex_;
     std::map<std::string, ShimBinding> bindings_;
     std::map<GuestAddress, std::string> callouts_;
+    std::map<std::string, GuestImageInitializer> imageInitializers_;
 
   public:
     void registerBinding(ShimBinding binding);
+    void registerImageInitializer(const std::string &name, GuestImageInitializer initializer);
+    bool initializeImage(GuestAddressSpace &memory,
+                         const std::vector<GuestImageSection> &sections,
+                         std::string &reason) const;
     std::optional<ShimBinding> resolve(const std::string &darwinSymbol) const;
     std::vector<ShimBinding> snapshot() const;
     GuestCalloutResult invokeCallout(GuestAddress address, CpuRegisterState &registers,

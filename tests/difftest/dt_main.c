@@ -165,12 +165,51 @@ static uint64_t fnv_range(uint32_t addr, uint32_t len) {
     return h;
 }
 
+static unsigned DUMP_FI[256];
+static unsigned DUMP_SEED[256];
+static unsigned DUMP_N;
+
+static void parse_dump_spec(void) {
+    char *spec = getenv("DT_DUMP");
+    char *tok;
+    if (!spec) return;
+    spec = strdup(spec);
+    for (tok = strtok(spec, ";"); tok && DUMP_N < 256; tok = strtok(NULL, ";")) {
+        if (sscanf(tok, "%x,%x", &DUMP_FI[DUMP_N], &DUMP_SEED[DUMP_N]) == 2)
+            DUMP_N++;
+    }
+    free(spec);
+}
+
+static void maybe_dump(const char *dir, unsigned fi, unsigned seed) {
+    unsigned i;
+    for (i = 0; i < DUMP_N; i++) {
+        if (DUMP_FI[i] == fi && DUMP_SEED[i] == seed) {
+            char path[1024];
+            FILE *f;
+            snprintf(path, sizeof path, "%s/dt_dump_%x_%x.bin", dir, fi, seed);
+            f = fopen(path, "wb");
+            if (f) {
+                unsigned k;
+                for (k = 0; k < NREGS; k++)
+                    fwrite(MEMBASE + REGS[k].addr, 1, REGS[k].len, f);
+                fwrite(MEMBASE + STACK_BASE, 1, STACK_SIZE, f);
+                fwrite(MEMBASE + SCR0_BASE, 1, SCR_SIZE, f);
+                fwrite(MEMBASE + SCR1_BASE, 1, SCR_SIZE, f);
+                fclose(f);
+            }
+            return;
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     struct sigaction sa;
     char line[1024];
     CPU cpu;
 
     if (argc != 2) { fprintf(stderr, "usage: dt_run <dir>\n"); return 1; }
+    parse_dump_spec();
     load_manifest(argv[1]);
     map_all();
 
@@ -204,6 +243,7 @@ int main(int argc, char **argv) {
             MODE = M_RET; DETAIL = 0;
         }
         alarm(0);
+        maybe_dump(argv[1], fi, seed);
         {
             const char *mn = "?";
             if (MODE == M_RET) mn = "RET";

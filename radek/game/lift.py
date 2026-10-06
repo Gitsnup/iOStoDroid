@@ -235,6 +235,9 @@ class _Emitter:
         leaders = self.leaders()
         self.lines.append(f"void {self.ctx.cname[self.func.address]}(CPU *cpu) {{")
         self.lines.append(_TEMPS)
+        # Blocks are laid out in address order, but execution must start at
+        # the function entry (shared tails can live below it).
+        self.lines.append(f"    goto L_{self.func.address:x};")
         for addr in sorted(self.func.code_words):
             if addr in leaders:
                 self.lines.append(f"L_{addr:x}:;")

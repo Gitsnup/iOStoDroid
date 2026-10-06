@@ -153,6 +153,19 @@ def fnv(b: bytes) -> int:
     return h
 
 
+def vret_match(c: int, u: int) -> bool:
+    """Register/word equality modulo the translator's VRET scheme.
+
+    C call sites set lr to site|VRET_BIT; real ARM sets site+4. A value
+    derived from lr (moved, pushed, stored) therefore legitimately differs
+    by exactly this transform. Anything else must match bit-for-bit.
+    """
+    if c == u:
+        return True
+    return ((c & 0x80000000) and
+            (c & 0x7FFFFFFF) == (u - 4) & 0xFFFFFFFF)
+
+
 def run_c_side(cases):
     p = subprocess.Popen([os.path.join(BUILD, "dt_run"), BUILD],
                          stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -176,10 +189,11 @@ def run_uc_side(img, funcs, ctx, regions, cases):
     from unicorn import UC_HOOK_MEM_READ_UNMAPPED, UC_HOOK_MEM_WRITE_UNMAPPED
     from unicorn import UC_HOOK_MEM_FETCH_UNMAPPED
     from unicorn.unicorn_const import UC_MEM_FETCH_UNMAPPED
-    from unicorn.arm_const import (UC_ARM_REG_R0, UC_ARM_REG_R1,
-                                   UC_ARM_REG_R13, UC_ARM_REG_R14,
-                                   UC_ARM_REG_CPSR)
-    assert UC_ARM_REG_R1 == UC_ARM_REG_R0 + 1
+    from unicorn import arm_const as AC
+    from unicorn.arm_const import UC_ARM_REG_CPSR
+    RIDS = [getattr(AC, f"UC_ARM_REG_R{k}") for k in range(13)]
+    RIDS += [AC.UC_ARM_REG_R13, AC.UC_ARM_REG_R14]
+    # NOTE: R13/R14 are SP/LR aliases (12/10), NOT R0+13/14.
     blob = open(os.path.join(BUILD, "dt_mem.bin"), "rb").read()
     pristine = {}
     off = 0
@@ -292,11 +306,13 @@ def run_uc_side(img, funcs, ctx, regions, cases):
                 s ^= (s << 5) & 0xFFFFFFFF
                 words.append(s & 0xFFFFFFFF)
             mu.mem_write(base, struct.pack(f"<{count}I", *words))
-        for k in range(15):
-            mu.reg_write(UC_ARM_REG_R0 + k, regs[k])
-        mu.reg_write(UC_ARM_REG_R13, STACK_BASE + STACK_SIZE - 64)
-        mu.reg_write(UC_ARM_REG_R14, RET_MARKER)
+        # CPSR first: writing it switches register banks, so SP/LR must be
+        # set after (fresh Uc boots privileged with a zero user bank).
         mu.reg_write(UC_ARM_REG_CPSR, cpsr)
+        for k in range(15):
+            mu.reg_write(RIDS[k], regs[k])
+        mu.reg_write(RIDS[13], STACK_BASE + STACK_SIZE - 64)
+        mu.reg_write(RIDS[14], RET_MARKER)
         state.clear()
         state["n"] = 0
         try:
@@ -308,7 +324,7 @@ def run_uc_side(img, funcs, ctx, regions, cases):
         if "mode" not in state:
             state["mode"] = "UCERR"
             state["detail"] = 0
-        got = [mu.reg_read(UC_ARM_REG_R0 + k) & 0xFFFFFFFF for k in range(15)]
+        got = [mu.reg_read(RIDS[k]) & 0xFFFFFFFF for k in range(15)]
         gotc = mu.reg_read(UC_ARM_REG_CPSR) & 0xFFFFFFFF
         hashes = [fnv(bytes(mu.mem_read(a, ln))) for a, ln in regions]
         hashes.append(fnv(bytes(mu.mem_read(STACK_BASE, STACK_SIZE))))
@@ -316,6 +332,106 @@ def run_uc_side(img, funcs, ctx, regions, cases):
         hashes.append(fnv(bytes(mu.mem_read(SCR1_BASE, SCR_SIZE))))
         results.append((state["mode"], state.get("detail", 0), got, gotc, hashes))
     return results
+
+
+def run_c_dump(cases):
+    """Re-run cases under dt_run with DT_DUMP; return {(fi,seed): bytes}."""
+    spec = ";".join(f"{fi:x},{seed:x}" for fi, _a, seed, _r, _c in cases)
+    env = dict(os.environ)
+    env["DT_DUMP"] = spec
+    p = subprocess.Popen([os.path.join(BUILD, "dt_run"), BUILD],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         text=True, env=env)
+    inp = "".join(f"{fi:x} {seed:x} {' '.join(f'{r:x}' for r in regs)} {cpsr:x}\n"
+                  for fi, _a, seed, regs, cpsr in cases)
+    p.communicate(inp, timeout=600)
+    dumps = {}
+    for fi, _a, seed, _r, _c in cases:
+        path = os.path.join(BUILD, f"dt_dump_{fi:x}_{seed:x}.bin")
+        with open(path, "rb") as f:
+            dumps[(fi, seed)] = f.read()
+    return dumps
+
+
+def uc_case_bytes(img, funcs, ctx, regions, case):
+    """Fresh-unicorn single case rerun; return per-region final bytes."""
+    from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM
+    from unicorn import UC_HOOK_CODE
+    from unicorn import UC_HOOK_MEM_READ_UNMAPPED, UC_HOOK_MEM_WRITE_UNMAPPED
+    from unicorn import UC_HOOK_MEM_FETCH_UNMAPPED
+    from unicorn.unicorn_const import UC_MEM_FETCH_UNMAPPED
+    from unicorn import arm_const as AC
+    from unicorn.arm_const import UC_ARM_REG_CPSR
+    RIDS = [getattr(AC, f"UC_ARM_REG_R{k}") for k in range(13)]
+    RIDS += [AC.UC_ARM_REG_R13, AC.UC_ARM_REG_R14]
+    blob = open(os.path.join(BUILD, "dt_mem.bin"), "rb").read()
+    pristine = {}
+    off = 0
+    for a, ln in regions:
+        pristine[a] = blob[off:off + ln]
+        off += ln
+    pages = set()
+    for a, ln in regions:
+        for p in range(a & ~0xFFF, (a + ln + 0xFFF) & ~0xFFF, 0x1000):
+            pages.add(p)
+    for b in (STACK_BASE, SCR0_BASE, SCR1_BASE):
+        for p in range(b, b + SCR_SIZE, 0x1000):
+            pages.add(p)
+    unions = []
+    for p in sorted(pages):
+        if unions and p == unions[-1][1]:
+            unions[-1][1] += 0x1000
+        else:
+            unions.append([p, p + 0x1000])
+    mu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
+    for s, e in unions:
+        mu.mem_map(s, e - s)
+    for a, ln in regions:
+        mu.mem_write(a, pristine[a])
+    code_set = set()
+    for f in funcs.values():
+        code_set.update(f.code_words)
+    stub_of = dict(ctx.import_of_stub)
+    state = {"n": 0}
+
+    def h_code(u, pc, size, data):
+        state["n"] += 1
+        if state["n"] > INSN_LIMIT or pc in stub_of or pc not in code_set:
+            u.emu_stop()
+
+    def h_fault(u, access, addr, size, value, data):
+        u.emu_stop()
+        return False
+
+    mu.hook_add(UC_HOOK_CODE, h_code)
+    mu.hook_add(UC_HOOK_MEM_READ_UNMAPPED | UC_HOOK_MEM_WRITE_UNMAPPED |
+                UC_HOOK_MEM_FETCH_UNMAPPED, h_fault)
+    fi, addr, seed, regs, cpsr = case
+    s = seed if seed else 0x9E3779B9
+    for base, count in ((STACK_BASE, STACK_SIZE // 4),
+                        (SCR0_BASE, SCR_SIZE // 4),
+                        (SCR1_BASE, SCR_SIZE // 4)):
+        words = []
+        for _ in range(count):
+            s ^= (s << 13) & 0xFFFFFFFF
+            s ^= s >> 17
+            s ^= (s << 5) & 0xFFFFFFFF
+            words.append(s & 0xFFFFFFFF)
+        mu.mem_write(base, struct.pack(f"<{count}I", *words))
+    mu.reg_write(UC_ARM_REG_CPSR, cpsr)
+    for k in range(15):
+        mu.reg_write(RIDS[k], regs[k])
+    mu.reg_write(RIDS[13], STACK_BASE + STACK_SIZE - 64)
+    mu.reg_write(RIDS[14], RET_MARKER)
+    try:
+        mu.emu_start(addr, 0)
+    except Exception:
+        pass
+    out = [bytes(mu.mem_read(a, ln)) for a, ln in regions]
+    out.append(bytes(mu.mem_read(STACK_BASE, STACK_SIZE)))
+    out.append(bytes(mu.mem_read(SCR0_BASE, SCR_SIZE)))
+    out.append(bytes(mu.mem_read(SCR1_BASE, SCR_SIZE)))
+    return out
 
 
 def main() -> int:
@@ -391,6 +507,7 @@ def main() -> int:
     print("unicorn side done", flush=True)
     npass = nskip = 0
     fails = []
+    mem_probes = []
     for ci, ((cm, cd, cr, cc, ch), (um, ud, ur, uc, uh)) in enumerate(zip(cres, ures)):
         fi, addr, seed, _r, _c = cases[ci]
         if cm == "FAULT" and cd >= MEM_SIZE:
@@ -421,17 +538,18 @@ def main() -> int:
                 ok = False
                 why.append(f"fault {cd:#x} vs {ud:#x}")
         if ok:
-            if cr != ur:
+            reg_bad = [k for k in range(15) if not vret_match(cr[k], ur[k])]
+            if reg_bad:
                 ok = False
-                for k in range(15):
-                    if cr[k] != ur[k]:
-                        why.append(f"r{k} {cr[k]:#x} vs {ur[k]:#x}")
-                        if len(why) > 6:
-                            break
+                for k in reg_bad[:6]:
+                    why.append(f"r{k} {cr[k]:#x} vs {ur[k]:#x}")
             if cc != uc:
                 ok = False
                 why.append(f"cpsr {cc:#x} vs {uc:#x}")
             if ch != uh:
+                if ok:
+                    mem_probes.append(ci)
+                    continue  # mode+regs agree; phase 2 word-diffs memory
                 ok = False
                 for i, (x, y) in enumerate(zip(ch, uh)):
                     if x != y:
@@ -443,6 +561,41 @@ def main() -> int:
             npass += 1
         else:
             fails.append((addr, funcs[addr].name, seed, cm, cd, um, ud, why))
+    if mem_probes:
+        print(f"phase 2: word-diffing {len(mem_probes)} mem mismatches", flush=True)
+        probe_cases = [cases[ci] for ci in mem_probes]
+        dumps = run_c_dump(probe_cases)
+        rnames = [f"{a:x}" for a, _ln in regions] + ["stack", "scr0", "scr1"]
+        rlens = [ln for _a, ln in regions] + [STACK_SIZE, SCR_SIZE, SCR_SIZE]
+        for ci in mem_probes:
+            fi, addr, seed, _r, _c = cases[ci]
+            cbytes = dumps[(fi, seed)]
+            # split dump: manifest regions, then stack, scr0, scr1
+            coffs, cregs = [], []
+            o = 0
+            for ln in rlens:
+                cregs.append(cbytes[o:o + ln])
+                o += ln
+            uregs = uc_case_bytes(img, funcs, ctx, regions, cases[ci])
+            unexpl = []
+            for i, (cb, ub) in enumerate(zip(cregs, uregs)):
+                for w in range(0, len(cb) - 3, 4):
+                    cw = int.from_bytes(cb[w:w + 4], "little")
+                    uw = int.from_bytes(ub[w:w + 4], "little")
+                    if not vret_match(cw, uw):
+                        base = regions[i][0] if i < len(regions) else \
+                            (STACK_BASE, SCR0_BASE, SCR1_BASE)[i - len(regions)]
+                        unexpl.append(f"{rnames[i]}+{w:x} @{base + w:#x}: {cw:#x} vs {uw:#x}")
+                        if len(unexpl) >= 6:
+                            break
+                if len(unexpl) >= 6:
+                    break
+            if unexpl:
+                cm, cd, _cr, _cc, _ch = cres[ci]
+                um, ud, _ur, _uc, _uh = ures[ci]
+                fails.append((addr, funcs[addr].name, seed, cm, cd, um, ud, unexpl))
+            else:
+                npass += 1
     print(f"PASS {npass} SKIP {nskip} FAIL {len(fails)} / {len(cases)}", flush=True)
     for addr, name, seed, cm, cd, um, ud, why in fails[:25]:
         print(f"FAIL {addr:#x} {name} seed={seed} C={cm}/{cd:#x} U={um}/{ud:#x}")

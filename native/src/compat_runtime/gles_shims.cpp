@@ -972,7 +972,7 @@ void Forwarder::registerBindings(ShimRegistry &registry) {
                            const void *)>(name, target, level, internalFormat, width, height,
                                           border, format, type, host);
     };
-    bind("_glTexImage2D", "gles-forward-tex-image-2d", [&impl, texImage](Args &args) {
+    bind("_glTexImage2D", "gles-forward-tex-image-2d", [texImage](Args &args) {
         texImage("glTexImage2D", args, 8);
         return true;
     });

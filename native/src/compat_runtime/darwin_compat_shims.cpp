@@ -70,7 +70,7 @@ void ShimAdapter::note(const std::string &detail) {
 
 void ShimAdapter::registerFunction(ShimRegistry &registry, const std::string &symbol,
                                    const std::string &adapterName, Invoke invoke) {
-    if (nextCallout_ > kCalloutEnd - 4U)
+    if (nextCallout_ < kCalloutBegin || nextCallout_ > kCalloutEnd - 4U)
         throw std::overflow_error("Darwin compatibility callout range is exhausted");
     ShimBinding binding;
     binding.darwinSymbol = symbol;
@@ -85,7 +85,7 @@ void ShimAdapter::registerFunction(ShimRegistry &registry, const std::string &sy
 
 void ShimAdapter::registerExceptionFunction(ShimRegistry &registry, const std::string &symbol,
                                             const std::string &adapterName, Invoke invoke) {
-    if (nextCallout_ > kCalloutEnd - 4U)
+    if (nextCallout_ < kCalloutBegin || nextCallout_ > kCalloutEnd - 4U)
         throw std::overflow_error("Darwin compatibility callout range is exhausted");
     ShimBinding binding;
     binding.darwinSymbol = symbol;

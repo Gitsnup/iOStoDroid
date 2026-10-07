@@ -96,6 +96,7 @@ fun registerTemplateEmbedTask(module: String, assetDirectory: String, iconFileNa
 
 val embedPlaceholderTemplate = registerTemplateEmbedTask(":placeholder-template", "placeholder-template", "generated_placeholder_icon.png", "Ldev/radek/generated/GeneratedPlaceholderActivity;")
 val embedConvertedTemplate = registerTemplateEmbedTask(":converted-template", "converted-template", "generated_converted_icon.png", "Ldev/radek/generated/MainActivity;")
+val embedGameruntimeTemplate = registerTemplateEmbedTask(":gameruntime-template", "gameruntime-template", "generated_gameruntime_icon.png", "Ldev/radek/gameruntime/GameBootActivity;")
 
 // Surface full assertion messages and test stdout in the CI console; the default
 // logging prints only the exception class and source line, which hides values.
@@ -108,6 +109,12 @@ tasks.withType<Test> {
 }
 
 dependencies {
+    // The game-runtime APK builder copies libcompat_runtime_v1.so out of this
+    // app's installed APK into every generated game APK, the same way the
+    // bounded converter reuses the installed libioscompat.so. Depending on the
+    // module (rather than its Kotlin API) keeps the converter's own runtime
+    // untouched while guaranteeing the exact tested native library is embedded.
+    implementation(project(":compat-runtime-v1"))
     implementation("com.android.tools.build:apksig:8.7.3")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")

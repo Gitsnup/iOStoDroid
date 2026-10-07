@@ -25,4 +25,12 @@ internal object ArtifactNames {
      */
     fun placeholderApkFileName(report: JSONObject): String =
         apkFileName(report).removeSuffix(".apk") + "-preview.apk"
+
+    /**
+     * Boot-attempt game APK name (contract "game-runtime-v1"). Kept separate
+     * from both the strict complete-game APK and the non-playable preview
+     * shell so provider/install/share paths can validate each by exact name.
+     */
+    fun gameApkFileName(report: JSONObject): String =
+        apkFileName(report).removeSuffix(".apk") + "-game.apk"
 }

@@ -42,6 +42,10 @@ struct CpuExecutionResult {
     std::uint64_t instructions = 0;
     bool started = false;
     std::string message;
+    // Guest address of an invalid memory access, when the backend observed
+    // one. Lets trap-mode callers map the fault back to an import slot.
+    GuestAddress faultAddress = 0;
+    bool hasFaultAddress = false;
 };
 
 /** The single CPU boundary used by the guest runner. */

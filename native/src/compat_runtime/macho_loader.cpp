@@ -363,10 +363,80 @@ void appendUnresolved(MachOLoadReport &report, const std::string &symbol,
     report.unresolvedSymbols.push_back(std::move(record));
 }
 
+// Mutable trap state for loadWithTraps. Null everywhere on the fail-closed
+// load() path, which never binds traps.
+struct TrapContext {
+    ShimRegistry *registry = nullptr;
+    TrapShimAdapter *traps = nullptr;
+};
+
+// Bind one unimplemented import to its abort-on-call trap and install the
+// trap address in the import slot. Traps accept any bind addend: the slot
+// still lands inside the trap range, so any guest touch faults honestly and
+// maps back to the import. The record keeps status "trapped" (never
+// "resolved") with the original no-adapter reason preserved.
+void bindTrapAt(GuestAddressSpace &memory, MachOLoadReport &report,
+                TrapContext &trapContext, const std::string &symbol,
+                const std::string &library, std::int64_t ordinal,
+                GuestAddress target, std::int64_t addend, bool weakImport,
+                const char *source) {
+    GuestAddress trapAddress = 0;
+    try {
+        trapAddress = trapContext.traps->bind(*trapContext.registry, symbol, library);
+    } catch (const std::exception &error) {
+        appendUnresolved(report, symbol, library, ordinal, target, weakImport,
+                         error.what(), source);
+        return;
+    }
+    const auto trap64 = static_cast<std::uint64_t>(trapAddress);
+    std::uint64_t resolved = trap64;
+    if (addend >= 0) {
+        const auto positiveAddend = static_cast<std::uint64_t>(addend);
+        if (positiveAddend > std::numeric_limits<GuestAddress>::max() - trap64) {
+            appendUnresolved(report, symbol, library, ordinal, target, weakImport,
+                             "trap address plus addend exceeds the guest address space",
+                             source);
+            return;
+        }
+        resolved += positiveAddend;
+    } else {
+        const auto magnitude = static_cast<std::uint64_t>(-(addend + 1)) + 1;
+        if (magnitude > trap64) {
+            appendUnresolved(report, symbol, library, ordinal, target, weakImport,
+                             "trap address plus addend exceeds the guest address space",
+                             source);
+            return;
+        }
+        resolved -= magnitude;
+    }
+    if (resolved > std::numeric_limits<GuestAddress>::max()) {
+        appendUnresolved(report, symbol, library, ordinal, target, weakImport,
+                         "trap address plus addend exceeds the guest address space",
+                         source);
+        return;
+    }
+    const auto guestAddress = static_cast<GuestAddress>(resolved);
+    if (!memory.initialize(target, &guestAddress, sizeof(guestAddress))) {
+        appendUnresolved(report, symbol, library, ordinal, target, weakImport,
+                         "could not write the trap address into the import slot", source);
+        return;
+    }
+    auto record = makeSymbolRecord(symbol, "trapped", library, ordinal, target,
+                                   weakImport, nullptr,
+                                   "no tested native call adapter is registered for this "
+                                   "symbol; bound to an abort-on-call trap",
+                                   source);
+    record["trapAddress"] = static_cast<std::uint64_t>(guestAddress);
+    if (!report.firstMissingImport)
+        report.firstMissingImport = symbol;
+    report.trappedSymbols.push_back(std::move(record));
+}
+
 void bindAt(const ImageState &image, GuestAddressSpace &memory, const ShimRegistry &shims,
             MachOLoadReport &report, std::uint32_t segmentIndex, std::uint64_t offset,
             std::uint8_t type, const std::string &symbol, std::int64_t ordinal,
-            std::int64_t addend, bool weakImport, const char *source) {
+            std::int64_t addend, bool weakImport, const char *source,
+            TrapContext *trapContext = nullptr) {
     if (symbol.empty())
         throw std::runtime_error("dyld bind opcode has no symbol name");
     const auto library = dependencyName(image, ordinal);
@@ -395,7 +465,17 @@ void bindAt(const ImageState &image, GuestAddressSpace &memory, const ShimRegist
     }
 
     const auto binding = shims.resolve(symbol);
-    if (!binding) {
+    // A repeat fixup for an already-trapped import re-resolves the trap
+    // binding; route it back through the trap writer (which accepts any
+    // addend) instead of the native-callout addend rule.
+    const bool alreadyTrapped =
+        trapContext && static_cast<bool>(binding) && trapContext->traps->has(symbol);
+    if (!binding || alreadyTrapped) {
+        if (trapContext) {
+            bindTrapAt(memory, report, *trapContext, symbol, library, ordinal,
+                       target, addend, weakImport, source);
+            return;
+        }
         appendUnresolved(report, symbol, library, ordinal, target, weakImport,
                          "no tested native call adapter is registered for this symbol", source);
         return;
@@ -545,7 +625,7 @@ void applyRebases(const Reader &reader, const ImageState &image, GuestAddress sl
 void applyBinds(const Reader &reader, const ImageState &image, GuestAddressSpace &memory,
                 const ShimRegistry &shims, MachOLoadReport &report,
                 std::uint32_t streamOffset, std::uint32_t streamSize, bool lazy,
-                const char *source) {
+                const char *source, TrapContext *trapContext = nullptr) {
     if (streamSize == 0)
         return;
     const auto end = checkedStreamEnd(reader, streamOffset, streamSize, source);
@@ -562,7 +642,7 @@ void applyBinds(const Reader &reader, const ImageState &image, GuestAddressSpace
         if (++actions > kMaximumFixups)
             throw std::runtime_error("dyld bind action count exceeds the loader limit");
         bindAt(image, memory, shims, report, segmentIndex, offset, type, symbol,
-               ordinal, addend, weakImport, source);
+               ordinal, addend, weakImport, source, trapContext);
         offset = addStreamOffset(offset, sizeof(std::uint32_t));
     };
     auto resetLazyEntry = [&]() {
@@ -697,12 +777,38 @@ NlistEntry readNlistEntry(const Reader &reader, const ImageState &image,
 }
 
 bool resolveRegisteredAddress(const ShimRegistry &shims, GuestAddressSpace &memory,
-                              const NlistEntry &symbol, GuestAddress &address,
-                              std::optional<ShimBinding> &binding, std::string &reason) {
+                              const NlistEntry &symbol, const std::string &library,
+                              GuestAddress &address,
+                              std::optional<ShimBinding> &binding, std::string &reason,
+                              TrapContext *trapContext = nullptr,
+                              bool *wasTrapped = nullptr) {
     binding = shims.resolve(symbol.name);
     if (!binding) {
-        reason = "no tested native call adapter is registered for this symbol";
-        return false;
+        if (!trapContext) {
+            reason = "no tested native call adapter is registered for this symbol";
+            return false;
+        }
+        try {
+            address = trapContext->traps->bind(*trapContext->registry, symbol.name, library);
+        } catch (const std::exception &error) {
+            reason = error.what();
+            return false;
+        }
+        // Re-resolve: the trap binding is now registered.
+        binding = trapContext->registry->resolve(symbol.name);
+        if (!binding) {
+            reason = "trap binding was not registered for this symbol";
+            return false;
+        }
+        if (wasTrapped)
+            *wasTrapped = true;
+    } else if (trapContext && trapContext->traps->has(symbol.name)) {
+        // Repeat fixup for an already-trapped import: keep the trap
+        // attribution (and its addend tolerance) instead of treating the
+        // trap callout as a real native adapter.
+        address = binding->guestAddress;
+        if (wasTrapped)
+            *wasTrapped = true;
     }
     address = binding->guestAddress;
     if (binding->resolveGuestAddress) {
@@ -718,7 +824,8 @@ bool resolveRegisteredAddress(const ShimRegistry &shims, GuestAddressSpace &memo
 void applyIndirectSymbolPointers(const Reader &reader, const ImageState &image,
                                 GuestAddress slide, GuestAddressSpace &memory,
                                 const ShimRegistry &shims, MachOLoadReport &report,
-                                std::set<std::string> &observedSymbols) {
+                                std::set<std::string> &observedSymbols,
+                                TrapContext *trapContext = nullptr) {
     if (!image.dynamicSymbols.present)
         return;
     reader.range(image.dynamicSymbols.indirectSymbolOffset,
@@ -767,8 +874,10 @@ void applyIndirectSymbolPointers(const Reader &reader, const ImageState &image,
                     GuestAddress resolvedAddress = 0;
                     std::optional<ShimBinding> binding;
                     std::string resolutionError;
-                    if (!resolveRegisteredAddress(shims, memory, symbol, resolvedAddress,
-                                                  binding, resolutionError)) {
+                    bool wasTrapped = false;
+                    if (!resolveRegisteredAddress(shims, memory, symbol, library,
+                                                  resolvedAddress, binding, resolutionError,
+                                                  trapContext, &wasTrapped)) {
                         appendUnresolved(report, symbol.name, library, ordinal, target,
                                          symbol.weakImport(), resolutionError, "indirect-symbol");
                         continue;
@@ -788,6 +897,19 @@ void applyIndirectSymbolPointers(const Reader &reader, const ImageState &image,
                         continue;
                     }
                     binding->guestAddress = resolvedAddress;
+                    if (wasTrapped) {
+                        auto trapped = makeSymbolRecord(
+                            symbol.name, "trapped", library, ordinal, target,
+                            symbol.weakImport(), nullptr,
+                            "no tested native call adapter is registered for this "
+                            "symbol; bound to an abort-on-call trap",
+                            "indirect-symbol");
+                        trapped["trapAddress"] = static_cast<std::uint64_t>(resolvedAddress);
+                        if (!report.firstMissingImport)
+                            report.firstMissingImport = symbol.name;
+                        report.trappedSymbols.push_back(std::move(trapped));
+                        continue;
+                    }
                     report.resolvedSymbols.push_back(makeSymbolRecord(
                         symbol.name, "resolved", library, ordinal, target,
                         symbol.weakImport(), &*binding, "", "indirect-symbol"));
@@ -800,7 +922,8 @@ void applyIndirectSymbolPointers(const Reader &reader, const ImageState &image,
 void applyExternalRelocations(const Reader &reader, const ImageState &image,
                               GuestAddress slide, GuestAddressSpace &memory,
                               const ShimRegistry &shims, MachOLoadReport &report,
-                              std::set<std::string> &observedSymbols) {
+                              std::set<std::string> &observedSymbols,
+                              TrapContext *trapContext = nullptr) {
     if (!image.dynamicSymbols.present || image.dynamicSymbols.externalRelocationCount == 0)
         return;
     reader.range(image.dynamicSymbols.externalRelocationOffset,
@@ -846,8 +969,9 @@ void applyExternalRelocations(const Reader &reader, const ImageState &image,
         GuestAddress resolvedAddress = 0;
         std::optional<ShimBinding> binding;
         std::string resolutionError;
-        if (!resolveRegisteredAddress(shims, memory, symbol, resolvedAddress,
-                                      binding, resolutionError)) {
+        bool wasTrapped = false;
+        if (!resolveRegisteredAddress(shims, memory, symbol, library, resolvedAddress,
+                                      binding, resolutionError, trapContext, &wasTrapped)) {
             if (unresolvedSymbols.insert(symbol.name).second)
                 appendUnresolved(report, symbol.name, library, ordinal, target,
                                  symbol.weakImport(), resolutionError, "external-relocation");
@@ -864,9 +988,11 @@ void applyExternalRelocations(const Reader &reader, const ImageState &image,
         }
         const auto addend = static_cast<std::int64_t>(static_cast<std::int32_t>(rawAddend));
         const auto signedAddress = static_cast<std::int64_t>(resolvedAddress) + addend;
+        // Traps accept any addend: trap+addend still lands in the trap range,
+        // so a guest touch faults honestly and maps back to the import.
         if (signedAddress < 0 ||
             signedAddress > std::numeric_limits<GuestAddress>::max() ||
-            (addend != 0 && !binding->resolveGuestAddress)) {
+            (addend != 0 && !binding->resolveGuestAddress && !wasTrapped)) {
             if (unresolvedSymbols.insert(symbol.name).second)
                 appendUnresolved(report, symbol.name, library, ordinal, target,
                                  symbol.weakImport(),
@@ -886,6 +1012,19 @@ void applyExternalRelocations(const Reader &reader, const ImageState &image,
             continue;
         }
         binding->guestAddress = finalAddress;
+        if (wasTrapped) {
+            auto trapped = makeSymbolRecord(
+                symbol.name, "trapped", library, ordinal, target,
+                symbol.weakImport(), nullptr,
+                "no tested native call adapter is registered for this "
+                "symbol; bound to an abort-on-call trap",
+                "external-relocation");
+            trapped["trapAddress"] = static_cast<std::uint64_t>(finalAddress);
+            if (!report.firstMissingImport)
+                report.firstMissingImport = symbol.name;
+            report.trappedSymbols.push_back(std::move(trapped));
+            continue;
+        }
         report.resolvedSymbols.push_back(makeSymbolRecord(
             symbol.name, "resolved", library, ordinal, target,
             symbol.weakImport(), &*binding, "", "external-relocation"));
@@ -894,7 +1033,8 @@ void applyExternalRelocations(const Reader &reader, const ImageState &image,
 
 void appendUnboundNlistImports(const Reader &reader, const ImageState &image,
                                const ShimRegistry &shims, MachOLoadReport &report,
-                               const std::set<std::string> &alreadyReported) {
+                               const std::set<std::string> &alreadyReported,
+                               TrapContext *trapContext = nullptr) {
     if (!image.symbols.present)
         return;
     reader.range(image.symbols.symbolOffset,
@@ -908,6 +1048,21 @@ void appendUnboundNlistImports(const Reader &reader, const ImageState &image,
         const auto ordinal = symbol.libraryOrdinal();
         const auto library = dependencyName(image, ordinal);
         const auto binding = shims.resolve(symbol.name);
+        if (trapContext) {
+            // Nlist-only names have no slot to trap, and no stub or relocation
+            // can reach them. They are reported separately and never block a
+            // boot attempt; any actual guest touch faults honestly.
+            const char *trapReason = binding
+                ? "undefined symbol has no loader binding location"
+                : "no tested native call adapter is registered for this symbol and "
+                  "no loader binding location exists";
+            auto record = makeSymbolRecord(symbol.name, "unresolved", library, ordinal, 0,
+                                           symbol.weakImport(), nullptr, trapReason, "nlist");
+            if (!report.firstMissingImport && !binding)
+                report.firstMissingImport = symbol.name;
+            report.unboundNlistSymbols.push_back(std::move(record));
+            continue;
+        }
         if (binding) {
             // Without an indirect pointer or relocation, the symbol is known but cannot be installed.
             appendUnresolved(report, symbol.name, library, ordinal, 0, symbol.weakImport(),
@@ -1090,14 +1245,18 @@ void mapSegments(const Reader &reader, ImageState &image, GuestAddress slide,
 
 void applyRebaseAndBindStreams(const Reader &reader, const ImageState &image,
                                GuestAddress slide, GuestAddressSpace &memory,
-                               const ShimRegistry &shims, MachOLoadReport &report) {
+                               const ShimRegistry &shims, MachOLoadReport &report,
+                               TrapContext *trapContext = nullptr) {
     applyRebases(reader, image, slide, memory, report);
     applyBinds(reader, image, memory, shims, report,
-               image.streams.bindOffset, image.streams.bindSize, false, "bind");
+               image.streams.bindOffset, image.streams.bindSize, false, "bind",
+               trapContext);
     applyBinds(reader, image, memory, shims, report,
-               image.streams.weakBindOffset, image.streams.weakBindSize, false, "weak-bind");
+               image.streams.weakBindOffset, image.streams.weakBindSize, false, "weak-bind",
+               trapContext);
     applyBinds(reader, image, memory, shims, report,
-               image.streams.lazyBindOffset, image.streams.lazyBindSize, true, "lazy-bind");
+               image.streams.lazyBindOffset, image.streams.lazyBindSize, true, "lazy-bind",
+               trapContext);
 }
 
 } // namespace
@@ -1115,25 +1274,36 @@ radek::Json MachOLoadReport::toJson() const {
     report["rebasesApplied"] = static_cast<std::uint64_t>(rebasesApplied);
     report["resolvedSymbolCount"] = static_cast<std::uint64_t>(resolvedSymbols.size());
     report["unresolvedSymbolCount"] = static_cast<std::uint64_t>(unresolvedSymbols.size());
+    report["trappedSymbolCount"] = static_cast<std::uint64_t>(trappedSymbols.size());
+    report["unboundNlistSymbolCount"] = static_cast<std::uint64_t>(unboundNlistSymbols.size());
     if (firstMissingImport)
         report["firstMissingImport"] = *firstMissingImport;
     else
         report["firstMissingImport"] = radek::Json();
     report["resolvedSymbols"] = radek::Json::array();
     report["unresolvedSymbols"] = radek::Json::array();
+    report["trappedSymbols"] = radek::Json::array();
+    report["unboundNlistSymbols"] = radek::Json::array();
     for (const auto &symbol : resolvedSymbols)
         report["resolvedSymbols"].push(symbol);
     for (const auto &symbol : unresolvedSymbols)
         report["unresolvedSymbols"].push(symbol);
+    for (const auto &symbol : trappedSymbols)
+        report["trappedSymbols"].push(symbol);
+    for (const auto &symbol : unboundNlistSymbols)
+        report["unboundNlistSymbols"].push(symbol);
     if (!error.empty())
         report["error"] = error;
     return report;
 }
 
-MachOLoadReport MachOLoader::load(const std::vector<std::uint8_t> &mainBinary,
-                                  GuestAddressSpace &addressSpace,
-                                  const ShimRegistry &shims,
-                                  GuestAddress slide) const {
+namespace {
+
+MachOLoadReport loadImpl(const std::vector<std::uint8_t> &mainBinary,
+                         GuestAddressSpace &addressSpace,
+                         const ShimRegistry &shims,
+                         GuestAddress slide,
+                         TrapContext *trapContext) {
     MachOLoadReport report;
     try {
         if (mainBinary.empty())
@@ -1192,7 +1362,8 @@ MachOLoadReport MachOLoader::load(const std::vector<std::uint8_t> &mainBinary,
         if (!entryIsExecutable)
             throw std::runtime_error("Mach-O entry point is not inside an executable segment");
 
-        applyRebaseAndBindStreams(reader, image, slide, addressSpace, shims, report);
+        applyRebaseAndBindStreams(reader, image, slide, addressSpace, shims, report,
+                                  trapContext);
         std::set<std::string> observedSymbols;
         for (const auto &record : report.resolvedSymbols) {
             const auto found = record.fields.find("symbol");
@@ -1204,11 +1375,17 @@ MachOLoadReport MachOLoader::load(const std::vector<std::uint8_t> &mainBinary,
             if (found != record.fields.end())
                 observedSymbols.insert(found->second.value);
         }
+        for (const auto &record : report.trappedSymbols) {
+            const auto found = record.fields.find("symbol");
+            if (found != record.fields.end())
+                observedSymbols.insert(found->second.value);
+        }
         applyIndirectSymbolPointers(reader, image, slide, addressSpace, shims, report,
-                                    observedSymbols);
+                                    observedSymbols, trapContext);
         applyExternalRelocations(reader, image, slide, addressSpace, shims, report,
-                                 observedSymbols);
-        appendUnboundNlistImports(reader, image, shims, report, observedSymbols);
+                                 observedSymbols, trapContext);
+        appendUnboundNlistImports(reader, image, shims, report, observedSymbols,
+                                  trapContext);
 
         report.entryPoint = image.entryPoint;
         report.entryPointSource = image.entryPointSource;
@@ -1236,12 +1413,36 @@ MachOLoadReport MachOLoader::load(const std::vector<std::uint8_t> &mainBinary,
                 : metadataError;
             return report;
         }
-        report.status = report.unresolvedSymbols.empty() ? "LOADED" : "BLOCKED_UNRESOLVED_IMPORTS";
+        if (!report.unresolvedSymbols.empty()) {
+            report.status = "BLOCKED_UNRESOLVED_IMPORTS";
+        } else if (trapContext && !report.trappedSymbols.empty()) {
+            report.status = "LOADED_WITH_TRAPS";
+        } else {
+            report.status = "LOADED";
+        }
     } catch (const std::exception &error) {
         report.status = "BLOCKED";
         report.error = error.what();
     }
     return report;
+}
+
+} // namespace
+
+MachOLoadReport MachOLoader::load(const std::vector<std::uint8_t> &mainBinary,
+                                  GuestAddressSpace &addressSpace,
+                                  const ShimRegistry &shims,
+                                  GuestAddress slide) const {
+    return loadImpl(mainBinary, addressSpace, shims, slide, nullptr);
+}
+
+MachOLoadReport MachOLoader::loadWithTraps(const std::vector<std::uint8_t> &mainBinary,
+                                           GuestAddressSpace &addressSpace,
+                                           ShimRegistry &shims,
+                                           TrapShimAdapter &traps,
+                                           GuestAddress slide) const {
+    TrapContext trapContext{&shims, &traps};
+    return loadImpl(mainBinary, addressSpace, shims, slide, &trapContext);
 }
 
 } // namespace radek::compat_runtime

@@ -18,6 +18,8 @@ import java.util.zip.ZipFile
 internal object CompatibilityRuntime {
     const val ABI = "arm64-v8a"
     const val SONAME = "libioscompat.so"
+    /** Guest-CPU boot-attempt runtime (contract "game-runtime-v1") shipped by :compat-runtime-v1. */
+    const val GAMERUNTIME_SONAME = "libcompat_runtime_v1.so"
     private const val LIBCXX_SONAME = "libc++_shared.so"
     private const val MAX_LIBRARY_BYTES = 128L * 1024 * 1024
     private const val ELF_HEADER_BYTES = 64
@@ -41,12 +43,35 @@ internal object CompatibilityRuntime {
     internal fun extractFromApk(sourceApk: File, destination: File): List<Library> =
         extractFromApks(listOf(sourceApk), destination)
 
+    /**
+     * Copies the reviewed ARM64 guest-CPU boot-attempt runtime into generated
+     * game APKs. The game launcher loads libcompat_runtime_v1.so and nowhere
+     * else; libioscompat stays the bounded converter's dependency only.
+     */
+    fun extractGameRuntimeInstalled(context: Context, destination: File): List<Library> {
+        val info = context.applicationInfo
+        val installedApks = listOfNotNull(info.sourceDir?.takeIf { it.isNotBlank() }?.let(::File)) +
+            info.splitSourceDirs.orEmpty().map(::File)
+        return extractGameRuntimeFromApks(installedApks.distinctBy { it.absolutePath }, destination)
+    }
+
+    /** Package-private visibility keeps game-runtime extraction directly regression-testable. */
+    internal fun extractGameRuntimeFromApks(sourceApks: List<File>, destination: File): List<Library> =
+        extractSonames(sourceApks, destination, listOf(GAMERUNTIME_SONAME, LIBCXX_SONAME), GAMERUNTIME_SONAME)
+
     /** Handles App Bundle installs where native libraries live in ABI split APKs. */
-    internal fun extractFromApks(sourceApks: List<File>, destination: File): List<Library> {
+    internal fun extractFromApks(sourceApks: List<File>, destination: File): List<Library> =
+        extractSonames(sourceApks, destination, listOf(SONAME, LIBCXX_SONAME), SONAME)
+
+    private fun extractSonames(
+        sourceApks: List<File>,
+        destination: File,
+        libraryNames: List<String>,
+        requiredSoname: String,
+    ): List<Library> {
         val availableApks = sourceApks.filter { it.isFile && it.length() > 0 }
         require(availableApks.isNotEmpty()) { "installed app APK is missing" }
         require(destination.isDirectory || destination.mkdirs()) { "cannot create compatibility runtime staging directory" }
-        val libraryNames = listOf(SONAME, LIBCXX_SONAME)
         val output = ArrayList<Library>()
         for (soname in libraryNames) {
             val entryName = "lib/$ABI/$soname"
@@ -56,7 +81,7 @@ internal object CompatibilityRuntime {
                 }
             }
             if (archive == null) {
-                if (soname == SONAME) error("the app package is missing the verified $SONAME compatibility runtime")
+                if (soname == requiredSoname) error("the app package is missing the verified $requiredSoname compatibility runtime")
                 continue
             }
             ZipFile(archive).use { zip ->

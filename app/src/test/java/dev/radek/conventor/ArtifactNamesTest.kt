@@ -32,4 +32,11 @@ class ArtifactNamesTest {
             )
         }
     }
+
+    @Test fun gameRuntimeArtifactHasAnExplicitlySeparateFilename() {
+        val report = JSONObject().put("source", JSONObject().put("originalName", "../My Game.ipa"))
+        assertEquals("My Game-game.apk", ArtifactNames.gameApkFileName(report))
+        assertNotEquals(ArtifactNames.apkFileName(report), ArtifactNames.gameApkFileName(report))
+        assertNotEquals(ArtifactNames.placeholderApkFileName(report), ArtifactNames.gameApkFileName(report))
+    }
 }

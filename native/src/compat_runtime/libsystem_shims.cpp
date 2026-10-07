@@ -590,6 +590,72 @@ void ShimAdapter::registerBindings(ShimRegistry &registry) {
                          registers.r[0] = 0;
                          return true;
                      });
+    // Itanium C++ ABI allocation entry points. The 32-bit ARM mangled names are
+    // exact (`__Znwm`, `__Znam`, `__ZdlPv`, `__ZdaPv`); the runtime serves them
+    // from the same bounded guest heap as malloc/free, so an in-image C++
+    // operator new/delete pair gets real, trackable storage instead of a trap.
+    // A size that overflows the 32-bit request or a delete of a pointer the
+    // heap does not own fails closed.
+    registerFunction(registry, "__Znwm", "libsystem-cxx-operator-new",
+                     [this](CpuRegisterState &registers, GuestAddressSpace &memory,
+                            std::string &reason) {
+                         const std::size_t requested = registers.r[0];
+                         std::lock_guard<std::mutex> lock(mutex_);
+                         const auto block = allocate(memory, requested);
+                         if (block == 0)
+                             return fail(memory, reason,
+                                         "operator new could not satisfy " +
+                                             std::to_string(requested) +
+                                             " bytes from the bounded guest heap");
+                         registers.r[0] = block;
+                         return true;
+                     });
+    registerFunction(registry, "__Znam", "libsystem-cxx-operator-new-array",
+                     [this](CpuRegisterState &registers, GuestAddressSpace &memory,
+                            std::string &reason) {
+                         const std::size_t requested = registers.r[0];
+                         std::lock_guard<std::mutex> lock(mutex_);
+                         const auto block = allocate(memory, requested);
+                         if (block == 0)
+                             return fail(memory, reason,
+                                         "operator new[] could not satisfy " +
+                                             std::to_string(requested) +
+                                             " bytes from the bounded guest heap");
+                         registers.r[0] = block;
+                         return true;
+                     });
+    registerFunction(registry, "__ZdlPv", "libsystem-cxx-operator-delete",
+                     [this](CpuRegisterState &registers, GuestAddressSpace &memory,
+                            std::string &reason) {
+                         const auto address = registers.r[0];
+                         std::lock_guard<std::mutex> lock(mutex_);
+                         if (address != 0) {
+                             const auto found = blocks_.find(address);
+                             if (found == blocks_.end() || found->second.free)
+                                 return fail(memory, reason,
+                                             "operator delete received a pointer that is not a "
+                                             "live bounded guest-heap allocation");
+                             release(memory, address);
+                         }
+                         registers.r[0] = 0;
+                         return true;
+                     });
+    registerFunction(registry, "__ZdaPv", "libsystem-cxx-operator-delete-array",
+                     [this](CpuRegisterState &registers, GuestAddressSpace &memory,
+                            std::string &reason) {
+                         const auto address = registers.r[0];
+                         std::lock_guard<std::mutex> lock(mutex_);
+                         if (address != 0) {
+                             const auto found = blocks_.find(address);
+                             if (found == blocks_.end() || found->second.free)
+                                 return fail(memory, reason,
+                                             "operator delete[] received a pointer that is not a "
+                                             "live bounded guest-heap allocation");
+                             release(memory, address);
+                         }
+                         registers.r[0] = 0;
+                         return true;
+                     });
     registered_ = true;
 }
 

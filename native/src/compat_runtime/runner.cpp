@@ -354,6 +354,8 @@ radek::Json BootAttemptRunner::run(const std::vector<std::uint8_t> &mainBinary,
     GuestFunction guestFunction;
     guestFunction.entryPoint = load.entryPoint;
     guestFunction.thumb = load.thumb;
+    guestFunction.instructionLimit = entryInstructionBudget_;
+    guestFunction.timeLimitMicros = entryTimeLimitMicros_;
     guestFunction.origin = "main-executable/" + load.entryPointSource;
     auto memory = addressSpace.callbacks();
     memory.invokeGuestCallout = [this, &addressSpace](GuestAddress address,
@@ -378,18 +380,74 @@ radek::Json BootAttemptRunner::run(const std::vector<std::uint8_t> &mainBinary,
     report["functionOrigin"] = functionOrigin;
     report["execution"]["functionOrigin"] = functionOrigin;
 
-    const auto result = cpu_.executeGuestFunction(prepared, memory, registers);
+    constexpr std::uint32_t kBootMainThreadFrames = 8;
+    if (lifecycle_.setMainThreadServiceLimit)
+        lifecycle_.setMainThreadServiceLimit(addressSpace, kBootMainThreadFrames);
+    auto result = cpu_.executeGuestFunction(prepared, memory, registers);
+    std::uint64_t totalInstructions = result.instructions;
+    bool mainThreadEntryAttempted = false;
+    radek::Json mainLoop = radek::Json::object();
+    mainLoop["attempted"] = false;
+    mainLoop["instructions"] = std::uint64_t{0};
+    mainLoop["status"] = "NOT_REACHED";
+    mainLoop["servicedFrames"] = std::uint64_t{0};
+    mainLoop["frameLimit"] = static_cast<std::uint64_t>(kBootMainThreadFrames);
+    // A completed startup chain may leave the app's background thread queued
+    // (`+[NSThread detachNewThreadSelector:...]`). The runtime cannot start a
+    // second host thread, so the queued body runs on the same guest CPU with its
+    // own bounded budget and its own report section.
+    if (result.status == CpuExecutionStatus::Returned && lifecycle_.prepareMainThreadEntry) {
+        CpuRegisterState mainThreadRegisters = result.registers;
+        GuestAddress mainThreadEntry = 0;
+        std::string preparationError;
+        if (lifecycle_.prepareMainThreadEntry(addressSpace, mainThreadRegisters,
+                                              mainThreadEntry, preparationError)) {
+            GuestFunction mainThreadFunction;
+            mainThreadFunction.entryPoint = mainThreadEntry;
+            mainThreadFunction.thumb = (mainThreadEntry & 1U) != 0;
+            mainThreadFunction.instructionLimit = mainThreadInstructionBudget_;
+            mainThreadFunction.timeLimitMicros = mainThreadTimeLimitMicros_;
+            mainThreadFunction.origin = "lifecycle/background-thread-entry";
+            PreparedGuestFunction preparedMainThread;
+            std::string mainThreadPreparationError;
+            if (cpu_.prepareGuestFunction(mainThreadFunction, memory, preparedMainThread,
+                                          mainThreadPreparationError)) {
+                mainThreadEntryAttempted = true;
+                const auto mainThreadResult =
+                    cpu_.executeGuestFunction(preparedMainThread, memory, mainThreadRegisters);
+                totalInstructions += mainThreadResult.instructions;
+                mainLoop["attempted"] = true;
+                mainLoop["entryPoint"] = static_cast<std::uint64_t>(mainThreadEntry);
+                mainLoop["status"] = executionStatusName(mainThreadResult.status);
+                mainLoop["instructions"] = mainThreadResult.instructions;
+                mainLoop["message"] = mainThreadResult.message;
+                result = mainThreadResult;
+            } else {
+                mainLoop["status"] = "PREPARATION_FAILED";
+                mainLoop["message"] = mainThreadPreparationError;
+            }
+        } else if (!preparationError.empty()) {
+            mainLoop["status"] = "ENTRY_UNAVAILABLE";
+            mainLoop["message"] = preparationError;
+        }
+    }
+    if (lifecycle_.finishMainThreadEntry)
+        lifecycle_.finishMainThreadEntry(addressSpace);
     functionOrigin["executionAttempted"] = result.started;
     functionOrigin["executionStatus"] = executionStatusName(result.status);
     report["functionOrigin"] = functionOrigin;
     report["execution"]["functionOrigin"] = functionOrigin;
     report["cpu"]["status"] = executionStatusName(result.status);
-    report["cpu"]["instructions"] = result.instructions;
+    report["cpu"]["instructions"] = totalInstructions;
     report["cpu"]["message"] = result.message;
     report["execution"]["status"] = executionStatusName(result.status);
     report["execution"]["entryPointReached"] = result.started;
-    report["execution"]["instructions"] = result.instructions;
+    report["execution"]["instructions"] = totalInstructions;
     report["execution"]["registers"] = registerReport(result.registers);
+    if (mainThreadEntryAttempted || mainLoop["status"].value != "NOT_REACHED")
+        report["mainLoop"] = mainLoop;
+    if (lifecycle_.describe)
+        lifecycle_.describe(addressSpace, report);
 
     // Name the stopping import: a trap call records it directly; a data touch
     // inside the trap range maps back through the fault address.

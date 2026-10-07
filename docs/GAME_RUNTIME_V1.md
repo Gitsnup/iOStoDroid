@@ -17,7 +17,12 @@ shows a preview or menu.
    through `Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt`.
 3. Unimplemented imports are bound to abort-on-call traps. The guest executes
    real instructions from the Mach-O entry point until it calls (or touches
-   data of) the first unimplemented import.
+   data of) the first unimplemented import. Implemented adapters run for real
+   instead of trapping: libSystem memory/string/malloc, the Itanium C++ ABI
+   allocation entry points, the bounded Objective-C runtime, the AudioToolbox
+   session state calls, and the bounded application-lifecycle chain
+   (`UIApplicationMain` -> delegate instantiation -> `applicationDidFinishLaunching:`
+   -> bounded service of the queued background-thread body).
 4. The launcher shows loader/trap/instruction progress as a scrolling boot
    log. When guest execution stops or setup fails, the launcher keeps the
    diagnostic screen open; it does not throw an Android crash or show a preview.
@@ -85,8 +90,27 @@ and digest against the report.
 `tests/data/AngryBirds_v1.0_os30.ipa` (thin ARMv6 Mach-O, 1,822,112 bytes,
 267 bundle files):
 
-- Loader: `LOADED_WITH_TRAPS`, 39 resolved / 539 trapped / 0 unresolved.
-- Boot: entry point reached, 34 guest instructions executed, stopped at the
-  first unimplemented call `_UIApplicationMain` (`trapCalls: 1`).
-- The host suite (`tests/test_gameruntime.py`) and CI pin this behavior; the
-  manifest from the CI run is uploaded as `angrybirds-gameboot-artifacts`.
+- Loader: `LOADED_WITH_TRAPS`, 60 resolved / 518 trapped / 0 unresolved.
+- Boot: entry point reached, **340,309 guest instructions executed**. The
+  runtime enters `_main`, performs the `NSAutoreleasePool +new` setup, enters
+  `UIApplicationMain`, instantiates the image's own `AppController` delegate,
+  wires it into the `UIApplication` singleton, and delivers
+  `applicationDidFinishLaunching:` to the real guest implementation. Inside that
+  method the app builds its UIKit window/EAGL view (including `-[UIView layer]`
+  -> `CAEAGLLayer`, `numberWithBool:`, `dictionaryWithObjectsAndKeys:`,
+  `EAGLContext initWithAPI:`/`setCurrentContext:`, `addSubview:`,
+  `makeKeyAndVisible`) and then enters its engine's render setup, whose first
+  OpenGL ES call (from guest text around `0xAC50C`) stops the attempt.
+- Report: `lifecycle.applicationMainEntered: true`,
+  `applicationMainReturned: false` (the boot stopped inside the nested delegate
+  call), `delegateClassName: "AppController"`, nine recorded startup-chain
+  events, and `trappedImport: "_glFrontFace"` with `trapCalls: 1`.
+- The VFP unit is enabled for the guest (`CPACR` CP10/CP11 access and
+  `FPEXC.EN`), because the ARMv6 image uses scalar VFP from its first delegate
+  frame on; without it the attempt stopped on a decode fault at `vpush`.
+- The host suite (`tests/test_gameruntime.py`) and CI pin the *shape* of this
+  behavior (entry point reached, one named trapped import, a non-empty startup
+  chain); the manifest from the CI run is uploaded as
+  `angrybirds-gameboot-artifacts`.
+- Remaining honest gap: OpenGL ES (51 `_gl*` imports) is **not** implemented, so
+  the attempt stops at the first GL call and nothing is rendered.

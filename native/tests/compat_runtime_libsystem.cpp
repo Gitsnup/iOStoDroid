@@ -190,6 +190,31 @@ void testGuestHeapAllocator() {
     CHECK(failed);
 }
 
+// The Itanium C++ ABI allocation entry points share the bounded guest heap, so
+// an in-image operator new/delete pair gets real storage instead of a trap.
+void testCxxOperatorAllocators() {
+    Harness harness;
+    const auto object = harness.call("__Znwm", 24);
+    CHECK(object != 0);
+    harness.write(object, "cxx object");
+    const auto array = harness.call("__Znam", 64);
+    CHECK(array != 0 && array != object);
+    CHECK(harness.read(object, 10) == "cxx object");
+    CHECK(harness.call("__ZdlPv", object) == 0);
+    CHECK(harness.call("__ZdaPv", array) == 0);
+    // A delete of a pointer the bounded heap does not own fails closed.
+    bool refused = false;
+    try {
+        harness.call("__ZdlPv", kDataBase + 4);
+    } catch (const std::exception &error) {
+        refused = std::string(error.what()).find("not a live bounded guest-heap allocation") !=
+                  std::string::npos;
+    }
+    CHECK(refused);
+    // A null delete is valid C++ and must not fail.
+    CHECK(harness.call("__ZdlPv", 0) == 0);
+}
+
 void testUnregisteredSymbolsStillFailClosed() {
     Harness harness;
     CHECK(!harness.registry.resolve("_printf").has_value());
@@ -201,7 +226,7 @@ void testUnregisteredSymbolsStillFailClosed() {
         if (binding.library == "libSystem.B.dylib")
             ++registered;
     }
-    CHECK(registered == 20);
+    CHECK(registered == 24);
 }
 
 } // namespace
@@ -211,6 +236,7 @@ int main() {
         testMemoryAdapters();
         testStringAdapters();
         testGuestHeapAllocator();
+        testCxxOperatorAllocators();
         testUnregisteredSymbolsStillFailClosed();
     } catch (const std::exception &error) {
         std::fprintf(stderr, "compat-runtime libsystem test failed: %s\n", error.what());

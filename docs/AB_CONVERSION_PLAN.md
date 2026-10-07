@@ -59,12 +59,23 @@ ARM build with zig for the APK):
 
 Verification (no device in sandbox; Unicorn 2.1.4 ARM+VFP harness is a
 **dev-test tool only**, never shipped in the APK — same precedent as the
-repo's existing pinned-Unicorn host tests):
+repo's existing pinned-Unicorn host tests). The pinned Unicorn 2.1.4 ARM32
+backend in `native/src/compat_runtime/unicorn_backend.cpp` executes the image's
+scalar VFP only after the runtime grants CP10/CP11 access (`CPACR`) and sets
+`FPEXC.EN`; without that setup the guest stops on a decode fault at its first
+`vpush`. That is guest CPU-configuration state, not a Unicorn decoder
+limitation:
 
 - [ ] Host unit tests for every runtime module (ctest + pytest).
-- [ ] Unicorn guest harness: slid image + bound imports → `_main` →
+- [~] Unicorn guest harness: slid image + bound imports → `_main` →
       `UIApplicationMain` → delegate launch → scripted touches/accelerometer →
       N stable frames with sane GL/AL call streams, save-file writes.
+      Observed today: the real image boots through `_main` →
+      `UIApplicationMain` → its own `AppController`
+      `applicationDidFinishLaunching:` → UIKit window/EAGL view creation and
+      stops at the first OpenGL ES import (`_glFrontFace`, 340,309 guest
+      instructions). No frame, no touch delivery, and no GL/AL call stream yet;
+      the remaining items stay unchecked.
 - [ ] Structural APK validation (manifest parse-back, alignment, signature,
       ARM `.so` ELF checks, import-manifest check).
 - [ ] Full repo test suite green; docs updated with honest test-status notes.

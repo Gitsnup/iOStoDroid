@@ -9,6 +9,7 @@
 // visible in its diagnostic screen without pretending to be playable.
 #include "compat_runtime/audio_session_shims.hpp"
 #include "compat_runtime/cpu.hpp"
+#include "compat_runtime/libsystem_shims.hpp"
 #include "compat_runtime/objc_shims.hpp"
 #include "compat_runtime/runner.hpp"
 #include "compat_runtime/shim_registry.hpp"
@@ -81,14 +82,17 @@ Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt(JNIEnv *env, jobj
             return nullptr;
         radek::compat_runtime::ShimRegistry shims;
         radek::compat_runtime::objc::ShimAdapter objcShims;
+        radek::compat_runtime::libsystem::ShimAdapter libsystemShims;
         radek::compat_runtime::audio::ShimAdapter audioShims;
         radek::compat_runtime::SjLjUnwindAdapter sjljUnwind;
         objcShims.registerBindings(shims);
+        libsystemShims.registerBindings(shims);
         audioShims.registerBindings(shims);
         sjljUnwind.registerBindings(shims);
         radek::compat_runtime::TrapShimAdapter traps;
         const auto cpu = radek::compat_runtime::createArm32CpuBackend();
-        radek::compat_runtime::BootAttemptRunner runner(shims, *cpu, traps);
+        radek::compat_runtime::BootAttemptRunner runner(shims, *cpu, traps,
+                                                       objcShims.lifecycleHooks());
         return jsonString(env, runner.run(bytes, true));
     } catch (const std::exception &error) {
         const std::string detail = std::string("Runtime initialization failed closed: ") + error.what();

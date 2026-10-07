@@ -1113,9 +1113,3 @@ class MainActivity : Activity() {
         }
     }
 }
-s not tested."))
-                Library(context).save(dir, report)
-            } finally { temporary.delete() }
-        }
-    }
-}

@@ -244,6 +244,10 @@ class AngryBirdsBootTests(unittest.TestCase):
             self.assertEqual(0, probe["unresolvedSymbols"])
             self.assertTrue(probe["entryPointReached"])
             self.assertGreater(probe["instructions"], 0)
+            # The Darwin-only translation layer is registered and reports its
+            # real process-stream cells; none of these names is an Android export.
+            self.assertEqual(34, probe["darwinCompatBoundSymbols"])
+            self.assertEqual(3, probe["darwinCompatStreamCells"])
             # The bounded boot attempt ends at a documented boundary: either the
             # first unimplemented import it touches (trap) or one of its
             # execution limits when the guest stays inside its own code.

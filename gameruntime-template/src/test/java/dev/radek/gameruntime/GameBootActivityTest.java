@@ -142,10 +142,10 @@ public final class GameBootActivityTest {
         writeU16String(out, name);
         writeU16Be(out, x);
         writeU16Be(out, y);
-        writeU16Be(width);
-        writeU16Be(height);
-        writeU16Be(pivotX);
-        writeU16Be(pivotY);
+        writeU16Be(out, width);
+        writeU16Be(out, height);
+        writeU16Be(out, pivotX);
+        writeU16Be(out, pivotY);
     }
 
     private static byte[] buildSinglePixelCgbiPng(int b, int g, int r, int a) throws IOException {

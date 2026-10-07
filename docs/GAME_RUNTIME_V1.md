@@ -98,6 +98,19 @@ signature/package/label/install audits) with game-runtime inputs:
 `GameRuntimeArtifactContract` re-validates name, package, source hash, signer,
 and digest against the report.
 
+## Launcher presentation
+
+- The launcher runs fullscreen in **sensor landscape** (the device can be turned
+  left or right) and shows **only the game**: the recovered splash frames are
+  shown fullscreen, each one exactly once, and the sequence stays on the last
+  frame instead of cycling; the guest's own EGL frames take over as soon as the
+  guest renders. The diagnostics panel stays hidden while the guest runs.
+- When the attempt stops for any reason (unimplemented import, budget,
+  fault, unavailable backend), the launcher switches back to **portrait** and
+  reveals the diagnostic log, so the stop reason is readable without touching
+  anything. The activity declares `configChanges` for orientation so rotating
+  the device never restarts the guest.
+
 ## Angry Birds v1.0 status (tracked fixture)
 
 `tests/data/AngryBirds_v1.0_os30.ipa` (thin ARMv6 Mach-O, 1,822,112 bytes,

@@ -9,6 +9,7 @@
 // visible in its diagnostic screen without pretending to be playable.
 #include "compat_runtime/audio_session_shims.hpp"
 #include "compat_runtime/compiler_rt_shims.hpp"
+#include "compat_runtime/gles_shims.hpp"
 #include "compat_runtime/cpu.hpp"
 #include "compat_runtime/libsystem_shims.hpp"
 #include "compat_runtime/objc_shims.hpp"
@@ -22,12 +23,32 @@
 
 #include <jni.h>
 
+#include <android/native_window_jni.h>
+
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace {
 constexpr jsize kMaximumMainBinaryBytes = 256 * 1024 * 1024;
+
+// The native window acquired from the launcher's Surface. It is kept alive for
+// as long as the guest may create or swap an EGL surface; a replacement window
+// releases the previous one.
+ANativeWindow *gAttachedWindow = nullptr;
+
+void attachSurface(JNIEnv *env, jobject surface) {
+    ANativeWindow *window = surface != nullptr ? ANativeWindow_fromSurface(env, surface) : nullptr;
+    if (window == gAttachedWindow) {
+        if (window != nullptr)
+            ANativeWindow_release(window);
+        return;
+    }
+    radek::compat_runtime::gles::setDefaultNativeWindow(window);
+    if (gAttachedWindow != nullptr)
+        ANativeWindow_release(gAttachedWindow);
+    gAttachedWindow = window;
+}
 
 jstring jsonString(JNIEnv *env, const radek::Json &json) {
     const std::string text = json.dump();
@@ -63,6 +84,18 @@ radek::Json blockedReport(const std::string &message, bool authorizationConfirme
     return report;
 }
 } // namespace
+
+// The launcher hands its SurfaceView's surface over before (or while) the boot
+// attempt runs, so the guest's EAGL drawable can present through EGL on screen.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_radek_gameruntime_GameBootActivity_setGameSurface(JNIEnv *env, jclass, jobject surface) {
+    try {
+        attachSurface(env, surface);
+    } catch (...) {
+        // A surface the runtime cannot use never fails the boot attempt; the
+        // GL layer reports the missing drawable through its own diagnostics.
+    }
+}
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt(JNIEnv *env, jobject,

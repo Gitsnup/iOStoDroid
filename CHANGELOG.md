@@ -123,6 +123,25 @@ source bytes only), and the fullscreen/automatic splash with the per-status stop
 
 Input under test: `tests/data/AngryBirds_v1.0_os30.ipa`.
 
+### The launcher shows only the game (and the log when the attempt stops)
+
+The game-runtime launcher now runs fullscreen in **sensor landscape** and shows **only the
+game**: the recovered splash frames are displayed once each and the sequence then stays on
+the last frame — the previous tap-to-cycle behaviour and the modulo wrap are gone, and the
+diagnostics panel starts hidden while the guest runs on screen. The `SurfaceView`'s
+surface is handed to the runtime through `setGameSurface` (JNI → `ANativeWindow` →
+`eglCreateWindowSurface`), and a surface that arrives after the first offscreen attach makes
+the GL layer recreate its EGL window surface so the guest's frames reach the display. When
+the attempt stops for any reason, the launcher switches back to **portrait** with the
+diagnostic log visible; `configChanges` keeps a device rotation from restarting the guest.
+
+### The sanitizer job builds the current runtime, not an older subset
+
+`tools/test_sanitized.sh` compiled only the pre-existing compat-runtime translation units,
+so the AddressSanitizer/UndefinedBehaviorSanitizer job failed on the new GLES, compiler-rt
+and virtual-filesystem sources. The three source lists now match the CMake/build-script
+lists; the sanitized suites pass again.
+
 ### OpenGL ES goes to the platform driver — no reimplementation
 
 The guest's fixed-function OpenGL ES 1.1 imports no longer stop the attempt. They are

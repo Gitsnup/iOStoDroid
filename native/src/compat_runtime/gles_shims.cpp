@@ -495,6 +495,20 @@ struct Forwarder::Impl {
         if (egl.current) {
             egl.width = static_cast<int>(width);
             egl.height = static_cast<int>(height);
+            // The Android surface may arrive after the first (offscreen) attach:
+            // recreate the drawable so the frames reach the screen instead of a
+            // pbuffer nobody can see.
+            if (nativeWindow != nullptr && !egl.windowSurface) {
+                destroyEgl();
+                std::string why;
+                if (createEglSurface(static_cast<int>(width), static_cast<int>(height), why)) {
+                    note("EAGL drawable re-attached to an EGL window surface (frames go to the "
+                         "Android surface)");
+                    return true;
+                }
+                note("EGL window surface setup failed: " + why + "; GL calls are refused");
+                return false;
+            }
             return true;
         }
         if (!driver.eglLoaded) {

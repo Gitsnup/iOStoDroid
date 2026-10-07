@@ -6,6 +6,7 @@
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
             android:name="dev.radek.gameruntime.GameBootActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

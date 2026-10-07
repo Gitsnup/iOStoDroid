@@ -1,5 +1,6 @@
 package dev.radek.gameruntime;
 
+import android.content.pm.ActivityInfo;
 import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
@@ -92,6 +93,54 @@ public final class GameBootActivityTest {
         assertFalse(activity.isFinishing());
 
         mainLooper.idleFor(3, TimeUnit.SECONDS);
+        assertFalse(activity.isFinishing());
+    }
+
+    @Test
+    public void gameRunsLandscapeAndTheStopScreenReturnsToPortrait() {
+        GameBootActivity activity = Robolectric.buildActivity(GameBootActivity.class).create().get();
+
+        // While the guest runs the launcher is landscape (either direction) with
+        // only the game visible; the diagnostic panel is hidden.
+        assertEquals(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE,
+                activity.getRequestedOrientation());
+        assertFalse(activity.diagnosticsOverlayVisible());
+
+        ShadowLooper mainLooper = Shadows.shadowOf(Looper.getMainLooper());
+        mainLooper.idle();
+        activity.displayBootResult(
+                "{\"loader\":{\"status\":\"LOADED_WITH_TRAPS\",\"resolvedSymbolCount\":138,"
+                        + "\"trappedSymbolCount\":440,\"unresolvedSymbolCount\":0},"
+                        + "\"execution\":{\"status\":\"INSTRUCTION_LIMIT\",\"instructions\":2000000},"
+                        + "\"reason\":\"guest function reached its instruction limit.\"}");
+        mainLooper.idle();
+
+        // The attempt is over: back to portrait with the diagnostics on screen.
+        assertEquals(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT, activity.getRequestedOrientation());
+        assertTrue(activity.diagnosticsOverlayVisible());
+        String screenText = textIn(activity.getWindow().getDecorView());
+        assertTrue(screenText.contains("Guest boot budget reached"));
+        assertTrue(screenText.contains("This APK is not a playable conversion"));
+        assertFalse(activity.isFinishing());
+    }
+
+    @Test
+    public void splashFramesAdvanceOnceAndStayOnTheLastOne() {
+        GameBootActivity activity = Robolectric.buildActivity(GameBootActivity.class).create().get();
+        ShadowLooper mainLooper = Shadows.shadowOf(Looper.getMainLooper());
+        mainLooper.idle();
+
+        activity.installSyntheticSplashFramesForTest(3);
+        assertEquals(3, activity.installedSplashFrameCount());
+        assertEquals(0, activity.currentSplashFrameIndex());
+
+        mainLooper.idleFor(1, TimeUnit.SECONDS);
+        assertEquals(1, activity.currentSplashFrameIndex());
+
+        // Past the end of the recovered frames the boot screen stays on the last
+        // frame instead of cycling back to the first one.
+        mainLooper.idleFor(5, TimeUnit.SECONDS);
+        assertEquals(2, activity.currentSplashFrameIndex());
         assertFalse(activity.isFinishing());
     }
 

@@ -1,6 +1,7 @@
 package dev.radek.gameruntime;
 
 import android.app.Activity;
+import android.content.pm.ActivityInfo;
 import android.content.res.AssetManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -14,6 +15,9 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -77,6 +81,8 @@ public final class GameBootActivity extends Activity {
     private ScrollView scroller;
     private ImageView splashImageView;
     private TextView splashCaptionView;
+    private SurfaceView gameSurfaceView;
+    private LinearLayout overlayView;
     private final List<SplashFrame> activeSplashFrames = new ArrayList<>();
     private int currentSplashIndex = 0;
     private boolean splashAnimationRunning = false;
@@ -90,12 +96,37 @@ public final class GameBootActivity extends Activity {
                 splashAnimationRunning = false;
                 return;
             }
+            // Every recovered splash frame is shown once and the sequence then
+            // stays on the last frame: the boot screen never cycles back.
+            if (currentSplashIndex >= activeSplashFrames.size() - 1) {
+                splashAnimationRunning = false;
+                return;
+            }
             showSplashFrame(currentSplashIndex + 1);
-            mainHandler.postDelayed(this, SPLASH_FRAME_INTERVAL_MS);
+            if (currentSplashIndex < activeSplashFrames.size() - 1) {
+                mainHandler.postDelayed(this, SPLASH_FRAME_INTERVAL_MS);
+            } else {
+                splashAnimationRunning = false;
+            }
         }
     };
 
     private static native String runGameBootAttempt(byte[] mainBinary, boolean authorizationConfirmed);
+
+    /**
+     * Hands the on-screen surface to the runtime so the guest's EAGL drawable can
+     * present to it through EGL; a null surface detaches it again. The native
+     * runtime is absent in unit tests, so publishing is guarded.
+     */
+    private static native void setGameSurface(Surface surface);
+
+    private static void publishGameSurface(Surface surface) {
+        try {
+            setGameSurface(surface);
+        } catch (Throwable ignored) {
+            // No native runtime in this process (unit tests): nothing to attach.
+        }
+    }
 
     /** Descriptor for a single sprite region inside a game splash sprite sheet (e.g. SPLASHES.dat). */
     public static final class SplashSpriteEntry {
@@ -189,6 +220,11 @@ public final class GameBootActivity extends Activity {
                 if (destroyed || titleView == null || logView == null) return;
                 splashAnimationRunning = false;
                 mainHandler.removeCallbacks(splashAdvance);
+                // The attempt is over: turn the device back to portrait and show
+                // the diagnostics the guest produced.
+                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+                if (gameSurfaceView != null) gameSurfaceView.setVisibility(View.GONE);
+                if (overlayView != null) overlayView.setVisibility(View.VISIBLE);
                 titleView.setText(title);
                 titleView.setTextColor(Color.rgb(255, 190, 92));
                 logView.append(detail);
@@ -348,9 +384,12 @@ public final class GameBootActivity extends Activity {
     }
 
     /**
-     * Fullscreen boot screen: the recovered splash covers the whole display and
-     * the diagnostics sit in a translucent panel at the bottom. No viewport tap
-     * is needed or accepted for frame cycling — the splash advances by itself.
+     * Fullscreen boot screen. While the guest runs, only the game is visible:
+     * the recovered splash covers the display until the guest's own EGL frames
+     * take over, and the diagnostic panel stays hidden. No viewport tap is needed
+     * or accepted for frame cycling — the splash advances by itself, once per
+     * frame. When the attempt stops, {@link #showTerminalState} switches back to
+     * portrait and reveals the diagnostics.
      */
     private void applyFullscreenMode() {
         getWindow().setStatusBarColor(Color.TRANSPARENT);
@@ -381,6 +420,10 @@ public final class GameBootActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         applyFullscreenMode();
+        // A guest game runs in landscape; both directions are allowed so the
+        // device can be turned left or right. showTerminalState() returns to
+        // portrait for the diagnostic log.
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(6, 9, 16));
@@ -390,6 +433,32 @@ public final class GameBootActivity extends Activity {
         splashImageView.setContentDescription("Recovered game splash screen");
         root.addView(splashImageView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+
+        // The guest's frames land on this surface (the runtime attaches the
+        // EAGL drawable to it through EGL). It sits above the splash so the game
+        // covers the boot screen as soon as it renders.
+        gameSurfaceView = new SurfaceView(this);
+        gameSurfaceView.setContentDescription("Guest game surface");
+        gameSurfaceView.setZOrderOnTop(true);
+        gameSurfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override
+            public void surfaceCreated(SurfaceHolder holder) {
+                publishGameSurface(holder.getSurface());
+            }
+
+            @Override
+            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+                publishGameSurface(holder.getSurface());
+            }
+
+            @Override
+            public void surfaceDestroyed(SurfaceHolder holder) {
+                publishGameSurface(null);
+            }
+        });
+        root.addView(gameSurfaceView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER));
 
         LinearLayout overlay = new LinearLayout(this);
         overlay.setOrientation(LinearLayout.VERTICAL);
@@ -448,6 +517,10 @@ public final class GameBootActivity extends Activity {
 
         root.addView(overlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        overlayView = overlay;
+        // While the guest runs the user sees only the game; the diagnostics are
+        // revealed by showTerminalState() once the attempt stops.
+        overlayView.setVisibility(View.GONE);
 
         setContentView(root);
 
@@ -553,10 +626,43 @@ public final class GameBootActivity extends Activity {
         }
     }
 
+    /** Test hook: number of recovered splash frames currently installed. */
+    int installedSplashFrameCount() {
+        return activeSplashFrames.size();
+    }
+
+    /** Test hook: index of the splash frame the boot screen currently shows. */
+    int currentSplashFrameIndex() {
+        return currentSplashIndex;
+    }
+
+    /** Test hook: true while the diagnostic panel is on screen. */
+    boolean diagnosticsOverlayVisible() {
+        return overlayView != null && overlayView.getVisibility() == View.VISIBLE;
+    }
+
+    /**
+     * Test hook: install synthetic frames and run the launcher's once-through
+     * advance rule. Unit tests run without assets, so the launcher has already
+     * reached its terminal state; that flag is cleared here so the boot-screen
+     * advance can be exercised.
+     */
+    void installSyntheticSplashFramesForTest(int count) {
+        bootFinished = false;
+        mainHandler.removeCallbacks(splashAdvance);
+        splashAnimationRunning = false;
+        List<SplashFrame> frames = new ArrayList<>();
+        for (int index = 0; index < count; index++) {
+            frames.add(new SplashFrame("frame " + index, "test",
+                    Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888), 8, 8));
+        }
+        installSplashFrames(frames);
+    }
+
     private void showSplashFrame(int index) {
         if (activeSplashFrames.isEmpty() || splashImageView == null || splashCaptionView == null) return;
-        currentSplashIndex = ((index % activeSplashFrames.size()) + activeSplashFrames.size())
-                % activeSplashFrames.size();
+        // Clamped, never wrapped: the last frame stays on screen.
+        currentSplashIndex = Math.max(0, Math.min(index, activeSplashFrames.size() - 1));
         SplashFrame frame = activeSplashFrames.get(currentSplashIndex);
         splashImageView.setImageBitmap(frame.bitmap);
         String advanceHint = activeSplashFrames.size() > 1

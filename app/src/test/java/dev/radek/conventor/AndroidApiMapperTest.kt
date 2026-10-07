@@ -428,7 +428,7 @@ class AndroidApiMapperTest {
             "_CFAbsoluteTimeGetCurrent", "_NSLog", "_SCNetworkReachabilityGetFlags",
             "_objc_msgSend", "_OBJC_CLASS_\$_UIView", "_OBJC_CLASS_\$_CAEAGLLayer",
             "_OBJC_CLASS_\$_SKPaymentQueue", "_OBJC_CLASS_\$_GKLocalPlayer",
-            "___divdf3", "__Unwind_SjLj_Register", "__ZSt9terminatev",
+            "___divdi3", "__Unwind_SjLj_Register", "__ZSt9terminatev",
         )
         val imports = JSONArray()
         representativeGameImports.forEach { imports.put(JSONObject().put("name", it)) }

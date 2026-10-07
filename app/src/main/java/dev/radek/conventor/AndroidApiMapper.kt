@@ -1320,8 +1320,14 @@ internal object AndroidApiMapper {
         // Reviewed Android mappings of every kind. Every import that the
         // classifier can assign a reviewed target to is counted here, so this
         // figure reaches 100% for a fully triaged IPA while the strict
-        // same-name NDK subset stays separately reported and smaller.
+        // same-name NDK subset stays separately reported and smaller. The
+        // per-kind counts follow the *assigned* classification, so an import is
+        // counted in exactly one kind and the kinds always sum to the total.
         var reviewedMappedImports = 0
+        var reviewedMappedSameName = 0
+        var reviewedMappedCompilerRuntime = 0
+        var reviewedMappedCompatImplementation = 0
+        var reviewedMappedSemantic = 0
         symbols.sorted().forEach { source ->
             // Mach-O C symbols conventionally carry one leading underscore. Remove
             // only that decoration before matching; Objective-C symbols are parsed
@@ -1462,6 +1468,13 @@ internal object AndroidApiMapper {
                     }
                 }
             }
+            when (item.optString("classification")) {
+                "BIONIC_SYMBOL_CANDIDATE" -> reviewedMappedSameName++
+                "COMPILER_RUNTIME_CANDIDATE" -> reviewedMappedCompilerRuntime++
+                "IMPLEMENTED_API_REPLACEMENT_AVAILABLE",
+                "COMPAT_VERIFIED_HANDLER_RESOLVED" -> reviewedMappedCompatImplementation++
+                "SEMANTIC_REWRITE_CANDIDATE" -> reviewedMappedSemantic++
+            }
             if (item.optString("classification") in REVIEWED_MAPPING_CLASSIFICATIONS) reviewedMappedImports++
             val verifiedExportEvidence = verifiedOnDevice || replacementVerified
             val hostTestedEvidence = replacementTarget != null
@@ -1511,13 +1524,15 @@ internal object AndroidApiMapper {
             .put("count", reviewedMappedImports)
             .put("percent", coveragePercent(reviewedMappedImports, total))
             .put("distinctImportSymbols", total)
-            .put("sameNameNdkSubsetCount", directCandidates)
-            .put("sameNameNdkSubsetPercent", coveragePercent(directCandidates, total))
+            .put("strictSameNameNdkSubsetCount", directCandidates)
+            .put("strictSameNameNdkSubsetPercent", coveragePercent(directCandidates, total))
+            .put("breakdownKindCountsSumToCount", true)
             .put("breakdown", JSONObject()
-                .put("sameNameNdkOrSystemExport", directCandidates)
-                .put("compilerRuntimeToolchain", compilerRuntimeCandidates)
-                .put("concreteCompatImplementation", implementedReplacementCandidates + compatVerifiedHandlers)
-                .put("reviewedSemanticApiTarget", semanticCandidates)
+                .put("sameNameNdkOrSystemExport", reviewedMappedSameName)
+                .put("compilerRuntimeToolchain", reviewedMappedCompilerRuntime)
+                .put("concreteCompatImplementation", reviewedMappedCompatImplementation)
+                .put("reviewedSemanticApiTarget", reviewedMappedSemantic)
+                .put("kindCountsSum", reviewedMappedImports)
                 .put("explicitStubHandlerOnly", compatStubHandlers)
                 .put("unmapped", unmappedSymbols))
             .put("kindCountsAreNotInterchangeable", true)

@@ -361,13 +361,16 @@ class AndroidApiMapperTest {
         val reviewed = mapping.getJSONObject("reviewedMapping")
         assertEquals(3, reviewed.getInt("count"))
         assertEquals(75, reviewed.getInt("percent"))
-        assertEquals(1, reviewed.getInt("sameNameNdkSubsetCount"))
-        assertEquals(25, reviewed.getInt("sameNameNdkSubsetPercent"))
+        assertEquals(1, reviewed.getInt("strictSameNameNdkSubsetCount"))
+        assertEquals(25, reviewed.getInt("strictSameNameNdkSubsetPercent"))
         assertTrue(reviewed.getBoolean("kindCountsAreNotInterchangeable"))
         val breakdown = reviewed.getJSONObject("breakdown")
+        // Exactly one kind per import, and the kinds sum to the mapping count.
         assertEquals(1, breakdown.getInt("sameNameNdkOrSystemExport"))
+        assertEquals(0, breakdown.getInt("compilerRuntimeToolchain"))
         assertEquals(1, breakdown.getInt("concreteCompatImplementation"))
         assertEquals(1, breakdown.getInt("reviewedSemanticApiTarget"))
+        assertEquals(3, breakdown.getInt("kindCountsSum"))
         assertEquals(1, breakdown.getInt("explicitStubHandlerOnly"))
         assertEquals(0, breakdown.getInt("unmapped"))
         // No mapping count may be read as rewritten or linked code.

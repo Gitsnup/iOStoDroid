@@ -131,6 +131,57 @@ The Python-generated implementation database still covers all 254 observed impor
 
 The separate `compat-runtime-v1` smoke database now has one `staticEvidence` record containing the top recovered direct-call imports, exact `_main` call/register trace, and host-loader first missing import. It deliberately keeps `apps` and `gamesUnblocked` empty because no on-device smoke was performed; its validator rejects any static record that claims guest execution or a smoke status. The ranked backlog's third family is now C++ ABI/allocation/unwind, based on the observed `__ZdaPv` (61), `__ZdlPv` (59), and `__Znam` (43) direct-call counts. This is a static-evidence and priority delta, not an implementation or game-unblocking delta.
 
+## Strict same-name subset: 181/254 (71.26%) is the honest ceiling for this binary
+
+The question "is the strict same-name NDK subset really implemented — and can it be
+100% for Angry Birds?" has a measurable answer. Re-running the app's own classification
+(catalog + precedence: same-name catalog match first, then compiler-runtime, then
+concrete compat implementation, then semantic target) over the IPA's 254 undefined
+symbols reproduces the on-device figure exactly: **181 direct same-name matches =
+71.26%** — libc 92, GLESv2 27, GLESv1_CM 24, libm 24, libc++_shared 14.
+
+The remaining 73 imports have no same-name export in any Android system library:
+
+- **48 concrete compatibility implementations** (`libioscompat.so`, all host-tested):
+  `UIApplicationMain`, `AudioSessionInitialize`/`AudioSessionSetActive`,
+  `NSSearchPathForDirectoriesInDomains`, `CFConstantStringClassReference`,
+  `objc_msgSend`/`objc_msgSendSuper2`/`objc_msgSend_stret`/`objc_setProperty`/
+  `objc_enumerationMutation`, the OpenAL `al*`/`alc*` entry points, the EAGL
+  `kEAGL*` keys, `__DefaultRuneLocale`/`__maskrune`/`__tolower`/`__toupper`,
+  `__stderrp`/`__stdoutp`/`__stdinp`, `__error`, `__gxx_personality_sj0`,
+  `__divsi3`/`__udivsi3`/`__modsi3`/`__umodsi3`.
+- **17 Objective-C class/metaclass targets** (8 with a reviewed semantic Android
+  target, 9 resolved by the compiled compat registry).
+- **8 compiler-rt/libunwind toolchain symbols** (`_Unwind_SjLj_*`, `__divdi3`,
+  `__fixdfdi`, `__floatdidf`, `__floatdisf`, `__moddi3`).
+
+Audit against AOSP bionic's current symbol maps (`aosp-mirror/platform_bionic`
+`libc/libc.map.txt` with its API 36 version blocks and `libm/libm.map.txt`):
+
+- All 92 libc and 24 libm catalog matches are real exported names (116/116).
+  `ldexp` is exported by **libc.so**, not libm.so; the catalog attribution was
+  corrected (no metric change — the name still matches).
+- `__error`, `__maskrune`, `__stderrp`/`__stdoutp`/`__stdinp`, `__tolower`,
+  `__toupper` are Darwin spellings; Android exports different names (`__errno`,
+  `stderr`/`stdout`/`stdin`, `tolower`/`toupper`), so a same-name link cannot exist.
+- `_Unwind_SjLj_Register`/`Resume`/`Unregister`, `__moddi3` and `__fixdfdi` are
+  absent from bionic entirely.
+- `__divdi3`, `__udivdi3`, `__floatdidf`, `__floatdisf` **are** in bionic libc, but
+  only in the `arm x86` (32-bit) map entries; they do not exist on the arm64 target
+  this converter builds for, so counting them would produce candidates no current
+  device can resolve (the device export check would drop to 181/185).
+- OpenAL, EAGL, AudioToolbox-family and UIKit/Foundation names have no Android
+  provider at all — the catalog deliberately keeps them out so they stay with the
+  compiled compat implementations (asserted by `tests/test_providers.py`).
+
+Catalog upgrades possible from this audit are therefore small and general, not
+Angry-Birds-specific: the `error`/`error_at_line`/`error_message_count`/
+`error_one_per_line`/`error_print_progname` family and `environ` were added to the
+libc set (all present in bionic's map; the `error` family is API 23+). They do not
+change this binary's figure. **100% same-name for this binary is not reachable**:
+71.26% is the honest same-name share, while the reviewed-mapping figure (254/254)
+is the one that is 100%, because every import has exactly one reviewed target kind.
+
 ## Next three shim families to prioritize
 
 This ordering is based on the startup trace and static import ranking; each item still needs an ABI contract, integration tests, and real loader evidence before it can be called supported.

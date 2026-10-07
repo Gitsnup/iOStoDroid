@@ -123,6 +123,23 @@ source bytes only), and the fullscreen/automatic splash with the per-status stop
 
 Input under test: `tests/data/AngryBirds_v1.0_os30.ipa`.
 
+### Same-name subset audited against AOSP bionic: 181/254 is the honest ceiling
+
+The strict same-name NDK figure was re-derived from the IPA with the app's own catalog
+and precedence rules and reproduces the on-device value exactly: **181/254 = 71.26%**
+(libc 92, GLESv2 27, GLESv1_CM 24, libm 24, libc++_shared 14). The remaining 73 imports
+were audited one by one against AOSP bionic's current `libc.map.txt`/`libm.map.txt`:
+all 116 libc+libm matches are real exports, the Darwin-only spellings
+(`__error`, `__maskrune`, `__stderrp`/`__stdoutp`/`__stdinp`, `__tolower`, `__toupper`),
+the SJLJ unwind set and `__moddi3`/`__fixdfdi` have no Android export at all, and the
+compiler-rt builtins that do exist (`__divdi3`, `__udivdi3`, `__floatdidf`,
+`__floatdisf`) are 32-bit-`arm`/`x86`-only entries that the arm64 target device cannot
+resolve. Two general catalog corrections came out of the audit: `ldexp` is exported by
+**libc.so** (not libm.so), and the `error`/`error_at_line`/`error_message_count`/
+`error_one_per_line`/`error_print_progname` family plus `environ` were missing and are
+now listed. The Angry Birds-specific number is unchanged, and 100% same-name for this
+binary stays unreachable; 100% applies to the reviewed-mapping figure (254/254).
+
 ### The launcher shows only the game (and the log when the attempt stops)
 
 The game-runtime launcher now runs fullscreen in **sensor landscape** and shows **only the

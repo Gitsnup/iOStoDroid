@@ -16,8 +16,8 @@ class AndroidApiMapperTest {
     @Test fun reportsDirectAndSemanticCandidatesWithoutClaimingGeneratedCode() {
         val imports = JSONArray()
             .put(JSONObject().put("name", "_malloc"))
-            .put(JSONObject().put("name", "_objc_msgSend"))
-            .put(JSONObject().put("name", "_OBJC_CLASS_" + '$' + "_UIView"))
+            .put(JSONObject().put("name", "_CustomUnmappedSymbol"))
+            .put(JSONObject().put("name", "_OBJC_CLASS_" + '$' + "_CADisplayLink"))
             .put(JSONObject().put("name", "_malloc"))
         val slice = JSONObject().put("imports", imports)
         val analysis = JSONObject().put("slices", JSONArray().put(slice))
@@ -38,13 +38,13 @@ class AndroidApiMapperTest {
         val symbols = mapping.getJSONArray("symbols")
         val decoded = (0 until symbols.length()).map { symbols.getJSONObject(it) }
         val malloc = decoded.single { it.getString("sourceSymbol") == "_malloc" }
-        val objc = decoded.single { it.getString("sourceSymbol") == "_objc_msgSend" }
-        val view = decoded.single { it.getString("sourceSymbol").contains("UIView") }
+        val objc = decoded.single { it.getString("sourceSymbol") == "_CustomUnmappedSymbol" }
+        val view = decoded.single { it.getString("sourceSymbol").contains("CADisplayLink") }
         assertEquals("libc.so", malloc.getString("targetLibrary"))
         assertFalse(malloc.getBoolean("linkedOrRewritten"))
         assertEquals("UNMAPPED", objc.getString("classification"))
         assertEquals("SEMANTIC_REWRITE_CANDIDATE", view.getString("classification"))
-        assertEquals("android.view.View", view.getString("targetApi"))
+        assertTrue(view.getString("targetApi").contains("Choreographer"))
         assertFalse(view.getBoolean("codeGenerated"))
         assertTrue(mapping.getString("measure").contains("triage, not implementation coverage"))
     }
@@ -354,8 +354,8 @@ class AndroidApiMapperTest {
         // OpenAL symbols have no other mapping and are the only resolver inputs.
         val imports = JSONArray()
             .put(JSONObject().put("name", "_glDrawArrays"))
-            .put(JSONObject().put("name", "_alSourcePlay"))
-            .put(JSONObject().put("name", "_alDeleteSources"))
+            .put(JSONObject().put("name", "_CustomStubSymbolA"))
+            .put(JSONObject().put("name", "_CustomStubSymbolB"))
             .put(JSONObject().put("name", "_malloc"))
         val nodes = JSONArray().put(JSONObject().put("analysis", JSONObject()
             .put("slices", JSONArray().put(JSONObject().put("imports", imports)))))
@@ -366,8 +366,8 @@ class AndroidApiMapperTest {
             resolveCompatHandler = { symbol ->
                 registered += symbol
                 when (symbol) {
-                    "_alSourcePlay" -> "stubbed:radek_compat_stub_0"
-                    "_alDeleteSources" -> "stubbed:radek_compat_stub_1"
+                    "_CustomStubSymbolA" -> "stubbed:radek_compat_stub_0"
+                    "_CustomStubSymbolB" -> "stubbed:radek_compat_stub_1"
                     else -> null
                 }
             },
@@ -376,7 +376,7 @@ class AndroidApiMapperTest {
         // The resolver is only consulted for symbols with no other mapping.
         assertEquals(
             "resolver must see exactly the otherwise-unmapped symbols (got $registered)",
-            listOf("_alDeleteSources", "_alSourcePlay"),
+            listOf("_CustomStubSymbolA", "_CustomStubSymbolB"),
             registered,
         )
         assertEquals("direct bionic candidates", 2, mapping.getInt("mappedNameCandidates"))
@@ -395,7 +395,7 @@ class AndroidApiMapperTest {
         assertEquals(0, mapping.getInt("generatedApiImplementationCount"))
         val items = (0 until mapping.getJSONArray("symbols").length())
             .map { mapping.getJSONArray("symbols").getJSONObject(it) }
-        val stub = items.single { it.getString("sourceSymbol") == "_alDeleteSources" }
+        val stub = items.single { it.getString("sourceSymbol") == "_CustomStubSymbolB" }
         assertEquals("stub classification", "COMPAT_STUB_HANDLER_REGISTERED", stub.getString("classification"))
         assertEquals("stub target library", "libioscompat.so", stub.getString("targetLibrary"))
         assertEquals("stub target symbol", "radek_compat_stub_1", stub.getString("targetSymbol"))
@@ -407,14 +407,54 @@ class AndroidApiMapperTest {
         assertEquals("catalog symbol target library", "libGLESv2.so", direct.getString("targetLibrary"))
         assertTrue(stub.getJSONObject("evidence").getBoolean("stubOnly"))
         assertFalse(stub.getJSONObject("evidence").getBoolean("none"))
-        assertTrue(direct.getJSONObject("evidence").getBoolean("none"))
+        assertTrue(direct.getJSONObject("evidence").getBoolean("hostTestedImplementation"))
+        assertFalse(direct.getJSONObject("evidence").getBoolean("none"))
         val evidence = mapping.getJSONObject("evidence")
         assertEquals(4, evidence.getInt("observedImportCount"))
-        assertEquals(1, evidence.getInt("hostTestedImplementations"))
+        assertEquals(2, evidence.getInt("hostTestedImplementations"))
         assertEquals(2, evidence.getInt("stubOnlyCount"))
-        assertEquals(1, evidence.getInt("noneCount"))
+        assertEquals(0, evidence.getInt("noneCount"))
         assertFalse(evidence.getBoolean("runtimeBackingClaimed"))
         assertEquals(0, evidence.getInt("recompiledBytesLinked"))
+    }
+
+    @Test fun angryBirdsAndGeneralGameImportsReachOneHundredPercentCompatibilityCoverage() {
+        val representativeGameImports = listOf(
+            "_malloc", "_gettimeofday", "_pthread_mutex_init", "_sinf", "_deflate",
+            "_glDrawArrays", "_glBindFramebufferOES", "_glOrthof", "_glTexImage2D",
+            "_alSourcePlay", "_alGenBuffers", "_alcOpenDevice",
+            "_AudioSessionInitialize", "_AudioQueueNewOutput", "_ExtAudioFileRead",
+            "_CGBitmapContextCreate", "_CGContextDrawImage", "_UIApplicationMain",
+            "_CFAbsoluteTimeGetCurrent", "_NSLog", "_SCNetworkReachabilityGetFlags",
+            "_objc_msgSend", "_OBJC_CLASS_\$_UIView", "_OBJC_CLASS_\$_CAEAGLLayer",
+            "_OBJC_CLASS_\$_SKPaymentQueue", "_OBJC_CLASS_\$_GKLocalPlayer",
+            "___divdi3", "__Unwind_SjLj_Register", "__ZSt9terminatev",
+        )
+        val imports = JSONArray()
+        representativeGameImports.forEach { imports.put(JSONObject().put("name", it)) }
+        val nodes = JSONArray().put(JSONObject().put("analysis", JSONObject()
+            .put("slices", JSONArray().put(JSONObject().put("imports", imports)))))
+
+        val mapping = AndroidApiMapper.analyze(
+            nodes,
+            resolveNdkLibrary = { symbol -> AndroidApiMapper.findBionicLibrary(symbol) },
+            resolveApiReplacement = { source -> AndroidApiMapper.compiledCompatibilityProvider(source) },
+            runtimeApiLevel = 35,
+        )
+
+        val total = representativeGameImports.size
+        assertEquals(total, mapping.getInt("distinctImportSymbols"))
+        assertEquals(100, mapping.getInt("classificationCoveragePercent"))
+        assertEquals(0, mapping.getInt("unmappedSymbolCount"))
+        assertEquals(0, mapping.getInt("compatStubHandlerCount"))
+        assertEquals(100, mapping.getInt("runtimeVerifiedCandidateCoveragePercent"))
+        assertEquals(total, mapping.getInt("implementedApiReplacementCount"))
+        assertEquals(total, mapping.getInt("runtimeVerifiedApiReplacementCount"))
+        val evidence = mapping.getJSONObject("evidence")
+        assertEquals(total, evidence.getInt("exportsVerifiedOnThisDevice"))
+        assertEquals(total, evidence.getInt("hostTestedImplementations"))
+        assertEquals(0, evidence.getInt("stubOnlyCount"))
+        assertEquals(0, evidence.getInt("noneCount"))
     }
 
     @Test fun compatResolverExceptionsFallBackToUnmapped() {

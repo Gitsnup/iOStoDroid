@@ -372,7 +372,7 @@ class ExperimentalShellPipelineTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
 
     def run_fixture(self, **kwargs):
-        source = ipa(self.root / "input.ipa", macho(imports=["_CFAbsoluteTimeGetCurrent", "_glDrawArrays"]))
+        source = ipa(self.root / "input.ipa", macho(imports=["_CFAbsoluteTimeGetCurrent", "_UnknownPrivateGameSymbol"]))
         return Pipeline(self.root / "job").run(source, True, **kwargs)
 
     def test_analyze_never_attempts_shell(self):

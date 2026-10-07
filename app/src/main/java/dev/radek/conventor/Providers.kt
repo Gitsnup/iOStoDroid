@@ -229,8 +229,8 @@ object Providers {
 
     /** Provider for an imported symbol name, or null when nothing maps it. */
     fun forSymbol(symbol: String): String? {
-        AndroidApiMapper.compiledCompatibilityProvider(symbol)?.let { return it }
         compilerRuntimeCandidate(symbol)?.let { return it }
+        AndroidApiMapper.compiledCompatibilityProvider(symbol)?.let { return it }
         val candidate = symbol.trimStart('_')
         for ((prefix, provider) in SYMBOL_PROVIDERS) if (candidate.startsWith(prefix)) return provider
         // libc/libm/pthread entry points are provided by bionic directly.

@@ -123,20 +123,29 @@ FRAMEWORK_NAMES = {
 }
 
 C_RUNTIME = re.compile(
-    r"^_?(malloc|calloc|realloc|free|memcpy|memset|memmove|memcmp|strlen|strcmp|strncmp|strcasecmp|strcpy"
-    r"|strncpy|strcat|strdup|strstr|strchr|printf|fprintf|sprintf|snprintf|vsnprintf|puts|putchar|scanf|sscanf"
-    r"|fopen|fclose|fread|fwrite|fseek|ftell|fgets|fputs|qsort|bsearch|abs|labs|llabs|rand|srand|time"
-    r"|gettimeofday|clock|exit|abort|atoi|atof|atol|atoll|strtol|strtod|strtoul|strtoll|strtoull|sqrt|sqrtf"
-    r"|sin|cos|tan|pow|powf|floor|ceil|fabs|log|log2|log10|exp|memchr|bcopy|bzero|longjmp|setjmp|isalpha"
-    r"|isdigit|isspace|tolower|toupper|locale|setlocale)$"
+    r"^_{0,3}(malloc|calloc|realloc|free|memcpy|memset|memmove|memcmp|strlen|strcmp|strncmp|strcasecmp|strncasecmp|strcpy"
+    r"|strncpy|strlcpy|strlcat|strcat|strncat|strdup|strstr|strchr|strrchr|strspn|strcspn|strpbrk|strtok|strtok_r|strerror|strcoll|strxfrm"
+    r"|printf|fprintf|sprintf|snprintf|vsnprintf|vsprintf|puts|putchar|putc|fputc|getc|fgetc|getchar|ungetc|scanf|sscanf|fscanf"
+    r"|fopen|freopen|fdopen|fclose|fread|fwrite|fseek|ftell|rewind|fgets|fputs|fflush|feof|ferror|clearerr|fileno|setvbuf|tmpfile|tmpnam|perror"
+    r"|qsort|bsearch|abs|labs|llabs|rand|srand|time|difftime|mktime|localtime|localtime_r|gmtime|gmtime_r|strftime|tzset|gettimeofday|clock|clock_gettime|nanosleep|usleep|sleep"
+    r"|exit|_exit|atexit|abort|system|getenv|setenv|unsetenv|atoi|atof|atol|atoll|strtol|strtod|strtof|strtoul|strtoll|strtoull"
+    r"|sqrt|sqrtf|cbrt|hypot|hypotf|sin|sinf|sinh|sinhf|cos|cosf|cosh|coshf|tan|tanf|tanh|tanhf|acos|acosf|asin|asinf|atan|atanf|atan2|atan2f"
+    r"|pow|powf|floor|floorf|ceil|ceilf|round|roundf|lround|lroundf|trunc|truncf|fabs|fabsf|fmod|fmodf|log|logf|log2|log2f|log10|log10f|exp|expf|frexp|frexpf|ldexp|ldexpf|modf|modff"
+    r"|memchr|bcopy|bzero|bcmp|longjmp|setjmp|isalpha|isdigit|isalnum|isspace|isupper|islower|isxdigit|tolower|toupper|locale|setlocale|localeconv"
+    r"|DefaultRuneLocale|maskrune|error|stderrp|stdinp|stdoutp"
+    r"|open|close|read|write|lseek|fcntl|unlink|remove|rename|mkdir|rmdir|access|getcwd|chdir|stat|fstat|lstat|opendir|readdir|closedir"
+    r"|mmap|munmap|mprotect|poll|select|pipe|dup|dup2|fsync|ftruncate|truncate|chmod|umask|getpid|getppid|getuid|geteuid|getgid|getegid"
+    r"|sysconf|sysctl|sysctlbyname|getpagesize|sched_yield|sigaction|signal|raise|kill|dlopen|dlsym|dlclose|dlerror"
+    r"|socket|connect|bind|listen|accept|send|sendto|recv|recvfrom|setsockopt|getsockopt|getsockname|getpeername|shutdown|getaddrinfo|freeaddrinfo|gethostbyname|inet_ntop|inet_pton|inet_addr|inet_ntoa|htons|htonl|ntohs|ntohl"
+    r"|sem_init|sem_destroy|sem_wait|sem_trywait|sem_post)$"
 )
 
 RULES: list[tuple[re.Pattern[str], str, str, str]] = [
-    (re.compile(r"^_objc_(msgSend|release|retain|autorelease|autoreleasePool|load|getClass|lookUpImp)"), "Objective-C runtime", "objc", "compatibility"),
+    (re.compile(r"^_objc_|^_sel_|^_class_"), "Objective-C runtime", "objc", "compatibility"),
     (re.compile(r"^__objc_"), "Objective-C runtime", "objc", "compatibility"),
     (re.compile(r"^_object_"), "Objective-C runtime", "objc", "compatibility"),
     (re.compile(r"^_OBJC_"), "Objective-C runtime", "objc", "compatibility"),
-    (re.compile(r"^_gl[A-Z]|^_glu[A-Z]"), "OpenGL ES", "graphics", "native"),
+    (re.compile(r"^_gl[A-Z]|^_glu[A-Z]|^_k?EAGL"), "OpenGL ES", "graphics", "native"),
     (re.compile(r"^_egl[A-Z]"), "EGL", "graphics", "native"),
     (re.compile(r"^_MTL|^_MT[A-Z]|^_metal_"), "Metal", "graphics", "blocked"),
     (re.compile(r"^_alc?[A-Z]|^_al[A-Z]|^_alut"), "OpenAL", "audio", "compatibility"),
@@ -145,15 +154,15 @@ RULES: list[tuple[re.Pattern[str], str, str, str]] = [
     (re.compile(r"^_NS[A-Z]"), "Foundation", "foundation", "compatibility"),
     (re.compile(r"^_UI[A-Z]|^_UIApplicationMain|^_UIGesture"), "UIKit", "ui", "compatibility"),
     (re.compile(r"^_CG[A-Z]|^_CGBitmap|^_CGColor"), "CoreGraphics", "graphics", "compatibility"),
-    (re.compile(r"^_CF[A-Z]|^_CFRunLoop|^_CFString"), "CoreFoundation", "foundation", "compatibility"),
+    (re.compile(r"^_?_{0,2}CF[A-Z]|^_kCF[A-Z]|^_CFRunLoop|^_CFString"), "CoreFoundation", "foundation", "compatibility"),
     (re.compile(r"^_CA[A-Z]|^_CATrans"), "QuartzCore", "graphics", "compatibility"),
     (re.compile(r"^_SC[A-Z]|^_SK[A-Z]"), "StoreKit/SpriteKit", "ui", "compatibility"),
     (re.compile(r"^_GK[A-Z]"), "GameKit", "input/social", "compatibility"),
     (re.compile(r"^_GC[A-Z]"), "GameController", "input", "compatibility"),
     (re.compile(r"^_CM[A-Z]"), "CoreMotion/CoreMedia", "sensors", "compatibility"),
     (re.compile(r"^_MP[A-Z]|^_MPMovie"), "MediaPlayer", "audio/video", "compatibility"),
-    (re.compile(r"^_Sec[A-Z]|^_SSL[A-Z]|^_CC[A-Z]|^_kSec"), "Security", "crypto", "compatibility"),
-    (re.compile(r"^_dispatch_"), "libdispatch", "concurrency", "native"),
+    (re.compile(r"^_Sec[A-Z]|^_SSL[A-Z]|^_CC_?[A-Z]|^_kSec"), "Security", "crypto", "compatibility"),
+    (re.compile(r"^_?_dispatch_"), "libdispatch", "concurrency", "native"),
     (re.compile(r"^_pthread|^_?pthread_"), "pthread", "concurrency", "native"),
     # Apple's libcompression API starts with `compression_`, which the zlib rule
     # below must not swallow; it has no NDK drop-in, so it stays a compatibility
@@ -169,8 +178,8 @@ RULES: list[tuple[re.Pattern[str], str, str, str]] = [
     (re.compile(r"^_?ucnv_|^_?u_str|^_?ubrk_|^_?uloc_|^_?unorm_"), "ICU", "text", "compatibility"),
     (re.compile(r"^_JS[A-Z]|^_?jsc_"), "JavaScriptCore", "language", "blocked"),
     (re.compile(r"^_?nw_[a-z]"), "libnetwork", "network", "compatibility"),
-    (re.compile(r"^_{1,3}(?:Unwind_|gcc_personality_v0|gxx_personality_v0|aeabi_unwind_|gnu_unwind_|[u]?divdi3|[u]?moddi3|muldi3|ashldi3|ashrdi3|lshrdi3|udivmoddi4|aeabi_|[u]?divti3|[u]?modti3|multi3|muloti4|ash[lr]ti3|addvti3|subvti3|absvti2|cmpdi2|ucmpdi2|clear_cache|register_frame|deregister_frame)"), "GCC/LLVM compiler runtime", "language", "compatibility"),
-    (re.compile(r"^__Z|std::"), "C++ standard library", "language", "compatibility"),
+    (re.compile(r"^_{1,3}(?:Unwind_|gcc_personality_v0|gxx_personality_v0|gxx_personality_sj0|aeabi_unwind_|gnu_unwind_|[u]?div[ds]i3|[u]?mod[ds]i3|muldi3|ashldi3|ashrdi3|lshrdi3|udivmoddi4|aeabi_|[u]?divti3|[u]?modti3|multi3|muloti4|ash[lr]ti3|addvti3|subvti3|absvti2|cmpdi2|ucmpdi2|clear_cache|register_frame|deregister_frame|fix[a-z]+|float[a-z]+)"), "GCC/LLVM compiler runtime", "language", "compatibility"),
+    (re.compile(r"^__Z|^___cxa_|^___dynamic_cast|std::"), "C++ standard library", "language", "compatibility"),
     (re.compile(r"^_swift_|^\$s|^\$S|^_?_swift"), "Swift runtime", "language", "blocked"),
     (C_RUNTIME, "Darwin libc/libm", "libc", "native"),
     (re.compile(r"^__NS|^\+?\["), "Objective-C", "objc", "compatibility"),

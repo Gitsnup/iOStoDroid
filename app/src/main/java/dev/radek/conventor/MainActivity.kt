@@ -315,20 +315,24 @@ class MainActivity : Activity() {
                 val triage = mapping.optInt("classificationCoveragePercent", 0)
                 val unmapped = mapping.optInt("unmappedSymbolCount", 0)
                 val verified = mapping.optInt("runtimeVerifiedNdkCandidates", 0)
-                val verifiedPercent = AndroidApiMapper.coveragePercent(verified, total)
+                val compatCount = mapping.optInt("runtimeVerifiedApiReplacementCount", 0)
+                val compatPercent = AndroidApiMapper.coveragePercent(compatCount, total)
+                val totalVerifiedDevice = mapping.optJSONObject("evidence")
+                    ?.optInt("exportsVerifiedOnThisDevice", maxOf(verified, compatCount))
+                    ?: maxOf(verified, compatCount)
+                val verifiedPercent = AndroidApiMapper.coveragePercent(totalVerifiedDevice, total)
                 val verifiedCandidateCount = mapping.optInt("runtimeVerifiedCandidateCount", mapped)
                 val verifiedCandidatePercent = AndroidApiMapper.coveragePercent(verified, verifiedCandidateCount)
                 val runtimeApi = mapping.optInt("runtimeVerifiedAndroidApiLevel", 0)
                 val runtimeStatus = mapping.optString("runtimeNdkResolverStatus", "NOT_RUN")
                 val runtimeSummary = if (runtimeStatus == "CURRENT_DEVICE_DLSYM")
-                    "Android API $runtimeApi exact exports: $verified/$verifiedCandidateCount NDK candidates ($verifiedCandidatePercent%); $verified/$total imports ($verifiedPercent%)"
+                    "Android API $runtimeApi exact exports: $verified/$verifiedCandidateCount NDK candidates ($verifiedCandidatePercent%); $totalVerifiedDevice/$total imports ($verifiedPercent%)"
                 else "device export check not run"
                 val compatStatus = mapping.optString("runtimeApiReplacementResolverStatus", "NOT_RUN")
-                val compatCount = mapping.optInt("runtimeVerifiedApiReplacementCount", 0)
                 val runtimeLinked = report.optJSONObject("apiImplementationGeneration")?.optBoolean("runtimeLibraryLinked", false) == true
                 val compatSummary = when {
                     runtimeLinked -> "libioscompat.so runtime linked; individual IPA callsites were not rewritten"
-                    compatStatus == "CURRENT_DEVICE_COMPAT_DLSYM" -> "$compatCount compiled compatibility implementation(s) verified; APK linking has not run"
+                    compatStatus == "CURRENT_DEVICE_COMPAT_DLSYM" -> "$compatCount/$total ($compatPercent%) compiled compatibility implementation(s) verified; APK linking has not run"
                     else -> "compatibility export check not run"
                 }
                 val compilerSummary = if (compilerRuntime > 0) " · compiler-rt/libunwind candidates: $compilerRuntime (not linked)" else ""
@@ -490,20 +494,24 @@ class MainActivity : Activity() {
             val triage = mapping.optInt("classificationCoveragePercent", 0)
             val unmapped = mapping.optInt("unmappedSymbolCount", 0)
             val verified = mapping.optInt("runtimeVerifiedNdkCandidates", 0)
-            val verifiedPercent = AndroidApiMapper.coveragePercent(verified, total)
+            val implemented = mapping.optInt("runtimeVerifiedApiReplacementCount", 0)
+            val implementedPercent = AndroidApiMapper.coveragePercent(implemented, total)
+            val totalVerifiedDevice = mapping.optJSONObject("evidence")
+                ?.optInt("exportsVerifiedOnThisDevice", maxOf(verified, implemented))
+                ?: maxOf(verified, implemented)
+            val verifiedPercent = AndroidApiMapper.coveragePercent(totalVerifiedDevice, total)
             val verifiedCandidateCount = mapping.optInt("runtimeVerifiedCandidateCount", mapped)
             val verifiedCandidatePercent = AndroidApiMapper.coveragePercent(verified, verifiedCandidateCount)
             val runtimeApi = mapping.optInt("runtimeVerifiedAndroidApiLevel", 0)
             val runtimeStatus = mapping.optString("runtimeNdkResolverStatus", "NOT_RUN")
             val runtimeSummary = if (runtimeStatus == "CURRENT_DEVICE_DLSYM")
-                " · Android API $runtimeApi exact exports: $verified/$verifiedCandidateCount NDK candidates ($verifiedCandidatePercent%); $verified/$total imports ($verifiedPercent%)"
+                " · Android API $runtimeApi exact exports: $verified/$verifiedCandidateCount NDK candidates ($verifiedCandidatePercent%); $totalVerifiedDevice/$total imports ($verifiedPercent%)"
             else ""
             val compatStatus = mapping.optString("runtimeApiReplacementResolverStatus", "NOT_RUN")
-            val implemented = mapping.optInt("runtimeVerifiedApiReplacementCount", 0)
             val runtimeLinked = report.optJSONObject("apiImplementationGeneration")?.optBoolean("runtimeLibraryLinked", false) == true
             val compatSummary = when {
                 runtimeLinked -> " · libioscompat.so runtime linked; no individual IPA callsites rewritten"
-                compatStatus == "CURRENT_DEVICE_COMPAT_DLSYM" -> " · $implemented compiled compatibility implementation(s) verified; APK linking has not run"
+                compatStatus == "CURRENT_DEVICE_COMPAT_DLSYM" -> " · $implemented/$total ($implementedPercent%) compiled compatibility implementation(s) verified; APK linking has not run"
                 else -> ""
             }
             val compilerSummary = if (compilerRuntime > 0) " · compiler-rt/libunwind candidates (not linked): $compilerRuntime" else ""
@@ -528,9 +536,13 @@ class MainActivity : Activity() {
             }
             text(mapping.optString("measure") + " $mappingDisclosure", 13f, muted, parent = mappingCard)
             mapping.optJSONObject("evidence")?.let { evidence ->
+                val verifiedDevice = evidence.optInt("exportsVerifiedOnThisDevice", 0)
+                val verifiedDevicePercent = AndroidApiMapper.coveragePercent(verifiedDevice, total)
+                val hostTested = evidence.optInt("hostTestedImplementations", 0)
+                val hostTestedPercent = AndroidApiMapper.coveragePercent(hostTested, total)
                 text(
-                    "Per-import evidence · ${evidence.optInt("exportsVerifiedOnThisDevice", 0)} device exports verified · " +
-                        "${evidence.optInt("hostTestedImplementations", 0)} host-tested implementations · " +
+                    "Per-import evidence · $verifiedDevice/$total ($verifiedDevicePercent%) device exports verified · " +
+                        "$hostTested/$total ($hostTestedPercent%) host-tested implementations · " +
                         "${evidence.optInt("stubOnlyCount", 0)} stub-only · ${evidence.optInt("noneCount", 0)} none · " +
                         "0 game callsites linked",
                     12f,
@@ -577,9 +589,13 @@ class MainActivity : Activity() {
             text(dep.optString("reason"), 11f, muted)
             dep.optJSONObject("evidence")?.let { evidence ->
                 val observed = evidence.optInt("observedImportCount", 0)
+                val verifiedDev = evidence.optInt("exportsVerifiedOnThisDevice", 0)
+                val verifiedDevPct = AndroidApiMapper.coveragePercent(verifiedDev, observed)
+                val hostTest = evidence.optInt("hostTestedImplementations", 0)
+                val hostTestPct = AndroidApiMapper.coveragePercent(hostTest, observed)
                 val note = if (observed == 0) "no per-import evidence" else
-                    "${evidence.optInt("exportsVerifiedOnThisDevice", 0)} device exports verified, " +
-                        "${evidence.optInt("hostTestedImplementations", 0)} host-tested implementations, " +
+                    "$verifiedDev/$observed ($verifiedDevPct%) device exports verified, " +
+                        "$hostTest/$observed ($hostTestPct%) host-tested implementations, " +
                         "${evidence.optInt("stubOnlyCount", 0)} stub-only, ${evidence.optInt("noneCount", 0)} none"
                 text(
                     "Evidence: $note · ${evidence.optString("associationStatus", "UNKNOWN").lowercase()} import association · " +

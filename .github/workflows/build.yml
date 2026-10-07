@@ -105,8 +105,8 @@ jobs:
           checks = (
               ("state is BLOCKED", report["state"] == "BLOCKED"),
               ("statically recompiled-byte progress > 0", report["portProgress"]["percent"] > 0),
-              ("1 verified shim", report["compatRegistry"]["verifiedImplementations"] == 1),
-              ("2 stubbed handlers", report["compatRegistry"]["stubbedHandlers"] == 2),
+              ("3 verified shims", report["compatRegistry"]["verifiedImplementations"] == 3),
+              ("0 stubbed handlers", report["compatRegistry"]["stubbedHandlers"] == 0),
               ("0 unresolved imports", report["compatRegistry"]["unresolvedImports"] == 0),
               ("experimental shell built and labelled",
                report["experimentalShell"]["status"] == "BUILT_NOT_A_GAME"),

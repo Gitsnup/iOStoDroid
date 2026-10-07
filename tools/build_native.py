@@ -126,6 +126,9 @@ compat_sources = [
     root / "native/src/compat_runtime/sjlj_unwind.cpp",
     root / "native/src/compat_runtime/trap_shims.cpp",
     root / "native/src/compat_runtime/libsystem_shims.cpp",
+    root / "native/src/compat_runtime/gles_shims.cpp",
+    root / "native/src/compat_runtime/compiler_rt_shims.cpp",
+    root / "native/src/compat_runtime/virtual_file_system.cpp",
 ]
 subprocess.run(
     [

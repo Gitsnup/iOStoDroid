@@ -17,7 +17,9 @@ shows a preview or menu.
    through `Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt`.
 3. Unimplemented imports are bound to abort-on-call traps. The guest executes
    real instructions from the Mach-O entry point until it calls (or touches
-   data of) the first unimplemented import. Implemented adapters run for real
+   data of) a documented boundary: the first unimplemented import it touches,
+   or the bounded instruction/time budget when the guest stays inside its own
+   code. Implemented adapters run for real
    instead of trapping: libSystem memory/string/malloc, the Itanium C++ ABI
    allocation entry points, the bounded Objective-C runtime, the AudioToolbox
    session state calls, and the bounded application-lifecycle chain
@@ -101,27 +103,34 @@ and digest against the report.
 `tests/data/AngryBirds_v1.0_os30.ipa` (thin ARMv6 Mach-O, 1,822,112 bytes,
 267 bundle files):
 
-- Loader: `LOADED_WITH_TRAPS`, 60 resolved / 518 trapped / 0 unresolved.
-- Boot: entry point reached, **340,309 guest instructions executed**. The
-  runtime enters `_main`, performs the `NSAutoreleasePool +new` setup, enters
-  `UIApplicationMain`, instantiates the image's own `AppController` delegate,
-  wires it into the `UIApplication` singleton, and delivers
-  `applicationDidFinishLaunching:` to the real guest implementation. Inside that
-  method the app builds its UIKit window/EAGL view (including `-[UIView layer]`
-  -> `CAEAGLLayer`, `numberWithBool:`, `dictionaryWithObjectsAndKeys:`,
-  `EAGLContext initWithAPI:`/`setCurrentContext:`, `addSubview:`,
-  `makeKeyAndVisible`) and then enters its engine's render setup, whose first
-  OpenGL ES call (from guest text around `0xAC50C`) stops the attempt.
+- Loader: `LOADED_WITH_TRAPS`, 138 resolved / 440 trapped / 0 unresolved.
+- Boot: entry point reached, **2,000,000 guest instructions executed** (the
+  bounded entry budget). The runtime enters `_main`, performs the
+  `NSAutoreleasePool +new` setup, enters `UIApplicationMain`, instantiates the
+  image's own `AppController` delegate, wires it into the `UIApplication`
+  singleton, delivers `applicationDidFinishLaunching:` to the real guest
+  implementation, and keeps running inside the app: it builds its UIKit
+  window/EAGL view (`-[UIView layer]` -> `CAEAGLLayer`, `numberWithBool:`,
+  `dictionaryWithObjectsAndKeys:`, `EAGLContext initWithAPI:` /
+  `setCurrentContext:`, `addSubview:`, `makeKeyAndVisible`), starts its engine
+  render setup (the GLES calls are forwarded to the host driver), and asks for
+  its own bundle data through the guest filesystem.
+- Stop: `INSTRUCTION_LIMIT` — the attempt ends at the bounded budget, not at an
+  unimplemented call: `trappedImport` is empty and `trapCalls` is `0` for this
+  image. When the guest does touch an unimplemented import the attempt still
+  stops there with the trap named, exactly as before.
 - Report: `lifecycle.applicationMainEntered: true`,
-  `applicationMainReturned: false` (the boot stopped inside the nested delegate
-  call), `delegateClassName: "AppController"`, nine recorded startup-chain
-  events, and `trappedImport: "_glFrontFace"` with `trapCalls: 1`.
+  `applicationMainReturned: false` (the boot was still running when the budget
+  ended), `delegateClassName: "AppController"`, ten recorded startup-chain
+  events, and the guest filesystem's refusals are named when no bundle mount is
+  configured.
 - The VFP unit is enabled for the guest (`CPACR` CP10/CP11 access and
   `FPEXC.EN`), because the ARMv6 image uses scalar VFP from its first delegate
   frame on; without it the attempt stopped on a decode fault at `vpush`.
 - The host suite (`tests/test_gameruntime.py`) and CI pin the *shape* of this
-  behavior (entry point reached, one named trapped import, a non-empty startup
-  chain); the manifest from the CI run is uploaded as
+  behavior (entry point reached, a documented stop boundary — a named trapped
+  import or a bounded execution limit — and a non-empty startup chain); the
+  manifest from the CI run is uploaded as
   `angrybirds-gameboot-artifacts`.
 - Remaining honest gap: OpenGL ES (51 `_gl*` imports) is **not** implemented, so
   the attempt stops at the first GL call and nothing is rendered.

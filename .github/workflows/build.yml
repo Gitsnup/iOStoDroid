@@ -109,14 +109,22 @@ jobs:
               ("imports bound to traps", probe["loaderStatus"] == "LOADED_WITH_TRAPS" and probe["unresolvedSymbols"] == 0),
               ("entry point reached", probe["entryPointReached"] is True),
               ("guest instructions executed", probe["instructions"] > 0),
-              ("stopped at a named unimplemented import", bool(probe["trappedImport"]) and probe["trapCalls"] == 1),
+              # The boot must stop at a *documented* boundary: either the first
+              # unimplemented import it touches (trap) or one of its bounded
+              # execution limits when the guest stays inside its own code. The
+              # probe never continues past an unimplemented call and never
+              # reports progress it did not make.
+              ("stopped at a documented boundary",
+               (bool(probe["trappedImport"]) and probe["trapCalls"] == 1)
+               or (probe["trapCalls"] == 0 and probe["executionStatus"] in ("INSTRUCTION_LIMIT", "TIME_LIMIT"))),
           )
           failed = [label for label, ok in checks if not ok]
           if failed:
               print("::error title=Angry Birds gameboot probe failed::" + "; ".join(failed))
               print(json.dumps({k: probe.get(k) for k in ("status", "loaderStatus", "executionStatus", "instructions", "trappedImport", "trapCalls", "reason")}, indent=2))
               sys.exit(1)
-          print(f"Angry Birds boot probe: {probe['instructions']} instructions, stopped at {probe['trappedImport']}")
+          boundary = probe["trappedImport"] or probe["executionStatus"]
+          print(f"Angry Birds boot probe: {probe['instructions']} instructions, stopped at {boundary}")
           EOF
       - name: Convert committed sample IPA with the host CLI
         run: |

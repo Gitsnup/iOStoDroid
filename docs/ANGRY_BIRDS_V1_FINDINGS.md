@@ -75,8 +75,13 @@ at `0x6871c`. Inside that method the app created its window and EAGL view
 (`-[UIView layer]` -> `CAEAGLLayer`, `numberWithBool:`,
 `dictionaryWithObjectsAndKeys:`, `-[EAGLContext initWithAPI:]`,
 `setCurrentContext:`, `addSubview:`, `makeKeyAndVisible`) and entered its
-engine's render setup, where the **first OpenGL ES call (`_glFrontFace`, called
-from guest text around `0xAC50C`) stops the attempt** after 340,309 executed
+engine's render setup, where the first OpenGL ES call (`_glFrontFace`, called
+from guest text around `0xAC50C`) used to stop the attempt after 340,309
+executed instructions. With the GLES calls forwarded to the host driver, the
+compiler-runtime helpers implemented and the guest filesystem mounted, the same
+attempt now runs its full bounded budget (2,000,000 instructions) inside the
+app and stops with `INSTRUCTION_LIMIT` instead of a trap; the earlier number is
+kept here as the historical baseline, and
 guest instructions. This is observed execution of the
 app's own startup code, still not a launch, not a rendered frame, and not
 gameplay: no GL entry point is implemented, and the nineteen still-unimplemented

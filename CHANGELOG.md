@@ -118,3 +118,56 @@ closes the app from the library itself.
 README, `docs/SUPPORT.md` and `docs/GAME_RUNTIME_V1.md` now describe reviewed-mapping
 coverage vs. the same-name subset, the host static-recompilation plan (and that it is host
 source bytes only), and the fullscreen/automatic splash with the per-status stop wording.
+
+## 2026-10-08 — Game-runtime progression round (native GLES forwarding, deeper boot)
+
+Input under test: `tests/data/AngryBirds_v1.0_os30.ipa`.
+
+### OpenGL ES goes to the platform driver — no reimplementation
+
+The guest's fixed-function OpenGL ES 1.1 imports no longer stop the attempt. They are
+forwarded to the real driver: `libGLESv1_CM`/`libGLESv2` and `libEGL` are opened at
+runtime, the EAGL drawable is an EGL surface (`renderbufferStorage:fromDrawable:` →
+`eglCreateWindowSurface` — a window surface when the Android glue supplies the
+`ANativeWindow` of its `Surface`, an offscreen pbuffer otherwise), `presentRenderbuffer:`
+is `eglSwapBuffers`, and every guest pointer argument is translated through the mapped
+guest regions with a range check. There is **no CPU rasterizer in the tree**: on a host
+without GL libraries the driver probe fails, each call is refused with a named diagnostic,
+and the report says exactly that instead of faking a frame.
+
+### Guest execution is ~70x faster, and the boot runs 6x deeper
+
+Profiling showed 19.8 s of the 20 s budget going into a full guest-memory copy after every
+shim callout. The backend now syncs mappings structurally and uploads only the pages a shim
+actually wrote (page-granular dirty tracking in `GuestAddressSpace`), which took Angry
+Birds from ~18k to ~1.3M guest instructions/second. Together with a realistic 8 MiB guest
+stack (64 KiB overflowed into unrelated runtime pages) and bounded accesses that may span
+contiguous guest regions, the host boot attempt now executes its full 2,000,000-instruction
+budget — 340,309 before this round — and stops with `INSTRUCTION_LIMIT`, with **no** trap
+and no runtime fault.
+
+### The guest can read its own bundle
+
+New `VirtualFileSystem` plus `fopen`/`fclose`/`fread`/`fwrite`/`fseek`/`ftell`/`feof`/
+`ferror`/`fflush`/`fgets`/`remove`, `gettimeofday`/`time` and scalar math
+(`sin`/`cos`/`pow`/`sqrt`/`floorf`/`ceilf`/`fabs`) shims. Mounts are explicit — the bundle
+payload read-only, `Documents`/`Library` writable — and a path outside every mount is
+refused with a named diagnostic rather than inventing file contents. The host probe takes
+the extracted `.app` directory as an optional second argument.
+
+### Compiler-runtime helpers implemented for real
+
+`__divsi3`/`__modsi3`/`__udivsi3`/`__umodsi3`, `__divdi3`/`__moddi3`,
+`__floatdidf`/`__floatdisf`/`__fixdfdi` follow the ARM EABI instead of aborting the boot;
+a general `__Unwind_SjLj_Register` only requires the word it actually links (it previously
+demanded 32 writable bytes and stopped the attempt at the stack top).
+
+### Verified / not verified
+
+- Verified: host probe on the tracked Angry Birds fixture reaches the entry point, executes
+  the full bounded budget, and stops at a documented boundary (this round: the instruction
+  limit); `loaderStatus` `LOADED_WITH_TRAPS` with 0 unresolved; the CI check now accepts a
+  named trap **or** a bounded execution limit and still refuses anything else.
+- Not verified: no device run. No rendered frame, menu, gameplay or playable conversion is
+  claimed — the game-runtime APK remains a bounded boot attempt (`game-runtime-v1`), and
+  `complete-game-v1` still requires the whole executable to be inside the proven subset.

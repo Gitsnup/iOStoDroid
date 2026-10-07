@@ -70,13 +70,16 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
         src/compat_runtime/shim_registry.cpp
         src/compat_runtime/macho_loader.cpp
         src/compat_runtime/runner.cpp
+        src/compat_runtime/virtual_file_system.cpp
         src/compat_runtime/cpu.cpp
         src/compat_runtime/objc_runtime.cpp
         src/compat_runtime/objc_shims.cpp
         src/compat_runtime/audio_session_shims.cpp
+        src/compat_runtime/compiler_rt_shims.cpp
         src/compat_runtime/sjlj_unwind.cpp
         src/compat_runtime/trap_shims.cpp
         src/compat_runtime/libsystem_shims.cpp
+        src/compat_runtime/gles_shims.cpp
         src/compat_runtime/app_lifecycle.cpp
     )
     if(RADEK_FETCH_UNICORN)

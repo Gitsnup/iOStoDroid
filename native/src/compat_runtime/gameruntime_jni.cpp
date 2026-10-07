@@ -8,6 +8,7 @@
 // attempt is never gameplay evidence); the launcher keeps the stopping import
 // visible in its diagnostic screen without pretending to be playable.
 #include "compat_runtime/audio_session_shims.hpp"
+#include "compat_runtime/compiler_rt_shims.hpp"
 #include "compat_runtime/cpu.hpp"
 #include "compat_runtime/libsystem_shims.hpp"
 #include "compat_runtime/objc_shims.hpp"
@@ -85,10 +86,12 @@ Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt(JNIEnv *env, jobj
         radek::compat_runtime::libsystem::ShimAdapter libsystemShims;
         radek::compat_runtime::audio::ShimAdapter audioShims;
         radek::compat_runtime::SjLjUnwindAdapter sjljUnwind;
+        radek::compat_runtime::compiler_rt::ShimAdapter compilerRuntime;
         objcShims.registerBindings(shims);
         libsystemShims.registerBindings(shims);
         audioShims.registerBindings(shims);
         sjljUnwind.registerBindings(shims);
+        compilerRuntime.registerBindings(shims);
         radek::compat_runtime::TrapShimAdapter traps;
         const auto cpu = radek::compat_runtime::createArm32CpuBackend();
         radek::compat_runtime::BootAttemptRunner runner(shims, *cpu, traps,

@@ -1,11 +1,11 @@
 # game-runtime-v1: boot-attempt APK contract
 
 A `game-runtime-v1` APK packs a real iOS game executable and its bundle, runs
-the actual guest boot on-device, shows that boot as a minimal log, and stops
-at the first actually-used unimplemented import. It is not a conversion, not a
-static recompilation, and not gameplay. It never shows a preview, menu, or any
-other screen: when the boot cannot proceed, the launcher stops instead of
-faking progress.
+the actual guest boot on-device, and shows that boot as a minimal diagnostic
+log. Guest execution stops at the first actually-used unimplemented import,
+but the Android launcher remains open with the stop reason rather than crashing.
+It is not a conversion, not a static recompilation, and not gameplay; it never
+shows a preview or menu.
 
 ## Behavior contract
 
@@ -19,7 +19,8 @@ faking progress.
    real instructions from the Mach-O entry point until it calls (or touches
    data of) the first unimplemented import.
 4. The launcher shows loader/trap/instruction progress as a scrolling boot
-   log. When the boot stops, the APK stops with it; there is no fallback UI.
+   log. When guest execution stops or setup fails, the launcher keeps the
+   diagnostic screen open; it does not throw an Android crash or show a preview.
 5. Every report keeps `status: "not_runnable"`. Executed instructions are
    loader/CPU progress, never evidence of a working game.
 
@@ -62,9 +63,14 @@ signature/package/label/install audits) with game-runtime inputs:
   other templates; DEX must define the boot launcher class).
 - Executable gate: thin ARM Mach-O, or FAT with a 32-bit ARM slice; anything
   else throws and nothing is built.
-- Runtime gate: `libcompat_runtime_v1.so` is copied out of the installed
-  converter APK (`CompatibilityRuntime.extractGameRuntimeInstalled`), so the
-  game APK always ships the exact tested native library.
+- Runtime gate: `libcompat_runtime_v1.so` and its required shared backend
+  `libunicorn.so` are copied from the installed converter APK (including ABI
+  splits) by `CompatibilityRuntime.extractGameRuntimeInstalled`. The converter
+  build explicitly packages both CMake targets into its APK. The game APK
+  includes both aligned libraries beside one another, so Android's linker can
+  resolve the runtime's `DT_NEEDED` Unicorn dependency. Packaging fails closed
+  if either required library is absent; `libc++_shared.so` is also copied when
+  the installed build includes it.
 - The report records `contract: "game-runtime-v1"`,
   `bootAttemptIncluded: true`, `completeGameConversion: false`,
   `gamePlayable: false`, `gameCodeRecompiled: false`, and the executable,

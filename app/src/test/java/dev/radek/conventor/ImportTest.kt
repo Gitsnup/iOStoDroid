@@ -43,6 +43,31 @@ class ImportTest {
             assertThrows(IllegalArgumentException::class.java) { SafeZip.validateName(path) }
         }
     }
+
+    @Test fun acceptsDeeplyNestedGameBundlePaths() {
+        // Real bundles nest a framework inside a framework inside the .app plus
+        // deep asset folders; the old 32-component limit rejected them.
+        val deep = (1..40).joinToString("/") { "level$it" } + "/asset.png"
+        assertEquals(deep, SafeZip.validateName(deep))
+        assertEquals(deep, SafeZip.memberName(deep))
+        assertThrows(IllegalArgumentException::class.java) {
+            SafeZip.validateName((1..200).joinToString("/") { "level$it" })
+        }
+        assertThrows(IllegalArgumentException::class.java) { SafeZip.validateName("dir/" + "x".repeat(300)) }
+        assertThrows(IllegalArgumentException::class.java) { SafeZip.memberName("dir/" + "x".repeat(300)) }
+        assertThrows(IllegalArgumentException::class.java) { SafeZip.memberName("../escape") }
+    }
+
+    @Test fun extractsEntriesWithDeepNames() {
+        val root = Files.createTempDirectory("radek-test").toFile()
+        try {
+            val deep = "Payload/Test.app/Frameworks/Nested.framework/Versions/A/" +
+                (1..30).joinToString("/") { "dir$it" } + "/data.bin"
+            val archive = zip(root, listOf("Payload/Test.app/Info.plist" to "data".toByteArray(), deep to byteArrayOf(7)))
+            SafeZip.extract(archive, File(root, "out"))
+            assertEquals(1, File(root, "out/$deep").readBytes().size)
+        } finally { root.deleteRecursively() }
+    }
     private fun zip(root: File, entries: List<Pair<String, ByteArray>>): File {
         val file = File(root, "input.ipa")
         ZipOutputStream(file.outputStream()).use { z -> entries.forEach { (name, value) -> z.putNextEntry(ZipEntry(name)); z.write(value); z.closeEntry() } }

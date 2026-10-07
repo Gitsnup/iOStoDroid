@@ -8,18 +8,19 @@ import java.security.MessageDigest
 import java.util.zip.ZipFile
 
 /**
- * Copies the app's reviewed ARM64 compatibility runtime into generated APKs.
+ * Copies reviewed ARM64 compatibility libraries from the converter into generated APKs.
  *
- * The runtime is built and tested as part of this application. Generated native
- * entry libraries declare libioscompat.so with DT_NEEDED, so Android's loader
- * resolves the dependency from the same APK rather than relying on analyzer-only
- * code or an absolute path.
+ * The bounded converter packages libioscompat.so. The game boot-attempt package
+ * also copies libcompat_runtime_v1.so and its required shared libunicorn.so
+ * backend; Android resolves these dependencies from the generated APK's native
+ * library directory, not from an analyzer-only path.
  */
 internal object CompatibilityRuntime {
     const val ABI = "arm64-v8a"
     const val SONAME = "libioscompat.so"
     /** Guest-CPU boot-attempt runtime (contract "game-runtime-v1") shipped by :compat-runtime-v1. */
     const val GAMERUNTIME_SONAME = "libcompat_runtime_v1.so"
+    const val UNICORN_SONAME = "libunicorn.so"
     private const val LIBCXX_SONAME = "libc++_shared.so"
     private const val MAX_LIBRARY_BYTES = 128L * 1024 * 1024
     private const val ELF_HEADER_BYTES = 64
@@ -44,9 +45,9 @@ internal object CompatibilityRuntime {
         extractFromApks(listOf(sourceApk), destination)
 
     /**
-     * Copies the reviewed ARM64 guest-CPU boot-attempt runtime into generated
-     * game APKs. The game launcher loads libcompat_runtime_v1.so and nowhere
-     * else; libioscompat stays the bounded converter's dependency only.
+     * Copies the reviewed ARM64 guest-CPU runtime and its shared Unicorn
+     * backend into generated game APKs. libioscompat remains exclusive to the
+     * bounded converter path.
      */
     fun extractGameRuntimeInstalled(context: Context, destination: File): List<Library> {
         val info = context.applicationInfo
@@ -57,17 +58,22 @@ internal object CompatibilityRuntime {
 
     /** Package-private visibility keeps game-runtime extraction directly regression-testable. */
     internal fun extractGameRuntimeFromApks(sourceApks: List<File>, destination: File): List<Library> =
-        extractSonames(sourceApks, destination, listOf(GAMERUNTIME_SONAME, LIBCXX_SONAME), GAMERUNTIME_SONAME)
+        extractSonames(
+            sourceApks,
+            destination,
+            listOf(GAMERUNTIME_SONAME, UNICORN_SONAME, LIBCXX_SONAME),
+            setOf(GAMERUNTIME_SONAME, UNICORN_SONAME),
+        )
 
     /** Handles App Bundle installs where native libraries live in ABI split APKs. */
     internal fun extractFromApks(sourceApks: List<File>, destination: File): List<Library> =
-        extractSonames(sourceApks, destination, listOf(SONAME, LIBCXX_SONAME), SONAME)
+        extractSonames(sourceApks, destination, listOf(SONAME, LIBCXX_SONAME), setOf(SONAME))
 
     private fun extractSonames(
         sourceApks: List<File>,
         destination: File,
         libraryNames: List<String>,
-        requiredSoname: String,
+        requiredSonames: Set<String>,
     ): List<Library> {
         val availableApks = sourceApks.filter { it.isFile && it.length() > 0 }
         require(availableApks.isNotEmpty()) { "installed app APK is missing" }
@@ -81,7 +87,9 @@ internal object CompatibilityRuntime {
                 }
             }
             if (archive == null) {
-                if (soname == requiredSoname) error("the app package is missing the verified $requiredSoname compatibility runtime")
+                if (soname in requiredSonames) {
+                    error("the app package is missing required native library $soname")
+                }
                 continue
             }
             ZipFile(archive).use { zip ->

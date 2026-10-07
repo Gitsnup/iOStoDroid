@@ -23,9 +23,10 @@ internal class ConvertedApkBuilder(private val context: Context) {
     companion object {
         private const val MAX_TEMPLATE_ENTRY_BYTES = 32L * 1024 * 1024
         private const val MAX_ICON_BYTES = 16L * 1024 * 1024
-        private const val MAX_RESOURCE_FILE_BYTES = 256L * 1024 * 1024
-        private const val MAX_RESOURCE_TOTAL_BYTES = 1024L * 1024 * 1024
-        private const val MAX_RESOURCE_FILES = 4096
+        internal const val MAX_RESOURCE_FILE_BYTES = 1024L * 1024 * 1024
+        /** Report-size guard only: every payload is packaged, this caps the JSON inventory. */
+        private const val MAX_REPORTED_RESOURCES = 20_000
+        internal const val MAX_RESOURCE_FILES = 200_000
         private const val ENTRY_CLASS = "dev.radek.generated.MainActivity"
         private const val FRAME_CLOCK_DESCRIPTOR = "Ldev/radek/generated/FrameClockBridge;"
         private const val JNI_SYMBOL = "Java_dev_radek_generated_MainActivity_runNative"
@@ -128,25 +129,27 @@ internal class ConvertedApkBuilder(private val context: Context) {
             val resourceEntries = ArrayList<Pair<String, File>>()
             var totalResourceBytes = 0L
             var resourceCount = 0
-            // Every payload is copied to disk and streamed into the archive from
-            // there. Buffering a whole game bundle in RAM is what used to kill
-            // the app mid-conversion; nothing here holds a resource in memory.
-            val bundleStage = File(staged, "bundle")
+            // Payloads stay in the extracted tree and are streamed from there
+            // straight into the archive: no second on-disk copy, and nothing
+            // held in RAM. A fixed total cap used to reject real bundles; the
+            // only remaining bound is the device's own free storage, checked
+            // below before the archive is written.
             appDir.walkTopDown().filter { it.isFile }.sortedBy { it.path }.forEach { file ->
                 if (file == binary) return@forEach
                 val relative = file.relativeTo(appDir).path.replace(File.separatorChar, '/')
                 SafeZip.validateName(relative)
-                require(++resourceCount <= MAX_RESOURCE_FILES) { "too many bundle resources for the bounded converter" }
-                require(file.length() <= MAX_RESOURCE_FILE_BYTES) { "bundle resource exceeds the bounded limit: $relative" }
-                val target = File(bundleStage, "$resourceCount.bin")
-                target.parentFile?.mkdirs()
-                file.copyTo(target, overwrite = true)
-                require(target.length() == file.length()) { "bundle resource could not be staged: $relative" }
-                totalResourceBytes += target.length()
-                require(totalResourceBytes <= MAX_RESOURCE_TOTAL_BYTES) { "bundle resources exceed the bounded total limit" }
-                inventory.put(JSONObject().put("path", relative).put("sha256", sha256(target)))
-                resourceEntries += relative to target
+                require(++resourceCount <= MAX_RESOURCE_FILES) {
+                    "too many bundle resources for the bounded converter ($resourceCount > $MAX_RESOURCE_FILES)"
+                }
+                require(file.length() <= MAX_RESOURCE_FILE_BYTES) { "bundle resource exceeds the limit: $relative" }
+                totalResourceBytes += file.length()
+                if (inventory.length() < MAX_REPORTED_RESOURCES) {
+                    inventory.put(JSONObject().put("path", relative).put("sha256", sha256(file)))
+                }
+                resourceEntries += relative to file
             }
+            if (resourceEntries.isEmpty()) error("the bundle contains no resources to package")
+            SafeZip.requireStorage(dir, totalResourceBytes)
 
             setProgress(48, "CONVERTING", "Linking the Android compatibility runtime and generating the native entry library")
             val compatibilityLibraries = CompatibilityRuntime.extractInstalled(context, File(staged, "runtime"))
@@ -274,6 +277,11 @@ internal class ConvertedApkBuilder(private val context: Context) {
                     .put("launcherIconSha256", launcherIconSha)
                     .put("backend", BACKEND))
                 .put("resourceInventory", inventory)
+                .put("resources", JSONObject()
+                    .put("files", resourceCount)
+                    .put("bytes", totalResourceBytes)
+                    .put("inventoryEntries", inventory.length())
+                    .put("inventoryTruncated", inventory.length() < resourceCount))
 
             setProgress(68, "PACKAGING", "Assembling the converted APK entries")
             val entries = ArrayList<AlignedApkZip.Entry>()

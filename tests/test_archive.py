@@ -44,6 +44,16 @@ class ArchiveTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.bad_zip(name)
 
+    def test_deep_bundle_paths_are_accepted(self):
+        """Frameworks nested inside frameworks are ordinary, not suspicious."""
+        deep = "Payload/App.app/Frameworks/A.framework/Frameworks/B.framework/" + \
+            "/".join(f"dir{index}" for index in range(1, 40)) + "/asset.bin"
+        self.assertEqual(len(safe_name(deep).parts), len(deep.split("/")))
+        with self.assertRaises(InputError):
+            safe_name("/".join(["dir"] * 200))
+        with self.assertRaises(InputError):
+            safe_name("dir/" + "x" * 300)
+
     def test_symlink(self):
         self.bad_zip("link", b"../../outside", (stat.S_IFLNK | 0o777) << 16)
 

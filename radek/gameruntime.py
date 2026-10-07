@@ -4,8 +4,8 @@ The host never builds APKs. :func:`run_gameboot` probes the real guest boot
 with the ``radek-gameboot`` host binary and writes the manifest that the
 on-device ``GameRuntimeApkBuilder`` implements: one authorized 32-bit ARM
 Mach-O slice plus the bundle, packed into a ``*-game.apk`` whose launcher
-shows the boot attempt as a minimal log and stops at the first actually-used
-unimplemented import instead of showing any preview.
+shows the boot attempt as a minimal log, stops guest execution at the first
+actually-used unimplemented import, and leaves the diagnostic screen open.
 """
 
 from __future__ import annotations

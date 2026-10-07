@@ -22,6 +22,15 @@ from .dex import classes as dex_classes
 
 BUILD_TOOLS = "35.0.0"
 
+# Read-back bounds, mirrored from the on-device packagers
+# (ConvertedApkBuilder/GameRuntimeApkBuilder/SafeZip). Verification has to accept
+# everything the packagers may legitimately emit, so the entry and member limits
+# are the packager limits, not the importer's non-ZIP64 ceiling, and the only
+# remaining total bound is the same deflate-expansion ratio the importer applies.
+MAX_APK_ENTRIES = 200_000 + 4096
+MAX_APK_ENTRY_BYTES = 1024 * 1024 * 1024
+MAX_APK_EXPANSION_RATIO = 250
+
 EXPERIMENTAL_SHELL_CONTRACT = "experimental-shell-v1"
 EXPERIMENTAL_SHELL_PACKAGE = "dev.radek.experimental.shell"
 EXPERIMENTAL_SHELL_NOTICE = (
@@ -558,10 +567,13 @@ def validate_apk(
         raise InputError("APK is missing/empty")
     with zipfile.ZipFile(path) as z:
         names = z.namelist()
+        infos = z.infolist()
+        expanded = sum(i.file_size for i in infos)
+        compressed = sum(max(1, i.compress_size) for i in infos)
         if (
-            len(names) > 20000
-            or sum(i.file_size for i in z.infolist()) > 1024 * 1024 * 1024
-            or any(i.file_size > 256 * 1024 * 1024 for i in z.infolist())
+            len(infos) > MAX_APK_ENTRIES
+            or any(i.file_size > MAX_APK_ENTRY_BYTES for i in infos)
+            or expanded > compressed * MAX_APK_EXPANSION_RATIO
         ):
             raise InputError("APK ZIP size/entry limit exceeded")
         if len(names) != len(set(names)):

@@ -5,8 +5,8 @@
 // runtime maps the image, binds unimplemented imports to abort-on-call traps,
 // and executes real guest instructions until the first actually-used missing
 // import. The returned JSON report keeps status "not_runnable" (a boot
-// attempt is never gameplay evidence); the launcher crashes with the stopping
-// import instead of showing any placeholder UI.
+// attempt is never gameplay evidence); the launcher keeps the stopping import
+// visible in its diagnostic screen without pretending to be playable.
 #include "compat_runtime/audio_session_shims.hpp"
 #include "compat_runtime/cpu.hpp"
 #include "compat_runtime/objc_shims.hpp"

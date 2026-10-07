@@ -101,14 +101,18 @@ inventory and API triage.
 Proven IPAs are converted automatically during import — the signed APK whose statically recompiled entry runs
 through JNI is built and attached with no user action, leaving the entry in `READY`. The red **Force
 convert to .apk** action never overrides these states: for proven IPAs it simply rebuilds the
-converted APK; everything else gets a separately named, signed preview shell carrying the app name,
-recovered icon, and machine-readable static-analysis metadata. The preview launcher displays that
-the shell started and that no statically recompiled executable is included; it does not display converter
-branding or static-analysis details. The artifact metadata (`placeholder-info.json` retains the full
-`analysisSummary`, and the report keeps `completeGameConversion`/`gameCodeIncluded` false and
-`placeholderOnly` true as appropriate), so nothing claims the game was converted. The preview shell has its own filename, metadata, progress and provider validation. A host
-result remains shareable/installable only after the `complete-game-v1` contract passes attachment
-checks; the CLI produces such a result only for the proven bounded subset (see `radek/gamepack.py`).
+converted APK; everything else gets a separately named, signed `game-runtime-v1` boot-attempt APK
+that packs the selected ARM executable, bundle, `libcompat_runtime_v1.so`, and required `libunicorn.so`.
+Guest execution stops at the first unimplemented call while the diagnostic activity remains open; it
+does not claim playability. A source-free preview shell is available as an explicit fallback. Its
+launcher displays that the shell started and that no statically recompiled executable is included;
+it does not display converter branding or static-analysis details. The artifact metadata
+(`placeholder-info.json` retains the preview summary, and the report keeps
+`completeGameConversion`/`gameCodeIncluded` false and `placeholderOnly` true as appropriate), so
+nothing claims the game was converted. Runtime and preview APKs have separate filenames, metadata,
+progress and provider validation. A host result remains shareable/installable only after the
+`complete-game-v1` contract passes attachment checks; the CLI produces such a result only for the
+proven bounded subset (see `radek/gamepack.py`).
 The CLI `convert` path may additionally emit `experimental-shell.apk` (`experimental-shell-v1`): a
 signed shell whose launcher and metadata disclose that no game code is statically recompiled. It is reported
 in `experimentalShell` separately from `conversionProgress`, which stays `NOT_BUILT` for anything

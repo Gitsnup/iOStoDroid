@@ -27,10 +27,13 @@ class Limits:
     stop ZIP bombs rather than to police how large a game may be.
     """
 
-    expanded_bytes: int = 1024 * 1024 * 1024
-    file_bytes: int = 256 * 1024 * 1024
-    entries: int = 20000
+    file_bytes: int = 1024 * 1024 * 1024
+    entries: int = 65534
     ratio: int = 250
+    # Legacy fields kept for callers that still pass them explicitly. The
+    # default is now unlimited: an archive is bounded by the machine's free
+    # space (see :func:`require_free_space`), not by a pre-picked total.
+    expanded_bytes: int | None = None
 
 
 def require_free_space(path: Path, needed_bytes: int) -> None:
@@ -55,12 +58,22 @@ def require_free_space(path: Path, needed_bytes: int) -> None:
 
 
 def safe_name(name: str) -> PurePosixPath:
+    """Normalise one archive member name, failing closed on traversal.
+
+    Bounds match what a filesystem can store (255 bytes per component, 4096
+    bytes per path) instead of the earlier 32-component/1 KiB limits, which
+    rejected deeply nested but perfectly ordinary game bundles.
+    """
     if not name or "\\" in name or "\x00" in name or ":" in name:
         raise InputError("invalid archive path")
     parts = name.rstrip("/").split("/")
     if name.startswith("/") or any(p in ("", ".", "..") for p in parts):
         raise InputError("unsafe archive path: " + name)
-    if len(name.encode("utf-8")) > 1024 or len(parts) > 32:
+    if len(parts) > 96:
+        raise InputError("archive path has too many components: " + name)
+    if any(len(part.encode("utf-8")) > 255 for part in parts):
+        raise InputError("archive path component too long: " + name)
+    if len(name.encode("utf-8")) > 4096:
         raise InputError("archive path exceeds limit")
     return PurePosixPath(*parts)
 
@@ -95,7 +108,7 @@ def extract_ipa(source: Path, destination: Path, limits: Limits = Limits()) -> N
                 if info.file_size > max(1, info.compress_size) * limits.ratio:
                     raise InputError("ZIP expansion ratio exceeds limit")
                 total += info.file_size
-                if total > limits.expanded_bytes:
+                if limits.expanded_bytes is not None and total > limits.expanded_bytes:
                     raise InputError("ZIP expanded size exceeds limit")
                 target = destination.joinpath(*rel.parts)
                 if info.is_dir():

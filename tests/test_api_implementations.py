@@ -76,7 +76,7 @@ class ApiImplementationTests(unittest.TestCase):
                         "_CACurrentMediaTime",
                         "_mach_absolute_time",
                         "_mach_timebase_info",
-                        "_UIApplicationMain",
+                        "_UnknownPrivateGameSymbol",
                     ]
                 ),
                 output,
@@ -275,7 +275,7 @@ class ApiImplementationTests(unittest.TestCase):
         source = kotlin_path.read_text(encoding="utf-8")
         start = source.index("private val implementedApiReplacements = mapOf(")
         end = source.index("\n    )", start)
-        actual = dict(re.findall(r'"([^"]+)"\s+to\s+"([^"]+)"', source[start:end]))
+        actual = {k.replace("\\$", "$"): v for k, v in re.findall(r'"([^"]+)"\s+to\s+"([^"]+)"', source[start:end])}
         expected = {symbol: implementation for symbol, (implementation, _macro) in _SUPPORTED.items()}
         self.assertEqual(expected, actual)
 

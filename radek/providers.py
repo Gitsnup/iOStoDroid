@@ -269,9 +269,16 @@ BIONIC_SYMBOL_CANDIDATES = frozenset(
     """
     AAssetManager_fromJava AAssetManager_open AAssetManager_openDir AAsset_close AAsset_getBuffer AAsset_getLength
     AAsset_getLength64 AAsset_getRemainingLength AAsset_getRemainingLength64 AAsset_isAllocated
-    AAsset_openFileDescriptor AAsset_openFileDescriptor64 AAsset_read AAsset_seek AAsset_seek64 AConfiguration_delete
-    AConfiguration_fromAssetManager AConfiguration_getCountry AConfiguration_getLanguage AConfiguration_new
-    AInputQueue_attachLooper AInputQueue_detachLooper AInputQueue_finishEvent AInputQueue_getEvent
+    AAsset_openFileDescriptor AAsset_openFileDescriptor64 AAsset_read AAsset_seek AAsset_seek64
+    AAudioStreamBuilder_delete AAudioStreamBuilder_openStream AAudioStreamBuilder_setBufferCapacityInFrames
+    AAudioStreamBuilder_setChannelCount AAudioStreamBuilder_setDataCallback AAudioStreamBuilder_setDirection
+    AAudioStreamBuilder_setErrorCallback AAudioStreamBuilder_setFormat AAudioStreamBuilder_setPerformanceMode
+    AAudioStreamBuilder_setSampleRate AAudioStreamBuilder_setSharingMode AAudioStream_close
+    AAudioStream_getChannelCount AAudioStream_getFormat AAudioStream_getSampleRate AAudioStream_getState
+    AAudioStream_getXRunCount AAudioStream_read AAudioStream_requestFlush AAudioStream_requestPause
+    AAudioStream_requestStart AAudioStream_requestStop AAudioStream_write AAudio_createStreamBuilder
+    AConfiguration_delete AConfiguration_fromAssetManager AConfiguration_getCountry AConfiguration_getLanguage
+    AConfiguration_new AInputQueue_attachLooper AInputQueue_detachLooper AInputQueue_finishEvent AInputQueue_getEvent
     AInputQueue_preDispatchEvent ALooper_addFd ALooper_forThread ALooper_pollAll ALooper_pollOnce ALooper_prepare
     ALooper_removeFd ALooper_wake AMediaCodec_configure AMediaCodec_createDecoderByType AMediaCodec_createInputBuffer
     AMediaCodec_createOutputBuffer AMediaCodec_delete AMediaCodec_dequeueInputBuffer AMediaCodec_dequeueOutputBuffer
@@ -288,21 +295,25 @@ BIONIC_SYMBOL_CANDIDATES = frozenset(
     ASensorEventQueue_enableSensor ASensorEventQueue_getEvents ASensorEventQueue_hasEvents
     ASensorEventQueue_setEventRate ASensorManager_createEventQueue ASensorManager_destroyEventQueue
     ASensorManager_getDefaultSensor ASensorManager_getInstance ASensorManager_getSensorList AndroidBitmap_getInfo
-    AndroidBitmap_lockPixels AndroidBitmap_unlockPixels __android_log_assert __android_log_buf_print
+    AndroidBitmap_lockPixels AndroidBitmap_unlockPixels _ZSt9terminatev _ZTVN10__cxxabiv117__class_type_infoE
+    _ZTVN10__cxxabiv119__pointer_type_infoE _ZTVN10__cxxabiv120__si_class_type_infoE
+    _ZTVN10__cxxabiv121__vmi_class_type_infoE _ZdaPv _ZdlPv _Znam _Znwm __android_log_assert __android_log_buf_print
     __android_log_buf_write __android_log_is_loggable __android_log_print __android_log_vprint __android_log_write
-    __assert __assert2 __cxa_atexit __cxa_finalize __errno __libc_current_sigrtmax __libc_current_sigrtmin
-    __memcpy_chk __memmove_chk __memset_chk __sprintf_chk __stack_chk_fail __strcat_chk __strcpy_chk __strlen_chk
-    __vsnprintf_chk __vsprintf_chk _exit abort abs accept access acos acosf acosh acoshf adler32 adler32_combine
+    __assert __assert2 __cxa_allocate_exception __cxa_atexit __cxa_begin_catch __cxa_demangle __cxa_end_catch
+    __cxa_finalize __cxa_free_exception __cxa_guard_abort __cxa_guard_acquire __cxa_guard_release __cxa_pure_virtual
+    __cxa_rethrow __cxa_throw __dynamic_cast __errno __libc_current_sigrtmax __libc_current_sigrtmin __memcpy_chk
+    __memmove_chk __memset_chk __sprintf_chk __stack_chk_fail __strcat_chk __strcpy_chk __strlen_chk __vsnprintf_chk
+    __vsprintf_chk _exit _longjmp _setjmp abort abs accept access acos acosf acosh acoshf adler32 adler32_combine
     adler32_z alarm android_dlopen_ext asctime asctime_r asin asinf asinh asinhf atan atan2 atan2f atanf atanh atanhf
-    atexit atof atoi atol atoll basename bind brk bsearch btowc cabs cabsf cacos cacosf cacosh cacoshf calloc carg
-    cargf casin casinf casinh casinhf catan catanf catanh catanhf cbrt cbrtf ccos ccosf ccosh ccoshf ceil ceilf cexp
-    cexpf chdir chmod cimag cimagf clearerr clock clock_gettime clock_settime clog clogf close closedir closelog
-    compress compress2 compressBound conj conjf connect copysign copysignf cos cosf cosh coshf cpow cpowf cproj cprojf
-    crc32 crc32_combine crc32_z creal crealf creat csin csinf csinh csinhf csqrt csqrtf ctan ctanf ctanh ctanhf ctime
-    ctime_r deflate deflateBound deflateCopy deflateEnd deflateGetDictionary deflateInit2_ deflateInit_ deflateParams
-    deflatePending deflatePrime deflateReset deflateResetKeep deflateSetDictionary deflateSetHeader deflateTune
-    difftime dirname dl_iterate_phdr dladdr dlclose dlerror dlinfo dlopen dlsym dup dup2 eglBindAPI eglBindTexImage
-    eglChooseConfig eglClientWaitSyncKHR eglCopyBuffers eglCreateContext eglCreateImageKHR
+    atexit atof atoi atol atoll basename bcmp bcopy bind brk bsearch btowc bzero cabs cabsf cacos cacosf cacosh
+    cacoshf calloc carg cargf casin casinf casinh casinhf catan catanf catanh catanhf cbrt cbrtf ccos ccosf ccosh
+    ccoshf ceil ceilf cexp cexpf chdir chmod cimag cimagf clearerr clock clock_gettime clock_settime clog clogf close
+    closedir closelog compress compress2 compressBound conj conjf connect copysign copysignf cos cosf cosh coshf cpow
+    cpowf cproj cprojf crc32 crc32_combine crc32_z creal crealf creat csin csinf csinh csinhf csqrt csqrtf ctan ctanf
+    ctanh ctanhf ctime ctime_r deflate deflateBound deflateCopy deflateEnd deflateGetDictionary deflateInit2_
+    deflateInit_ deflateParams deflatePending deflatePrime deflateReset deflateResetKeep deflateSetDictionary
+    deflateSetHeader deflateTune difftime dirname dl_iterate_phdr dladdr dlclose dlerror dlinfo dlopen dlsym dup dup2
+    eglBindAPI eglBindTexImage eglChooseConfig eglClientWaitSyncKHR eglCopyBuffers eglCreateContext eglCreateImageKHR
     eglCreatePbufferFromClientBuffer eglCreatePbufferSurface eglCreatePixmapSurface eglCreatePlatformPixmapSurface
     eglCreatePlatformWindowSurface eglCreateSyncKHR eglCreateWindowSurface eglDestroyContext eglDestroyImageKHR
     eglDestroySurface eglDestroySyncKHR eglGetConfigAttrib eglGetConfigs eglGetCurrentContext eglGetCurrentDisplay
@@ -311,14 +322,14 @@ BIONIC_SYMBOL_CANDIDATES = frozenset(
     eglQuerySurfacePointerANGLE eglReleaseTexImage eglReleaseThread eglSetDamageRegionKHR eglSignalSyncKHR
     eglSurfaceAttrib eglSwapBuffers eglSwapBuffersWithDamageKHR eglSwapInterval eglTerminate eglWaitClient eglWaitGL
     eglWaitNative eglWaitSyncKHR endgrent endpwent erf erfc erfcf erff execl execle execlp execv execve execvp exit
-    exp exp2 exp2f expf expm1 expm1f fabs fabsf fchmod fchown fclose fdatasync fdim fdimf fdopen feof ferror fflush
-    ffs ffsl ffsll fgetc fgetpos fgets fileno flock floor floorf fma fmaf fmax fmaxf fmemopen fmin fminf fmod fmodf
-    fnmatch fopen fprintf fputc fputs fread free freeaddrinfo freopen frexp frexpf fscanf fseek fseeko fsetpos fstat
-    fstatat fstatfs fstatvfs fsync ftell ftello ftruncate fwrite gai_strerror getc getcwd getdtablesize getegid getenv
-    geteuid getgid getgrent getgrgid getgrnam getgroups gethostbyaddr gethostbyname gethostname getline getlogin
-    getopt getopt_long getopt_long_only getpagesize getpeername getpgrp getpid getppid getpriority getprogname
-    getpwent getpwnam getpwuid getservbyname getservbyport getsockname getsockopt gettid gettimeofday getuid
-    glActiveTexture glAlphaFunc glAlphaFuncx glAttachShader glBeginQueryEXT glBindAttribLocation glBindBuffer
+    exp exp2 exp2f expf expm1 expm1f fabs fabsf fchmod fchown fclose fcntl fdatasync fdim fdimf fdopen feof ferror
+    fflush ffs ffsl ffsll fgetc fgetpos fgets fileno flock floor floorf fma fmaf fmax fmaxf fmemopen fmin fminf fmod
+    fmodf fnmatch fopen fprintf fputc fputs fread free freeaddrinfo freopen frexp frexpf fscanf fseek fseeko fsetpos
+    fstat fstatat fstatfs fstatvfs fsync ftell ftello ftruncate fwrite gai_strerror getc getcwd getdtablesize getegid
+    getenv geteuid getgid getgrent getgrgid getgrnam getgroups gethostbyaddr gethostbyname gethostname getline
+    getlogin getopt getopt_long getopt_long_only getpagesize getpeername getpgrp getpid getppid getpriority
+    getprogname getpwent getpwnam getpwuid getservbyname getservbyport getsockname getsockopt gettid gettimeofday
+    getuid glActiveTexture glAlphaFunc glAlphaFuncx glAttachShader glBeginQueryEXT glBindAttribLocation glBindBuffer
     glBindFramebuffer glBindFramebufferOES glBindRenderbuffer glBindRenderbufferOES glBindTexture glBlendColor
     glBlendEquation glBlendEquationOES glBlendEquationSeparate glBlendEquationSeparateOES glBlendFunc
     glBlendFuncSeparate glBlendFuncSeparateOES glBufferData glBufferSubData glCheckFramebufferStatus
@@ -334,25 +345,26 @@ BIONIC_SYMBOL_CANDIDATES = frozenset(
     glFogf glFogfv glFogi glFogiv glFogx glFogxv glFramebufferRenderbuffer glFramebufferRenderbufferOES
     glFramebufferTexture2D glFramebufferTexture2DOES glFrontFace glFrustumf glFrustumx glGenBuffers glGenFramebuffers
     glGenFramebuffersOES glGenQueriesEXT glGenRenderbuffers glGenRenderbuffersOES glGenTextures glGenerateMipmap
-    glGetActiveAttrib glGetActiveUniform glGetAttribLocation glGetBooleanv glGetBufferParameteriv glGetClipPlane
-    glGetClipPlanef glGetClipPlanex glGetError glGetFixedv glGetFloatv glGetFramebufferAttachmentParameteriv
-    glGetIntegerv glGetLightfv glGetLightiv glGetLightxv glGetMaterialfv glGetMaterialiv glGetMaterialxv glGetPointerv
-    glGetProgramBinaryOES glGetProgramInfoLog glGetProgramiv glGetQueryObjectuivEXT glGetQueryivEXT
-    glGetRenderbufferParameteriv glGetRenderbufferParameterivOES glGetShaderInfoLog glGetShaderPrecisionFormat
-    glGetShaderiv glGetString glGetTexEnviv glGetTexEnvxv glGetTexGenfvOES glGetTexGenivOES glGetTexGenxvOES
-    glGetTexParameterfv glGetTexParameteriv glGetTexParameterxv glGetUniformLocation glGetUniformfv glGetUniformiv
-    glGetVertexAttribPointerv glGetVertexAttribfv glGetVertexAttribiv glHint glIsBuffer glIsEnabled glIsFramebuffer
-    glIsFramebufferOES glIsProgram glIsQueryEXT glIsRenderbuffer glIsRenderbufferOES glIsShader glIsTexture
-    glLightModelf glLightModelfv glLightModelx glLightModelxv glLightf glLightfv glLighti glLightiv glLightx glLightxv
-    glLineWidth glLineWidthx glLinkProgram glLoadIdentity glLoadMatrixf glLoadMatrixx glLogicOp glMaterialf
-    glMaterialfv glMaterialx glMaterialxv glMatrixMode glMultMatrixf glMultMatrixx glMultiTexCoord4f glMultiTexCoord4x
-    glNormal3f glNormal3x glNormalPointer glOrthof glOrthox glPixelStorei glPointParameterf glPointParameterfv
-    glPointSize glPointSizePointerOES glPointSizex glPolygonOffset glPolygonOffsetx glPopMatrix glProgramBinaryOES
-    glPushMatrix glQueryMatrixxOES glReadPixels glReleaseShaderCompiler glRenderbufferStorage glRenderbufferStorageOES
-    glRotatef glRotatex glSampleCoverage glSampleCoveragex glScalef glScalex glScissor glShadeModel glShaderBinary
-    glShaderSource glStencilFunc glStencilFuncSeparate glStencilMask glStencilMaskSeparate glStencilOp
-    glStencilOpSeparate glTexCoordPointer glTexEnvf glTexEnvfv glTexEnvi glTexEnviv glTexEnvx glTexEnvxv glTexGenfOES
-    glTexGenfvOES glTexGeniOES glTexGenivOES glTexGenxOES glTexGenxvOES glTexImage2D glTexParameterf glTexParameterfv
+    glGenerateMipmapOES glGetActiveAttrib glGetActiveUniform glGetAttribLocation glGetBooleanv glGetBufferParameteriv
+    glGetClipPlane glGetClipPlanef glGetClipPlanex glGetError glGetFixedv glGetFloatv
+    glGetFramebufferAttachmentParameteriv glGetIntegerv glGetLightfv glGetLightiv glGetLightxv glGetMaterialfv
+    glGetMaterialiv glGetMaterialxv glGetPointerv glGetProgramBinaryOES glGetProgramInfoLog glGetProgramiv
+    glGetQueryObjectuivEXT glGetQueryivEXT glGetRenderbufferParameteriv glGetRenderbufferParameterivOES
+    glGetShaderInfoLog glGetShaderPrecisionFormat glGetShaderiv glGetString glGetTexEnviv glGetTexEnvxv
+    glGetTexGenfvOES glGetTexGenivOES glGetTexGenxvOES glGetTexParameterfv glGetTexParameteriv glGetTexParameterxv
+    glGetUniformLocation glGetUniformfv glGetUniformiv glGetVertexAttribPointerv glGetVertexAttribfv
+    glGetVertexAttribiv glHint glIsBuffer glIsEnabled glIsFramebuffer glIsFramebufferOES glIsProgram glIsQueryEXT
+    glIsRenderbuffer glIsRenderbufferOES glIsShader glIsTexture glLightModelf glLightModelfv glLightModelx
+    glLightModelxv glLightf glLightfv glLighti glLightiv glLightx glLightxv glLineWidth glLineWidthx glLinkProgram
+    glLoadIdentity glLoadMatrixf glLoadMatrixx glLogicOp glMaterialf glMaterialfv glMaterialx glMaterialxv
+    glMatrixMode glMultMatrixf glMultMatrixx glMultiTexCoord4f glMultiTexCoord4x glNormal3f glNormal3x glNormalPointer
+    glOrthof glOrthox glPixelStorei glPointParameterf glPointParameterfv glPointSize glPointSizePointerOES
+    glPointSizex glPolygonOffset glPolygonOffsetx glPopMatrix glProgramBinaryOES glPushMatrix glQueryMatrixxOES
+    glReadPixels glReleaseShaderCompiler glRenderbufferStorage glRenderbufferStorageOES glRotatef glRotatex
+    glSampleCoverage glSampleCoveragex glScalef glScalex glScissor glShadeModel glShaderBinary glShaderSource
+    glStencilFunc glStencilFuncSeparate glStencilMask glStencilMaskSeparate glStencilOp glStencilOpSeparate
+    glTexCoordPointer glTexEnvf glTexEnvfv glTexEnvi glTexEnviv glTexEnvx glTexEnvxv glTexGenfOES glTexGenfvOES
+    glTexGeniOES glTexGenivOES glTexGenxOES glTexGenxvOES glTexImage2D glTexParameterf glTexParameterfv
     glTexParameteri glTexParameteriv glTexParameterx glTexParameterxv glTexSubImage2D glTranslatef glTranslatex
     glUniform1f glUniform1fv glUniform1i glUniform1iv glUniform2f glUniform2fv glUniform2i glUniform2iv glUniform3f
     glUniform3fv glUniform3i glUniform3iv glUniform4f glUniform4fv glUniform4i glUniform4iv glUniformMatrix2fv
@@ -364,45 +376,46 @@ BIONIC_SYMBOL_CANDIDATES = frozenset(
     inet_ntop inet_pton inflate inflateBack inflateBackEnd inflateBackInit_ inflateCodesUsed inflateCopy inflateEnd
     inflateGetDictionary inflateGetHeader inflateInit2_ inflateInit_ inflatePrime inflateReset inflateReset2
     inflateResetKeep inflateSetDictionary inflateSync inflateSyncPoint inflateUndermine inflateValidate ioctl isalnum
-    isalpha isatty isblank iscntrl isdigit isgraph islower isprint ispunct isspace isupper isxdigit j0 j1 jn kill
-    lchown ldexp ldexpf lgamma lgamma_r lgammaf lgammaf_r link listen llrint llrintf llround llroundf localeconv
-    localtime localtime_r log log10 log10f log1p log1pf log2 log2f logb logbf logf lrint lrintf lround lroundf lseek
-    lstat madvise malloc malloc_usable_size mallopt mblen mbrlen mbrtowc mbsinit mbsrtowcs mbstowcs mbtowc memalign
-    memccpy memchr memcmp memcpy memmem memmove mempcpy memrchr memset mincore mkdir mkdtemp mkstemp mktime mlock
-    mlockall mmap modf modff mprotect mremap msync munlock munlockall munmap nan nanf nanosleep nearbyint nearbyintf
-    newlocale nextafter nextafterf nexttoward nl_langinfo ntohl ntohs open opendir openlog pathconf pause pclose
-    perror pipe popen pow powf printf pselect psignal pthread_atfork pthread_attr_destroy pthread_attr_init
-    pthread_attr_setdetachstate pthread_attr_setschedparam pthread_attr_setstacksize pthread_cond_broadcast
-    pthread_cond_destroy pthread_cond_init pthread_cond_signal pthread_cond_timedwait pthread_cond_wait pthread_create
-    pthread_detach pthread_equal pthread_exit pthread_getspecific pthread_join pthread_key_create pthread_key_delete
-    pthread_kill pthread_mutex_destroy pthread_mutex_init pthread_mutex_lock pthread_mutex_trylock
-    pthread_mutex_unlock pthread_mutexattr_destroy pthread_mutexattr_init pthread_mutexattr_settype pthread_once
-    pthread_rwlock_destroy pthread_rwlock_rdlock pthread_rwlock_unlock pthread_rwlock_wrlock pthread_self
-    pthread_setname_np pthread_setschedparam pthread_setspecific pthread_sigmask putc putchar putenv puts qsort raise
-    rand random read readdir readdir_r readlink readv realloc realpath recv recvfrom recvmsg regcomp regerror regexec
-    regfree remainder remainderf remove remquo remquof rename rewinddir rint rintf rmdir round roundf sbrk scalbn
-    scalbnf scandir scanf sched_yield seekdir select sem_destroy sem_getvalue sem_init sem_post sem_timedwait
-    sem_trywait sem_wait send sendmsg sendto setbuf setbuffer setenv setgrent setgroups setlinebuf setlocale
-    setpriority setprogname setpwent setsockopt setvbuf sigaction sigaddset sigaltstack sigdelset sigemptyset
-    sigfillset sigismember signal significand sigprocmask sigwait sin sinf sinh sinhf slCreateEngine sleep snprintf
-    socket socketpair sprintf sqrt sqrtf srand srandom sscanf stat statfs statvfs strcasecmp strcasestr strcat strchr
-    strchrnul strcmp strcoll strcpy strcspn strdup strerror strerror_r strftime strlcat strlcpy strlen strncasecmp
-    strncat strncmp strncpy strndup strnlen strpbrk strptime strrchr strsep strsignal strspn strstr strtod strtof
-    strtoimax strtok strtok_r strtol strtold strtoll strtoul strtoull strtoumax strxfrm swab symlink symlinkat sysconf
-    syslog system tan tanf tanh tanhf tcdrain tcflow tcflush tcgetattr tcsendbreak tcsetattr telldir tempnam tgamma
-    tgammaf time timegm tmpfile tmpnam tolower toupper towlower towupper trunc truncate truncf ttyname tzset umask
-    uname uncompress uncompress2 ungetc unlink unlinkat unsetenv unzClose unzOpen unzReadCurrentFile uselocale usleep
-    utime utimensat utimes vasprintf vdprintf vfork vfprintf vfscanf vkAcquireNextImageKHR vkAllocateCommandBuffers
-    vkAllocateMemory vkBeginCommandBuffer vkCmdBindPipeline vkCmdDraw vkCmdDrawIndexed vkCreateBuffer
-    vkCreateCommandPool vkCreateDevice vkCreateFramebuffer vkCreateGraphicsPipelines vkCreateImage vkCreateImageView
-    vkCreateInstance vkCreateRenderPass vkCreateShaderModule vkCreateSwapchainKHR vkDestroyBuffer vkDestroyCommandPool
-    vkDestroyDevice vkDestroyFramebuffer vkDestroyImage vkDestroyImageView vkDestroyInstance vkDestroyPipeline
-    vkDestroyRenderPass vkDestroyShaderModule vkDestroySwapchainKHR vkDeviceWaitIdle vkEndCommandBuffer
-    vkEnumeratePhysicalDevices vkFreeCommandBuffers vkFreeMemory vkGetDeviceQueue vkGetPhysicalDeviceProperties
-    vkGetSwapchainImagesKHR vkQueuePresentKHR vkQueueSubmit vkQueueWaitIdle vprintf vscanf vsnprintf vsprintf vsscanf
-    vsyslog wait wait3 wait4 waitpid wcrtomb wcschr wcscmp wcscoll wcscpy wcscspn wcslen wcsncat wcsncmp wcsncpy
-    wcspbrk wcsrchr wcsrtombs wcsstr wcstod wcstol wcstombs wcstoul wctomb wcwidth wmemchr wmemcmp wmemcpy wmemmove
-    wmemset write writev y0 y1 yn zlibCompileFlags zlibVersion
+    isalpha isatty isblank iscntrl isdigit isgraph islower isprint ispunct isspace isupper isxdigit j0 j1 jn kill labs
+    lchown ldexp ldexpf lgamma lgamma_r lgammaf lgammaf_r link listen llabs llrint llrintf llround llroundf localeconv
+    localtime localtime_r log log10 log10f log1p log1pf log2 log2f logb logbf logf longjmp lrint lrintf lround lroundf
+    lseek lstat madvise malloc malloc_usable_size mallopt mblen mbrlen mbrtowc mbsinit mbsrtowcs mbstowcs mbtowc
+    memalign memccpy memchr memcmp memcpy memmem memmove mempcpy memrchr memset mincore mkdir mkdtemp mkstemp mktime
+    mlock mlockall mmap modf modff mprotect mremap msync munlock munlockall munmap nan nanf nanosleep nearbyint
+    nearbyintf newlocale nextafter nextafterf nexttoward nl_langinfo ntohl ntohs open opendir openlog pathconf pause
+    pclose perror pipe poll popen pow powf printf pselect psignal pthread_atfork pthread_attr_destroy
+    pthread_attr_init pthread_attr_setdetachstate pthread_attr_setschedparam pthread_attr_setstacksize
+    pthread_cond_broadcast pthread_cond_destroy pthread_cond_init pthread_cond_signal pthread_cond_timedwait
+    pthread_cond_wait pthread_create pthread_detach pthread_equal pthread_exit pthread_getschedparam
+    pthread_getspecific pthread_join pthread_key_create pthread_key_delete pthread_kill pthread_mutex_destroy
+    pthread_mutex_init pthread_mutex_lock pthread_mutex_trylock pthread_mutex_unlock pthread_mutexattr_destroy
+    pthread_mutexattr_init pthread_mutexattr_settype pthread_once pthread_rwlock_destroy pthread_rwlock_rdlock
+    pthread_rwlock_unlock pthread_rwlock_wrlock pthread_self pthread_setname_np pthread_setschedparam
+    pthread_setspecific pthread_sigmask putc putchar putenv puts qsort raise rand random read readdir readdir_r
+    readlink readv realloc realpath recv recvfrom recvmsg regcomp regerror regexec regfree remainder remainderf remove
+    remquo remquof rename rewind rewinddir rint rintf rmdir round roundf sbrk scalbn scalbnf scandir scanf sched_yield
+    seekdir select sem_destroy sem_getvalue sem_init sem_post sem_timedwait sem_trywait sem_wait send sendmsg sendto
+    setbuf setbuffer setenv setgrent setgroups setjmp setlinebuf setlocale setpriority setprogname setpwent setsockopt
+    setvbuf sigaction sigaddset sigaltstack sigdelset sigemptyset sigfillset sigismember signal significand
+    sigprocmask sigwait sin sinf sinh sinhf slCreateEngine sleep snprintf socket socketpair sprintf sqrt sqrtf srand
+    srandom sscanf stat statfs statvfs strcasecmp strcasestr strcat strchr strchrnul strcmp strcoll strcpy strcspn
+    strdup strerror strerror_r strftime strlcat strlcpy strlen strncasecmp strncat strncmp strncpy strndup strnlen
+    strpbrk strptime strrchr strsep strsignal strspn strstr strtod strtof strtoimax strtok strtok_r strtol strtold
+    strtoll strtoul strtoull strtoumax strxfrm swab symlink symlinkat sysconf syslog system tan tanf tanh tanhf
+    tcdrain tcflow tcflush tcgetattr tcsendbreak tcsetattr telldir tempnam tgamma tgammaf time timegm tmpfile tmpnam
+    tolower toupper towlower towupper trunc truncate truncf ttyname tzset umask uname uncompress uncompress2 ungetc
+    unlink unlinkat unsetenv unzClose unzOpen unzReadCurrentFile uselocale usleep utime utimensat utimes vasprintf
+    vdprintf vfork vfprintf vfscanf vkAcquireNextImageKHR vkAllocateCommandBuffers vkAllocateMemory
+    vkBeginCommandBuffer vkCmdBindPipeline vkCmdDraw vkCmdDrawIndexed vkCreateBuffer vkCreateCommandPool
+    vkCreateDevice vkCreateFramebuffer vkCreateGraphicsPipelines vkCreateImage vkCreateImageView vkCreateInstance
+    vkCreateRenderPass vkCreateShaderModule vkCreateSwapchainKHR vkDestroyBuffer vkDestroyCommandPool vkDestroyDevice
+    vkDestroyFramebuffer vkDestroyImage vkDestroyImageView vkDestroyInstance vkDestroyPipeline vkDestroyRenderPass
+    vkDestroyShaderModule vkDestroySwapchainKHR vkDeviceWaitIdle vkEndCommandBuffer vkEnumeratePhysicalDevices
+    vkFreeCommandBuffers vkFreeMemory vkGetDeviceQueue vkGetPhysicalDeviceProperties vkGetSwapchainImagesKHR
+    vkQueuePresentKHR vkQueueSubmit vkQueueWaitIdle vprintf vscanf vsnprintf vsprintf vsscanf vsyslog wait wait3 wait4
+    waitpid wcrtomb wcschr wcscmp wcscoll wcscpy wcscspn wcslen wcsncat wcsncmp wcsncpy wcspbrk wcsrchr wcsrtombs
+    wcsstr wcstod wcstol wcstombs wcstoul wctomb wcwidth wmemchr wmemcmp wmemcpy wmemmove wmemset write writev y0 y1
+    yn zlibCompileFlags zlibVersion
     """.split()
 )
 
@@ -469,10 +482,15 @@ def for_install_name(path: str) -> Provider | None:
 
 def for_symbol(symbol: str) -> str | None:
     """Return an exact shim or triage hint; unknown lower-case names stay unknown."""
-    if symbol in IMPLEMENTED_C_API_SHIMS:
-        return IMPLEMENTED_C_API_SHIMS[symbol]
     if runtime_candidate := compiler_runtime_candidate(symbol):
         return runtime_candidate
+    if symbol in IMPLEMENTED_C_API_SHIMS:
+        shim = IMPLEMENTED_C_API_SHIMS[symbol]
+        bare = symbol.lstrip("_")
+        for prefix, provider in SYMBOL_PROVIDERS:
+            if prefix in ("gl", "egl", "objc_", "dispatch_") and bare.startswith(prefix):
+                return f"{shim} ({provider})"
+        return shim
     name = symbol.lstrip("_")
     for prefix, provider in SYMBOL_PROVIDERS:
         if name.startswith(prefix):

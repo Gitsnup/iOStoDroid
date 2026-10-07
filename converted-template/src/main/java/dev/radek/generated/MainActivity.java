@@ -5,11 +5,13 @@ import android.app.ActivityManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import org.json.JSONObject;
@@ -20,8 +22,8 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Launcher of a bounded complete-game conversion built on-device.
- * It shows the message recovered from the IPA and runs the statically recompiled
- * native entry through libconverted.so.
+ * It renders the recovered bundle splash screen alongside the message recovered
+ * from the IPA and runs the statically recompiled native entry through libconverted.so.
  */
 public final class MainActivity extends Activity {
     private static boolean nativeReady = false;
@@ -67,6 +69,27 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private Bitmap readSplash() {
+        String[] candidates = new String[] {
+            "splash.png",
+            "bundle/Default-Landscape.png",
+            "bundle/Default.png",
+            "bundle/LaunchImage.png",
+            "bundle/Splash.png",
+            "bundle/data/SPLASHES.png",
+            "bundle/data/MENU.png"
+        };
+        for (String path : candidates) {
+            try (InputStream input = getAssets().open(path)) {
+                Bitmap decoded = BitmapFactory.decodeStream(input);
+                if (decoded != null) return decoded;
+            } catch (Exception ignored) {
+                // Try next splash candidate.
+            }
+        }
+        return null;
+    }
+
     private TextView label(String value, float size, int color, boolean bold) {
         TextView view = new TextView(this);
         view.setText(value);
@@ -88,18 +111,53 @@ public final class MainActivity extends Activity {
         String message = metadata.optString("launchMessage", "Native entry started.");
         String appName = metadata.optString("applicationName", "");
 
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(Color.rgb(11, 16, 29));
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
         root.setBackgroundColor(Color.rgb(11, 16, 29));
         root.setPadding(dp(24), dp(48), dp(24), dp(48));
 
+        Bitmap splashBitmap = readSplash();
+        if (splashBitmap != null) {
+            LinearLayout splashCard = new LinearLayout(this);
+            splashCard.setOrientation(LinearLayout.VERTICAL);
+            splashCard.setGravity(Gravity.CENTER_HORIZONTAL);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(Color.rgb(17, 25, 43));
+            bg.setCornerRadius(dp(12));
+            bg.setStroke(dp(1), Color.rgb(38, 56, 89));
+            splashCard.setBackground(bg);
+            splashCard.setPadding(dp(10), dp(10), dp(10), dp(10));
+
+            ImageView splashView = new ImageView(this);
+            splashView.setImageBitmap(splashBitmap);
+            splashView.setAdjustViewBounds(true);
+            splashView.setMaxHeight(dp(240));
+            splashView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            splashCard.addView(
+                    splashView,
+                    new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            cardParams.bottomMargin = dp(16);
+            root.addView(splashCard, cardParams);
+        }
+
         Bitmap iconBitmap = readIcon();
         if (iconBitmap != null) {
             ImageView icon = new ImageView(this);
             icon.setImageBitmap(iconBitmap);
             icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            root.addView(icon, new LinearLayout.LayoutParams(dp(96), dp(96)));
+            int iconSize = (splashBitmap != null) ? dp(72) : dp(96);
+            root.addView(icon, new LinearLayout.LayoutParams(iconSize, iconSize));
         }
 
         root.addView(label(message, 26, Color.WHITE, true),
@@ -122,7 +180,8 @@ public final class MainActivity extends Activity {
         root.addView(label(nativeLine, 13, Color.rgb(92, 227, 181), false),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        setContentView(root);
+        scroll.addView(root);
+        setContentView(scroll);
         try {
             setTaskDescription(new ActivityManager.TaskDescription(appName.isEmpty() ? "Converted IPA" : appName,
                     iconBitmap, Color.rgb(11, 16, 29)));

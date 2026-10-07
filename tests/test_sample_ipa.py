@@ -41,8 +41,8 @@ class SampleIpaTests(unittest.TestCase):
         self.assertFalse(report["portProgress"]["completeGameConversion"])
         registry = report["compatRegistry"]
         self.assertEqual(registry["status"], "REGISTRY_SOURCE_GENERATED")
-        self.assertEqual(registry["verifiedImplementations"], 1)
-        self.assertEqual(registry["stubbedHandlers"], 2)
+        self.assertEqual(registry["verifiedImplementations"], 3)
+        self.assertEqual(registry["stubbedHandlers"], 0)
         self.assertEqual(registry["unresolvedImports"], 0)
         self.assertEqual(registry["handlerResolutionCoveragePercent"], 100.0)
         self.assertFalse(registry["completeGameConversion"])

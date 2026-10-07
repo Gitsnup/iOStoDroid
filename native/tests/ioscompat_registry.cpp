@@ -42,34 +42,37 @@ int main() {
     const double now = typed();
     CHECK(now > 700000000.0 && now < 1100000000.0);
 
+    // Expanded game symbols like _glDrawArrays are now verified in the table.
+    CHECK(lookup("_glDrawArrays") != nullptr);
+    CHECK(lookup("_glDrawArrays")->kind == Kind::Verified);
     // Unknown symbols are not classified until explicitly registered.
-    CHECK(lookup("_glDrawArrays") == nullptr);
-    CHECK(radek_compat_classify("_glDrawArrays") == nullptr);
+    CHECK(lookup("_UnknownPrivateGameSymbol") == nullptr);
+    CHECK(radek_compat_classify("_UnknownPrivateGameSymbol") == nullptr);
 
     // Dynamic runtime hook registration for an unmapped Darwin import.
-    CHECK(registerStub("_glDrawArrays"));
-    const auto *stub = lookup("_glDrawArrays");
+    CHECK(registerStub("_UnknownPrivateGameSymbol"));
+    const auto *stub = lookup("_UnknownPrivateGameSymbol");
     CHECK(stub != nullptr);
     CHECK(stub->kind == Kind::Stub);
     CHECK(stub->handler != nullptr);
-    CHECK(std::strcmp(radek_compat_classify("_glDrawArrays"), "stubbed") == 0);
+    CHECK(std::strcmp(radek_compat_classify("_UnknownPrivateGameSymbol"), "stubbed") == 0);
     CHECK(std::string(stub->androidSymbol).rfind("radek_compat_stub_", 0) == 0);
 
     // Idempotent registration: same symbol keeps its first record.
     void (*firstHandler)() = stub->handler;
-    CHECK(!registerStub("_glDrawArrays"));
-    CHECK(lookup("_glDrawArrays")->handler == firstHandler);
+    CHECK(!registerStub("_UnknownPrivateGameSymbol"));
+    CHECK(lookup("_UnknownPrivateGameSymbol")->handler == firstHandler);
 
     // Stubbed classification never satisfies verified lookups.
-    CHECK(radek_compat_resolve("_glDrawArrays") != nullptr);
-    CHECK(radek_compat_stub_call_count("_glDrawArrays") == 0);
+    CHECK(radek_compat_resolve("_UnknownPrivateGameSymbol") != nullptr);
+    CHECK(radek_compat_stub_call_count("_UnknownPrivateGameSymbol") == 0);
     CHECK(radek_compat_stub_call_count("_CFAbsoluteTimeGetCurrent") == 0);
 
     // Invoking the stub trampoline is safe, observable, and returns zero.
     std::int64_t (*invocation)() = reinterpret_cast<std::int64_t (*)()>(stub->handler);
     CHECK(invocation() == 0);
     CHECK(invocation() == 0);
-    CHECK(radek_compat_stub_call_count("_glDrawArrays") == 2);
+    CHECK(radek_compat_stub_call_count("_UnknownPrivateGameSymbol") == 2);
     CHECK(radek_compat_stub_call_total() >= 2);
 
     // Invalid names are rejected by both registration and lookup.

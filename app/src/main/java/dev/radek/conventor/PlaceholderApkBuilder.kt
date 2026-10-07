@@ -169,31 +169,38 @@ internal class PlaceholderApkBuilder(private val context: Context) {
                 .toString().toByteArray(Charsets.UTF_8)
 
             setProgress(52, "BUILDING", "Packaging aligned Android resources and an honest non-playable preview screen")
+            val splashBytes = SplashExtractor.extractSplashPng(File(dir, "source.ipa"))
             val dexNames = templateEntries.dexes.map { it.first }.toSet()
-            val expectedEntries = setOf(
-                "AndroidManifest.xml",
-                "resources.arsc",
-                iconEntryPath,
-                "assets/ipa-icon.png",
-                "assets/placeholder-info.json",
-            ) + dexNames
+            val expectedEntries = buildSet {
+                add("AndroidManifest.xml")
+                add("resources.arsc")
+                add(iconEntryPath)
+                add("assets/ipa-icon.png")
+                if (splashBytes != null) add("assets/splash.png")
+                add("assets/placeholder-info.json")
+                addAll(dexNames)
+            }
             val alignedEntries = buildMap<String, Int> {
                 put("AndroidManifest.xml", AlignedApkZip.ALIGNMENT)
                 put("resources.arsc", AlignedApkZip.ALIGNMENT)
                 put(iconEntryPath, AlignedApkZip.ALIGNMENT)
                 put("assets/ipa-icon.png", AlignedApkZip.ALIGNMENT)
+                if (splashBytes != null) put("assets/splash.png", AlignedApkZip.ALIGNMENT)
                 dexNames.forEach { put(it, AlignedApkZip.ALIGNMENT) }
             }
             AlignedApkZip.write(
                 unsignedFile,
                 listOf(AlignedApkZip.Entry("AndroidManifest.xml", customizedManifest)) +
                     templateEntries.dexes.map { (dexName, dexBytes) -> AlignedApkZip.Entry(dexName, dexBytes) } +
-                    listOf(
-                        AlignedApkZip.Entry("resources.arsc", customizedResources),
-                        AlignedApkZip.Entry(iconEntryPath, iconBytes),
-                        AlignedApkZip.Entry("assets/ipa-icon.png", iconBytes),
-                        AlignedApkZip.Entry("assets/placeholder-info.json", infoJson, compressed = true),
-                    ),
+                    buildList {
+                        add(AlignedApkZip.Entry("resources.arsc", customizedResources))
+                        add(AlignedApkZip.Entry(iconEntryPath, iconBytes))
+                        add(AlignedApkZip.Entry("assets/ipa-icon.png", iconBytes))
+                        if (splashBytes != null) {
+                            add(AlignedApkZip.Entry("assets/splash.png", splashBytes))
+                        }
+                        add(AlignedApkZip.Entry("assets/placeholder-info.json", infoJson, compressed = true))
+                    },
             )
             require(unsignedFile.isFile && unsignedFile.length() > 0) { "could not assemble placeholder package" }
             AlignedApkZip.verify(unsignedFile, expectedEntries, alignedEntries)

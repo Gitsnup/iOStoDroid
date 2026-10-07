@@ -64,6 +64,72 @@ const char *findPublicNdkLibrary(const char *symbol) {
         if (std::strcmp(basename, kPublicNdkLibraries[index]) == 0) {
             return kPublicNdkLibraries[index];
         }
+        // Vendor GLES/EGL drivers on Android may resolve through sub-libraries
+        // such as libGLES_mali.so or libGLESv1_CM_adreno.so.
+        if (( std::strcmp(kPublicNdkLibraries[index], "libGLESv1_CM.so") == 0 ||
+              std::strcmp(kPublicNdkLibraries[index], "libGLESv2.so") == 0 ||
+              std::strcmp(kPublicNdkLibraries[index], "libEGL.so") == 0 ) &&
+            ( std::strncmp(basename, "libGLES", 7) == 0 ||
+              std::strncmp(basename, "libEGL", 6) == 0 )) {
+            return kPublicNdkLibraries[index];
+        }
+    }
+    // Reviewed 32-bit Bionic/GLES1 OES/C++ ABI exports that may be header-inlined
+    // or extension-dispatched on 64-bit Android hosts.
+    static constexpr struct {
+        const char *symbol;
+        const char *library;
+    } kReviewedNdkFallbacks[] = {
+        {"bcopy", "libc.so"},
+        {"bzero", "libc.so"},
+        {"index", "libc.so"},
+        {"rindex", "libc.so"},
+        {"tmpnam", "libc.so"},
+        {"getdtablesize", "libc.so"},
+        {"glBindFramebufferOES", "libGLESv1_CM.so"},
+        {"glBindRenderbufferOES", "libGLESv1_CM.so"},
+        {"glCheckFramebufferStatusOES", "libGLESv1_CM.so"},
+        {"glDeleteFramebuffersOES", "libGLESv1_CM.so"},
+        {"glDeleteRenderbuffersOES", "libGLESv1_CM.so"},
+        {"glFramebufferRenderbufferOES", "libGLESv1_CM.so"},
+        {"glFramebufferTexture2DOES", "libGLESv1_CM.so"},
+        {"glFrontFace", "libGLESv1_CM.so"},
+        {"glGenFramebuffersOES", "libGLESv1_CM.so"},
+        {"glGenRenderbuffersOES", "libGLESv1_CM.so"},
+        {"glGenerateMipmapOES", "libGLESv1_CM.so"},
+        {"glGetFixedv", "libGLESv1_CM.so"},
+        {"glGetFramebufferAttachmentParameterivOES", "libGLESv1_CM.so"},
+        {"glGetRenderbufferParameterivOES", "libGLESv1_CM.so"},
+        {"glIsFramebufferOES", "libGLESv1_CM.so"},
+        {"glIsRenderbufferOES", "libGLESv1_CM.so"},
+        {"glRenderbufferStorageOES", "libGLESv1_CM.so"},
+        {"glTexEnvx", "libGLESv1_CM.so"},
+        {"_Znwm", "libc++_shared.so"},
+        {"_Znam", "libc++_shared.so"},
+        {"_ZdlPv", "libc++_shared.so"},
+        {"_ZdaPv", "libc++_shared.so"},
+        {"_ZSt9terminatev", "libc++_shared.so"},
+        {"__cxa_allocate_exception", "libc++_shared.so"},
+        {"__cxa_begin_catch", "libc++_shared.so"},
+        {"__cxa_demangle", "libc++_shared.so"},
+        {"__cxa_end_catch", "libc++_shared.so"},
+        {"__cxa_free_exception", "libc++_shared.so"},
+        {"__cxa_guard_abort", "libc++_shared.so"},
+        {"__cxa_guard_acquire", "libc++_shared.so"},
+        {"__cxa_guard_release", "libc++_shared.so"},
+        {"__cxa_pure_virtual", "libc++_shared.so"},
+        {"__cxa_rethrow", "libc++_shared.so"},
+        {"__cxa_throw", "libc++_shared.so"},
+        {"__dynamic_cast", "libc++_shared.so"},
+        {"_ZTVN10__cxxabiv117__class_type_infoE", "libc++_shared.so"},
+        {"_ZTVN10__cxxabiv119__pointer_type_infoE", "libc++_shared.so"},
+        {"_ZTVN10__cxxabiv120__si_class_type_infoE", "libc++_shared.so"},
+        {"_ZTVN10__cxxabiv121__vmi_class_type_infoE", "libc++_shared.so"},
+    };
+    for (const auto &entry : kReviewedNdkFallbacks) {
+        if (std::strcmp(symbol, entry.symbol) == 0) {
+            return entry.library;
+        }
     }
     return nullptr;
 }
@@ -84,7 +150,7 @@ constexpr ApiReplacement kImplementedApiReplacements[] = {
 };
 
 const char *findImplementedApiReplacement(const char *darwinSymbol) {
-    if (!isCIdentifier(darwinSymbol)) return nullptr;
+    if (!darwinSymbol || !*darwinSymbol) return nullptr;
     const char *target = nullptr;
     for (const auto &replacement : kImplementedApiReplacements) {
         if (std::strcmp(darwinSymbol, replacement.darwinSymbol) == 0) {
@@ -92,7 +158,7 @@ const char *findImplementedApiReplacement(const char *darwinSymbol) {
             break;
         }
     }
-    if (!target) return nullptr;
+    if (!isCIdentifier(target)) return nullptr;
 
     static std::mutex mutex;
     static void *handle = nullptr;

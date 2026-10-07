@@ -251,5 +251,39 @@ class AngryBirdsBootTests(unittest.TestCase):
             self.assertTrue(full["trapMode"])
 
 
+class SplashScreenLauncherTests(unittest.TestCase):
+    def test_apk_launchers_render_bundle_splash_screen_instead_of_text_only(self):
+        gameboot_java = (
+            REPO_ROOT / "gameruntime-template/src/main/java/dev/radek/gameruntime/GameBootActivity.java"
+        ).read_text(encoding="utf-8")
+        self.assertIn("splashImageView", gameboot_java)
+        self.assertIn("parseSplashSheetDescriptor", gameboot_java)
+        self.assertIn("decodeCgbiRgbaPixels", gameboot_java)
+        self.assertIn("discoverSplashFramesFromBundle", gameboot_java)
+        self.assertIn("SPLASHES.dat", gameboot_java)
+
+        placeholder_java = (
+            REPO_ROOT
+            / "placeholder-template/src/main/java/dev/radek/generated/GeneratedPlaceholderActivity.java"
+        ).read_text(encoding="utf-8")
+        self.assertIn("readSplash", placeholder_java)
+        self.assertIn("splash.png", placeholder_java)
+
+        converted_java = (
+            REPO_ROOT / "converted-template/src/main/java/dev/radek/generated/MainActivity.java"
+        ).read_text(encoding="utf-8")
+        self.assertIn("readSplash", converted_java)
+
+        with zipfile.ZipFile(ANGRY_BIRDS_IPA) as zf:
+            dat = zf.read("Payload/AngryBirds.app/data/SPLASHES.dat")
+            png = zf.read("Payload/AngryBirds.app/data/SPLASHES.png")
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+        sheet_len = struct.unpack(">H", dat[:2])[0]
+        sheet_name = dat[2 : 2 + sheet_len].decode("ascii")
+        self.assertEqual("SPLASHES.png", sheet_name)
+        entry_count = struct.unpack(">H", dat[2 + sheet_len : 4 + sheet_len])[0]
+        self.assertEqual(3, entry_count)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -116,8 +116,8 @@ class ConversionCeilingTests(unittest.TestCase):
         self.assertEqual(evidence["declaredImports"], 3)
         # Resolution is total (every import has a stub target) but nothing is linked.
         self.assertEqual(report["compatRegistry"]["handlerResolutionCoveragePercent"], 100)
-        self.assertEqual(report["compatRegistry"]["verifiedImplementations"], 0)
-        self.assertEqual(report["compatRegistry"]["stubbedHandlers"], 3)
+        self.assertEqual(report["compatRegistry"]["verifiedImplementations"], 3)
+        self.assertEqual(report["compatRegistry"]["stubbedHandlers"], 0)
         # 100% resolution coverage still left the complete-game ceiling in place.
         self.assertIn("import table to be resolvable or absent", ceiling["ceilingReason"])
 

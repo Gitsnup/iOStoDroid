@@ -23,10 +23,10 @@ import java.nio.charset.StandardCharsets;
  * Launcher of a game-runtime boot-attempt APK (contract "game-runtime-v1").
  *
  * <p>The APK embeds one authorized IPA main executable. This activity runs the
- * real guest boot through libcompat_runtime_v1.so, shows the boot attempt as a
- * minimal log, and then stops: a boot that reaches an unimplemented import
- * crashes with the stopping import instead of showing any preview, menu, or
- * gameplay UI. There is intentionally no other screen in this APK.
+ * real guest boot through libcompat_runtime_v1.so and shows the boot attempt as
+ * a minimal diagnostic log. Guest execution stops at the first unimplemented
+ * import, but the Android activity remains open to show the result. This is not
+ * a preview, menu, or gameplay UI; it is a boot-attempt diagnostic screen.
  */
 public final class GameBootActivity extends Activity {
     private static final String RUNTIME_LIBRARY = "compat_runtime_v1";
@@ -34,9 +34,9 @@ public final class GameBootActivity extends Activity {
     private static final String METADATA_ASSET = "gameboot.json";
     private static final long MAX_EXECUTABLE_BYTES = 256L * 1024L * 1024L;
     private static final long MAX_METADATA_BYTES = 4L * 1024L * 1024L;
-    private static final long CRASH_DELAY_MILLIS = 1500L;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private TextView titleView;
     private TextView logView;
     private ScrollView scroller;
     private volatile boolean destroyed = false;
@@ -66,14 +66,34 @@ public final class GameBootActivity extends Activity {
         });
     }
 
-    private void crashWith(final String detail) {
-        mainHandler.postDelayed(new Runnable() {
+    /**
+     * Report a terminal boot result without throwing on Android's main thread.
+     * A missing import or runtime dependency should leave useful diagnostics on
+     * screen, not turn a handled boot failure into an application crash.
+     */
+    private void showTerminalState(final String title, final String detail) {
+        mainHandler.post(new Runnable() {
             @Override
             public void run() {
-                if (destroyed) return;
-                throw new RuntimeException(detail);
+                if (destroyed || titleView == null || logView == null) return;
+                titleView.setText(title);
+                titleView.setTextColor(Color.rgb(255, 190, 92));
+                logView.append(detail);
+                logView.append("\n");
+                logView.append("The diagnostic screen will remain open. This APK is not a playable conversion.\n");
+                scrollToBottom();
             }
-        }, CRASH_DELAY_MILLIS);
+        });
+    }
+
+    private void scrollToBottom() {
+        if (scroller == null) return;
+        scroller.post(new Runnable() {
+            @Override
+            public void run() {
+                if (!destroyed && scroller != null) scroller.fullScroll(ScrollView.FOCUS_DOWN);
+            }
+        });
     }
 
     private byte[] readAssetBounded(String name, long maximum) throws Exception {
@@ -138,6 +158,18 @@ public final class GameBootActivity extends Activity {
         }
     }
 
+    // Package-private so the launcher template's Robolectric test can exercise
+    // the same blocked-guest path used after runGameBootAttempt returns.
+    void displayBootResult(String reportText) {
+        String safeReport = reportText != null ? reportText : "{}";
+        appendLine(summarizeBoot(safeReport));
+        if ("RETURNED".equals(bootStatus(safeReport))) {
+            showTerminalState("Guest entry returned", "Guest entry returned without a game lifecycle.");
+        } else {
+            showTerminalState("Guest boot stopped", "Guest execution stopped at a missing or unimplemented runtime call.");
+        }
+    }
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -149,13 +181,13 @@ public final class GameBootActivity extends Activity {
         root.setBackgroundColor(Color.rgb(11, 16, 29));
         root.setPadding(dp(20), dp(32), dp(20), dp(32));
 
-        TextView title = new TextView(this);
-        title.setText("Game boot attempt");
-        title.setTextSize(20);
-        title.setTextColor(Color.WHITE);
-        title.setTypeface(null, Typeface.BOLD);
-        title.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.addView(title, new LinearLayout.LayoutParams(
+        titleView = new TextView(this);
+        titleView.setText("Game boot attempt");
+        titleView.setTextSize(20);
+        titleView.setTextColor(Color.WHITE);
+        titleView.setTypeface(null, Typeface.BOLD);
+        titleView.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.addView(titleView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         logView = new TextView(this);
@@ -178,7 +210,7 @@ public final class GameBootActivity extends Activity {
             appName = metadata.optString("applicationName", "");
         } catch (Exception error) {
             appendLine("Boot metadata is missing or invalid: " + error);
-            crashWith("Game boot metadata is missing or invalid: " + error);
+            showTerminalState("Boot attempt could not start", "The diagnostic screen remains open so this error can be reviewed.");
             return;
         }
         final String displayName = appName.isEmpty() ? "embedded game" : appName;
@@ -192,7 +224,7 @@ public final class GameBootActivity extends Activity {
                     System.loadLibrary(RUNTIME_LIBRARY);
                 } catch (Throwable error) {
                     appendLine("Runtime library failed to load: " + error);
-                    crashWith("Game boot failed: the compatibility runtime library is missing (" + error + ").");
+                    showTerminalState("Runtime library unavailable", "Check that the APK includes every native dependency. The diagnostic screen will remain open.");
                     return;
                 }
                 appendLine("Runtime library loaded.");
@@ -201,7 +233,7 @@ public final class GameBootActivity extends Activity {
                     executable = readAssetBounded(EXECUTABLE_ASSET, MAX_EXECUTABLE_BYTES);
                 } catch (Throwable error) {
                     appendLine("Embedded executable could not be read: " + error);
-                    crashWith("Game boot failed: the embedded executable could not be read (" + error + ").");
+                    showTerminalState("Executable unavailable", "The boot attempt could not continue; the diagnostic screen will remain open.");
                     return;
                 }
                 appendLine("Executable loaded: " + executable.length + " byte(s). Mapping and binding traps...");
@@ -210,17 +242,10 @@ public final class GameBootActivity extends Activity {
                     reportText = runGameBootAttempt(executable, true);
                 } catch (Throwable error) {
                     appendLine("Boot attempt failed inside the runtime: " + error);
-                    crashWith("Game boot failed inside the runtime (" + error + ").");
+                    showTerminalState("Guest boot failed", "The runtime could not complete the boot attempt; diagnostics will remain visible.");
                     return;
                 }
-                appendLine(summarizeBoot(reportText != null ? reportText : "{}"));
-                if ("RETURNED".equals(bootStatus(reportText != null ? reportText : "{}"))) {
-                    appendLine("Guest entry returned; nothing else in this APK can run.");
-                    return;
-                }
-                appendLine("Boot stopped: crashing instead of showing a preview.");
-                crashWith("Game boot stopped; no preview is shown. " +
-                        summarizeBoot(reportText != null ? reportText : "{}").replace('\n', ' '));
+                displayBootResult(reportText);
             }
         }, "game-boot").start();
     }

@@ -19,7 +19,10 @@ android {
                     "-DRADEK_BUILD_COMPAT_RUNTIME=ON",
                     "-DRADEK_FETCH_UNICORN=ON",
                 )
-                targets += "compat_runtime_v1"
+                // Unicorn is a shared CMake dependency. Declare it as a build target too so AGP
+                // packages libunicorn.so into the AAR; the generated game APK needs it beside
+                // libcompat_runtime_v1.so at runtime.
+                targets += listOf("compat_runtime_v1", "unicorn")
             }
         }
     }

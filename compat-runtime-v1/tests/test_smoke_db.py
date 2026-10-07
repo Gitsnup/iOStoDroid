@@ -24,7 +24,7 @@ class BuildScopeTests(unittest.TestCase):
         self.assertIn('option(RADEK_FETCH_UNICORN "Fetch the pinned Unicorn ARM32 backend" OFF)', cmake)
         self.assertIn('"-DRADEK_BUILD_COMPAT_RUNTIME=ON"', runtime_gradle)
         self.assertIn('"-DRADEK_FETCH_UNICORN=ON"', runtime_gradle)
-        self.assertIn('targets += "compat_runtime_v1"', runtime_gradle)
+        self.assertIn('targets += listOf("compat_runtime_v1", "unicorn")', runtime_gradle)
 
 
 class SmokeDatabaseTests(unittest.TestCase):

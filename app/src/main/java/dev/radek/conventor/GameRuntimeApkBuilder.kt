@@ -16,8 +16,9 @@ import java.security.MessageDigest
  * (contract "game-runtime-v1").
  *
  * The APK embeds one authorized 32-bit ARM Mach-O main executable plus the
- * bundle resources and the tested guest-CPU runtime. Its launcher runs the
- * real guest boot and stops at the first actually-used unimplemented import;
+ * bundle resources, the tested guest-CPU runtime, and its shared Unicorn
+ * dependency. Its launcher runs the real guest boot and stops at the first
+ * actually-used unimplemented import while leaving a diagnostic screen open;
  * it never shows a preview, menu, or gameplay UI, and this builder never
  * claims a conversion, static recompilation, or playability.
  */
@@ -235,7 +236,7 @@ internal class GameRuntimeApkBuilder(private val context: Context) {
                     .put("backend", BACKEND)
                     .put("entryActivity", ENTRY_CLASS)
                     .put("jniSymbol", JNI_SYMBOL)
-                    .put("behavior", "Runs the real guest boot until the first actually-used unimplemented import, then stops. No preview, menu, or gameplay UI exists in this APK."))
+                    .put("behavior", "Runs the real guest boot until the first actually-used unimplemented import, then leaves the diagnostic screen open. No preview, menu, or gameplay UI exists in this APK."))
                 .put("compatibilityRuntime", JSONObject()
                     .put("status", "SHIPPED_IN_APK_LIB")
                     .put("libraries", JSONArray().apply {
@@ -369,7 +370,7 @@ internal class GameRuntimeApkBuilder(private val context: Context) {
                 .put("installableAndroidPackage", true)
                 .put("runtimeExecution", "NOT_TESTED")
                 .put("gamePlayability", "NOT_TESTED")
-                .put("bootBehavior", "ATTEMPTS_GUEST_BOOT_THEN_STOPS_AT_FIRST_UNIMPLEMENTED_CALL")
+                .put("bootBehavior", "ATTEMPTS_GUEST_BOOT_THEN_LEAVES_DIAGNOSTICS_OPEN_AT_FIRST_UNIMPLEMENTED_CALL")
                 .put("signing", JSONObject()
                     .put("schemes", JSONArray().put("v1").put("v2").put("v3"))
                     .put("certificateSha256", certificateHash))
@@ -381,7 +382,7 @@ internal class GameRuntimeApkBuilder(private val context: Context) {
             reportContext.save(dir, report)
             finalized = true
             backupFile.delete()
-            progress(100, "Game-runtime APK ready; it attempts the real boot and stops at the first unimplemented call")
+            progress(100, "Game-runtime APK ready; boot diagnostics stay open at the first unimplemented call")
             return conversion
         } catch (error: Throwable) {
             // An OutOfMemoryError is an Error, not an Exception: catching it

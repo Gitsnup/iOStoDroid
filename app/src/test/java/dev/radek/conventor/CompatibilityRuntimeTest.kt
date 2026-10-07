@@ -45,11 +45,13 @@ class CompatibilityRuntimeTest {
     }
 
     @Test
-    fun `extracts the game-runtime boot library without the bounded converter runtime`() {
+    fun `extracts the game runtime and its Unicorn dependency without the bounded converter runtime`() {
         val directory = Files.createTempDirectory("game-runtime").toFile()
         try {
             val baseApk = directory.resolve("base.apk")
+            val abiSplit = directory.resolve("split_config.arm64_v8a.apk")
             val runtimeBytes = minimalElf(machine = 183)
+            val unicornBytes = minimalElf(machine = 183)
             val libcxxBytes = minimalElf(machine = 183)
             ZipOutputStream(baseApk.outputStream()).use { zip ->
                 zip.putNextEntry(ZipEntry("lib/arm64-v8a/${CompatibilityRuntime.GAMERUNTIME_SONAME}"))
@@ -62,13 +64,46 @@ class CompatibilityRuntimeTest {
                 zip.write(minimalElf(machine = 183))
                 zip.closeEntry()
             }
+            ZipOutputStream(abiSplit.outputStream()).use { zip ->
+                zip.putNextEntry(ZipEntry("lib/arm64-v8a/${CompatibilityRuntime.UNICORN_SONAME}"))
+                zip.write(unicornBytes)
+                zip.closeEntry()
+            }
 
-            val libraries = CompatibilityRuntime.extractGameRuntimeFromApks(listOf(baseApk), directory.resolve("staged"))
+            val libraries = CompatibilityRuntime.extractGameRuntimeFromApks(
+                listOf(baseApk, abiSplit),
+                directory.resolve("staged"),
+            )
 
-            assertEquals(listOf(CompatibilityRuntime.GAMERUNTIME_SONAME, "libc++_shared.so"), libraries.map { it.soname })
-            assertArrayEquals(runtimeBytes, libraries.first().file.readBytes())
-            assertEquals(64, libraries.first().sha256.length)
+            assertEquals(
+                listOf(CompatibilityRuntime.GAMERUNTIME_SONAME, CompatibilityRuntime.UNICORN_SONAME, "libc++_shared.so"),
+                libraries.map { it.soname },
+            )
+            assertArrayEquals(runtimeBytes, libraries[0].file.readBytes())
+            assertArrayEquals(unicornBytes, libraries[1].file.readBytes())
+            assertEquals(64, libraries[0].sha256.length)
+            assertEquals(64, libraries[1].sha256.length)
             assertTrue(libraries.all { it.file.isFile })
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `fails closed when the game runtime Unicorn dependency is not packaged`() {
+        val directory = Files.createTempDirectory("game-runtime-missing-unicorn").toFile()
+        try {
+            val baseApk = directory.resolve("base.apk")
+            ZipOutputStream(baseApk.outputStream()).use { zip ->
+                zip.putNextEntry(ZipEntry("lib/arm64-v8a/${CompatibilityRuntime.GAMERUNTIME_SONAME}"))
+                zip.write(minimalElf(machine = 183))
+                zip.closeEntry()
+            }
+
+            val error = runCatching {
+                CompatibilityRuntime.extractGameRuntimeFromApks(listOf(baseApk), directory.resolve("staged"))
+            }.exceptionOrNull()
+            assertTrue(error?.message.orEmpty().contains(CompatibilityRuntime.UNICORN_SONAME))
         } finally {
             directory.deleteRecursively()
         }

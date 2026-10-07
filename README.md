@@ -2,7 +2,7 @@
 
 An **offline IPA inspection and bounded native-reconstruction workbench** for authorized inputs. It includes an Android importer/analyzer, a C++ Mach-O parser, and Python reconstruction tools.
 
-> **One bounded subset converts for real; everything else stays honestly unbuilt.** When an IPA's whole executable is statically proven to be exactly one closed-integer ARM entry routine (MOV-immediate, MOVK, register MOV, immediate ADD/SUB, RET) with no imports, dependencies, fixups or runtime metadata, both the host CLI and the on-device app convert it end to end into a signed, installable APK (`complete-game-v1`) — on Android this happens automatically during import, no extra button needed: the statically recompiled entry is packaged as `libconverted.so` and runs through JNI when the launcher opens, showing the message recovered from the IPA. The three-instruction `tests/data/hello-test.ipa` displays `hello test succesfull`; `tests/data/simple.ipa` adds a deterministic 128-operation ARM64 routine and also converts through the same path. Outside that proven subset nothing is statically recompiled: the host can still lower the entry routine into a standalone shared object and report compatibility registries, and on the `convert` path it packages those artifacts into a signed, explicitly labelled **experimental shell** APK (`experimental-shell-v1`) that states on screen that no game code is statically recompiled. The Android app can separately build an explicitly labelled, signed, installable preview shell for unconvertible IPAs; it contains no statically recompiled game code and cannot run the IPA's game. Device execution and gameplay of bounded conversions are never claimed as tested.
+> **One bounded subset converts for real; everything else stays honestly unbuilt.** When an IPA's whole executable is statically proven to be exactly one closed-integer ARM entry routine (MOV-immediate, MOVK, register MOV, immediate ADD/SUB, RET) with no imports, dependencies, fixups or runtime metadata, both the host CLI and the on-device app convert it end to end into a signed, installable APK (`complete-game-v1`) — on Android this happens automatically during import, no extra button needed: the statically recompiled entry is packaged as `libconverted.so` and runs through JNI when the launcher opens, showing the message recovered from the IPA. The three-instruction `tests/data/hello-test.ipa` displays `hello test succesfull`; `tests/data/simple.ipa` adds a deterministic 128-operation ARM64 routine and also converts through the same path. Outside that proven subset nothing is statically recompiled: the host can still lower the entry routine into a standalone shared object and report compatibility registries, and on the `convert` path it packages those artifacts into a signed, explicitly labelled **experimental shell** APK (`experimental-shell-v1`) that states on screen that no game code is statically recompiled. For an unconvertible IPA, the Android app's **Force convert to game APK** action builds a separate `game-runtime-v1` boot-attempt APK containing the original ARM executable, bundle, and guest runtime (including its shared Unicorn dependency). It executes only until the first unimplemented call and leaves a diagnostic screen open; this is not a playable conversion. A source-free preview shell remains an explicit fallback. Device execution and gameplay of bounded conversions are never claimed as tested.
 
 ## Offline reconstruction
 
@@ -71,12 +71,13 @@ pointer slots when statically readable.
   plus the hello-test and longer simple-test bounded conversions used to exercise the complete-game pipeline.
 - Importing an IPA runs analysis and — when the executable passes the bounded conversion proof —
   automatically finishes the conversion into a signed, installable APK; no separate action is
-  needed for proven inputs. Everything outside the proven subset creates nothing on import; there,
-  the red **Force convert to .apk** action builds a separately named, signed and installable
-  preview shell using the IPA app name and recovered icon where available. The preview shell
-  contains no iOS executable, statically recompiled game code or gameplay; its launcher visibly says that the
-  preview started and no statically recompiled executable is included. Preview-shell creation does not count
-  as code-static recompilation or complete-game progress.
+  needed for proven inputs. Everything outside the proven subset creates nothing on import; the red
+  **Force convert to game APK** action builds a separately named, signed boot-attempt APK. It
+  packages the selected ARM executable and bundle together with `libcompat_runtime_v1.so` and its
+  required `libunicorn.so` dependency, then keeps a diagnostic log open when guest execution stops
+  at an unimplemented call. This is not a playable conversion and does not count as static
+  recompilation or complete-game progress. A source-free preview shell remains an explicit fallback
+  and contains no iOS executable or game code.
 - A host APK can be attached only if its metadata declares the `complete-game-v1` contract and
   passes source-identity, complete reachable-code/API/resource, ABI, packaging and provenance
   checks. Preview-shell APK metadata and provider paths are separate; a preview shell can never
@@ -87,10 +88,12 @@ pointer slots when statically readable.
   produced only on the `convert` path, is validated with `python3 -m radek validate-shell`, and can
   never be attached as a complete-game host APK.
 - The original IPA archive itself is retained only in private analysis storage until the library
-  entry is deleted and is never embedded whole into an APK. For bounded conversions the bundle's
-  static resource files are packaged verbatim under `assets/bundle/` with a hashed inventory; for
-  preview shells only the app name and a recovered icon are copied in. If no original icon is
-  available, a generated/fallback icon is used and reported accurately.
+  entry is deleted and is never embedded whole into an APK. Bounded conversions package the
+  bundle's static resource files verbatim under `assets/bundle/` with a hashed inventory. The
+  game-runtime boot attempt packages the selected main executable and bundle resources, plus the
+  ARM64 guest runtime and its shared dependencies; a source-free preview shell copies only the app
+  name and a recovered icon. If no original icon is available, a generated/fallback icon is used
+  and reported accurately.
 
 The host's ARM assessment prefers `arm64-v8a` when an IPA contains both ARM32 and ARM64. A
 supported ARM32-only input is assessed for `armeabi-v7a`. These ABI choices describe analysis and

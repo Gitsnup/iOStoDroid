@@ -557,7 +557,7 @@ class MainActivity : Activity() {
             val buildCard = card()
             text("Host APK validation/attachment · ${conversion.optInt("percent", 0)}% · ${conversion.optString("status", "NOT_BUILT")}", 16f, statusColor(conversion.optString("status")), true, buildCard)
             text(conversion.optString("message"), 12f, muted, parent = buildCard)
-            text("This is the complete-game APK path; it requires statically recompiled reachable code, API replacements, resources and lifecycle. Force convert packages the proven bounded subset into a real signed APK; anything else gets a game-runtime boot APK, and an installable preview shell that contains no statically recompiled game code remains available as a fallback.", 12f, muted, parent = buildCard)
+            text("This is the complete-game APK path; it requires statically recompiled reachable code, API replacements, resources and lifecycle. Force convert packages the proven bounded subset into a real signed APK; anything else gets a game-runtime boot APK that leaves its stop/failure diagnostics open, and an installable preview shell that contains no statically recompiled game code remains available as a fallback.", 12f, muted, parent = buildCard)
         }
         report.optJSONObject("deviceRecompilation")?.takeIf { it.optString("status") == "PROVEN" && it.optInt("coveragePercent", 0) == 100 }?.let { proof ->
             val proofCard = card()
@@ -592,7 +592,7 @@ class MainActivity : Activity() {
         button("View full machine-readable report") { showText("Conversion report", report.toString(2)) }
         button("View real conversion logs") { showText("Logs", File(dir, "conversion.jsonl").takeIf { it.isFile }?.readText() ?: "No logs") }
         text("APK conversion", 22f, textColor, true)
-        text("A general iOS-to-Android game static recompilation backend and framework/API replacements are not implemented. What is implemented is the bounded subset: when the executable is statically proven to be exactly one closed-integer routine, Force convert packages its statically recompiled machine code into a signed, installable APK that runs the entry through JNI and shows the message recovered from the IPA. Anything outside the subset gets a game-runtime APK instead: it packs the real 32-bit ARM executable and the bundle, opens into the actual guest boot shown as a minimal boot log, and stops at the first unimplemented call rather than showing a preview. A branded preview shell with no executable remains available as an explicit fallback.", 14f, muted)
+        text("A general iOS-to-Android game static recompilation backend and framework/API replacements are not implemented. What is implemented is the bounded subset: when the executable is statically proven to be exactly one closed-integer routine, Force convert packages its statically recompiled machine code into a signed, installable APK that runs the entry through JNI and shows the message recovered from the IPA. Anything outside the subset gets a game-runtime boot-attempt APK: it packs the real 32-bit ARM executable and the bundle, opens into a minimal boot log, and stops guest execution at the first unimplemented call while leaving diagnostics on screen instead of crashing. This is not a playable game conversion. A branded preview shell with no executable remains available as an explicit fallback.", 14f, muted)
         button("Copy host analysis command") {
             val abi = preferences.getString("target_abi", "auto") ?: "auto"
             val suffix = if (abi == "auto") "" else " --target-abi $abi"
@@ -672,7 +672,7 @@ class MainActivity : Activity() {
             val executableBytes = gameRuntimeConversion?.optLong("executableBytes", 0L) ?: 0L
             val machoFormat = gameRuntimeConversion?.optString("machoFormat").orEmpty().ifBlank { "Mach-O" }
             text("Game-runtime boot-attempt APK · $machoFormat executable, $executableBytes byte(s) packed", 13f, accent, true)
-            text("Opens into the real guest boot (shown as a minimal boot log) and stops at the first unimplemented call instead of showing a preview. No conversion, static recompilation, or gameplay is claimed.", 12f, muted)
+            text("Runs the real guest boot (shown as a minimal log) and stops guest execution at the first unimplemented call; the diagnostic screen stays open instead of crashing. No conversion, static recompilation, or gameplay is claimed.", 12f, muted)
             button("Install ${gameOutputFile.name}", true) { installArtifact(dir, gameOutputFile.name) }
             button("Share ${gameOutputFile.name}") { shareResultApk(dir, gameOutputFile.name) }
             if (app.has("sha256")) button("Open installed game boot") {
@@ -692,7 +692,7 @@ class MainActivity : Activity() {
                     startForceConvert(dir, true)
                 }
             } else {
-                text("This IPA is outside the bounded conversion subset, so Force builds a game-runtime APK: it packs the real 32-bit ARM executable plus the bundle and opens into the actual guest boot (shown as a minimal boot log), stopping at the first unimplemented call instead of showing a preview. A preview shell without any executable remains available as a fallback.", 12f, muted)
+                text("This IPA is outside the bounded conversion subset, so Force builds a game-runtime boot-attempt APK: it packs the real 32-bit ARM executable, its bundle, and the Unicorn native dependency. It opens into a minimal boot log; guest execution stops at the first unimplemented call, but the diagnostic screen remains open instead of crashing. This is not playable; a preview shell without an executable remains available as a fallback.", 12f, muted)
                 dangerButton(if (gameOutputFile != null) "Rebuild game APK" else "Force convert to game APK") {
                     startGameRuntimeBuild(dir)
                 }

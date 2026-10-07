@@ -43,18 +43,20 @@ applies, the same import job continues into the packaging stages and builds the 
 automatically. Runnable game code remains at zero unless that proof applies or a complete host
 conversion is attached under the strict contract. Proven IPAs become a signed APK whose statically recompiled
 entry routine runs through JNI and displays the message recovered from the IPA, with no extra user
-action. Everything else can be turned, via the red **Force convert to .apk** action, into a
-separately named, installable preview shell from the bundled Android template that uses the IPA app
-name and recovered icon where available but contains no statically recompiled game code or gameplay. Its
-launcher visibly states that the preview started and no statically recompiled executable is included, without
-converter branding or static-analysis details. The detailed record stays in machine-readable
-metadata and the app's library entry. The runtime
-packager reads either UTF-8 or UTF-16 Android binary-XML string pools, patches or inserts
-`<uses-sdk>` so the manifest can never default to SDK 1, then checks its exact ZIP entry set,
-uncompressed/aligned manifest, DEX, resource table and icon payloads before signing and verifying
-the APK. It finishes with `InstallAudit`, which re-runs the installer's own structural checks
-(parse, signing, SDK levels, stored and page-aligned native libraries, already-installed signature
-conflicts) so a problem is reported instead of collapsing into Android's "app not installed".
+action. Everything else can be turned, via **Force convert to game APK**, into a separately named
+`game-runtime-v1` boot-attempt APK. It packages the selected 32-bit ARM executable, bundle resources,
+`libcompat_runtime_v1.so`, and its required `libunicorn.so` dependency. It attempts the actual guest
+boot and stops at the first unimplemented call; the diagnostic screen remains open rather than
+crashing. This is not a playable conversion. A source-free preview shell with the IPA app name and
+recovered icon remains available as an explicit fallback; it contains no iOS executable or game
+code and visibly says it is only a preview. Full analysis stays in the library entry and machine-
+readable metadata. The runtime packager reads either UTF-8 or UTF-16 Android binary-XML string
+pools, patches or inserts `<uses-sdk>` so the manifest can never default to SDK 1, then checks its
+exact ZIP entry set, uncompressed/aligned manifest, DEX, resource table, native libraries and icon
+payloads before signing and verifying the APK. It finishes with `InstallAudit`, which re-runs the
+installer's structural checks (parse, signing, SDK levels, stored and page-aligned native libraries,
+already-installed signature conflicts) so a problem is reported instead of collapsing into Android's
+"app not installed".
 
 A host APK attachment must match the IPA's SHA-256/package identity and safe IPA-derived basename,
 carry `complete-game-v1` metadata, account for every reachable function and API implementation,

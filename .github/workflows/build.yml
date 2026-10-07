@@ -193,7 +193,24 @@ jobs:
             --package "$PKG" \
             --entry dev.radek.generated.MainActivity
       - name: Android unit tests, converter APK, and compat-runtime-v1 Android library
-        run: python3 tools/ci_run.py ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :compat-runtime-v1:lintDebug :compat-runtime-v1:assembleDebug
+        run: python3 tools/ci_run.py ./gradlew --no-daemon :app:testDebugUnitTest :gameruntime-template:testDebugUnitTest :app:lintDebug :app:assembleDebug :compat-runtime-v1:lintDebug :compat-runtime-v1:assembleDebug
+      - name: Verify game-runtime shared libraries are packaged in the converter APK
+        run: |
+          python3 - <<'PY'
+          from zipfile import ZipFile
+
+          apk_path = "app/build/outputs/apk/debug/app-debug.apk"
+          required = (
+              "lib/arm64-v8a/libcompat_runtime_v1.so",
+              "lib/arm64-v8a/libunicorn.so",
+          )
+          with ZipFile(apk_path) as apk:
+              entries = set(apk.namelist())
+          missing = [name for name in required if name not in entries]
+          if missing:
+              raise SystemExit(f"converter APK is missing game-runtime native dependencies: {missing}")
+          print("Converter APK contains:", ", ".join(required))
+          PY
       - name: Validate converter application APK
         run: |
           mkdir -p artifacts

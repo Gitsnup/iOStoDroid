@@ -32,8 +32,11 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -63,6 +66,11 @@ public final class GameBootActivity extends Activity {
     private static final String METADATA_ASSET = "gameboot.json";
     private static final long MAX_EXECUTABLE_BYTES = 256L * 1024L * 1024L;
     private static final long MAX_METADATA_BYTES = 4L * 1024L * 1024L;
+    /** Asset directory that carries the guest's own bundle payload. */
+    private static final String PAYLOAD_ASSET_ROOT = "bundle";
+    private static final String PAYLOAD_MARKER_PREFIX = ".radek-payload-";
+    private static final long MAX_PAYLOAD_FILE_BYTES = 1024L * 1024L * 1024L;
+    private static final int MAX_PAYLOAD_DEPTH = 24;
     private static final int MAX_SPLASH_IMAGE_BYTES = 16 * 1024 * 1024;
     private static final int MAX_SPLASH_DIMENSION = 4096;
     private static final int MAX_CGBI_INFLATED_BYTES = 16 * 1024 * 1024;
@@ -111,7 +119,8 @@ public final class GameBootActivity extends Activity {
         }
     };
 
-    private static native String runGameBootAttempt(byte[] mainBinary, boolean authorizationConfirmed);
+    private static native String runGameBootAttempt(byte[] mainBinary, String payloadDirectory,
+            boolean authorizationConfirmed);
 
     /**
      * Hands the on-screen surface to the runtime so the guest's EAGL drawable can
@@ -584,9 +593,10 @@ public final class GameBootActivity extends Activity {
                     return;
                 }
                 appendLine("Executable loaded: " + executable.length + " byte(s). Mapping and binding traps...");
+                final String payloadDirectory = ensurePayloadExtracted(executable);
                 final String reportText;
                 try {
-                    reportText = runGameBootAttempt(executable, true);
+                    reportText = runGameBootAttempt(executable, payloadDirectory, true);
                 } catch (Throwable error) {
                     appendLine("Boot attempt failed inside the runtime: " + error);
                     showTerminalState("Guest boot failed", "The runtime could not complete the boot attempt; diagnostics will remain visible.");
@@ -595,6 +605,96 @@ public final class GameBootActivity extends Activity {
                 displayBootResult(reportText);
             }
         }, "game-boot").start();
+    }
+
+    /**
+     * Extracts the bundled game payload (`assets/bundle/**`) into the app's files
+     * directory so the runtime can serve the guest's own file reads from it, and
+     * returns the app directory — or null when this artifact has no payload.
+     * The writable application directories the runtime mounts are created next to
+     * it. Extraction is versioned by the embedded executable, so a new artifact
+     * never reuses a stale payload directory.
+     */
+    private String ensurePayloadExtracted(byte[] executable) {
+        try {
+            AssetManager assets = getAssets();
+            String[] root = assets.list(PAYLOAD_ASSET_ROOT);
+            if (root == null || root.length == 0) return null;
+            File bundleRoot = new File(getFilesDir(), "bundle");
+            File appDirectory = new File(bundleRoot, "App.app");
+            File home = new File(bundleRoot, "radek-home");
+            File marker = new File(bundleRoot, PAYLOAD_MARKER_PREFIX + payloadVersion(executable));
+            mkdirsOrThrow(new File(home, "Documents"));
+            mkdirsOrThrow(new File(home, "Library"));
+            if (!marker.isFile()) {
+                int files = extractAssetTree(assets, PAYLOAD_ASSET_ROOT, appDirectory, 0);
+                if (files <= 0) return null;
+                if (!marker.exists() && !marker.createNewFile()) {
+                    appendLine("Payload marker could not be written; the payload will be re-extracted.");
+                }
+                appendLine("Game payload extracted: " + files + " file(s) from the APK.");
+            }
+            return appDirectory.isDirectory() ? appDirectory.getAbsolutePath() : null;
+        } catch (Throwable error) {
+            appendLine("Game payload extraction failed: " + error);
+            return null;
+        }
+    }
+
+    private static String payloadVersion(byte[] executable) {
+        CRC32 crc = new CRC32();
+        if (executable != null) crc.update(executable);
+        return (executable != null ? executable.length : 0) + "-" + crc.getValue();
+    }
+
+    private static void mkdirsOrThrow(File directory) throws IOException {
+        if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory())
+            throw new IOException("cannot create " + directory);
+    }
+
+    private int extractAssetTree(AssetManager assets, String assetPath, File target, int depth)
+            throws IOException {
+        if (depth > MAX_PAYLOAD_DEPTH)
+            throw new IOException("payload nesting is too deep at " + assetPath);
+        String[] children = assets.list(assetPath);
+        if (children == null || children.length == 0) return 0;
+        int extracted = 0;
+        for (String child : children) {
+            String childPath = assetPath + "/" + child;
+            String[] grandChildren = assets.list(childPath);
+            if (grandChildren != null && grandChildren.length > 0) {
+                extracted += extractAssetTree(assets, childPath, new File(target, child), depth + 1);
+                continue;
+            }
+            File file = new File(target, child);
+            mkdirsOrThrow(target);
+            try {
+                InputStream input = assets.open(childPath);
+                try {
+                    OutputStream output = new FileOutputStream(file);
+                    try {
+                        byte[] buffer = new byte[64 * 1024];
+                        long total = 0;
+                        int read;
+                        while ((read = input.read(buffer)) > 0) {
+                            total += read;
+                            if (total > MAX_PAYLOAD_FILE_BYTES)
+                                throw new IOException("payload file is too large: " + childPath);
+                            output.write(buffer, 0, read);
+                        }
+                    } finally {
+                        output.close();
+                    }
+                } finally {
+                    input.close();
+                }
+                extracted++;
+            } catch (FileNotFoundException directory) {
+                // An empty directory in the payload: keep the directory itself.
+                mkdirsOrThrow(file);
+            }
+        }
+        return extracted;
     }
 
     private void preloadSplashFromAssets() {

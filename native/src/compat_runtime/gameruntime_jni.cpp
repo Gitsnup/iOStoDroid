@@ -10,6 +10,7 @@
 #include "compat_runtime/audio_session_shims.hpp"
 #include "compat_runtime/compiler_rt_shims.hpp"
 #include "compat_runtime/gles_shims.hpp"
+#include "compat_runtime/virtual_file_system.hpp"
 #include "compat_runtime/cpu.hpp"
 #include "compat_runtime/libsystem_shims.hpp"
 #include "compat_runtime/objc_shims.hpp"
@@ -48,6 +49,20 @@ void attachSurface(JNIEnv *env, jobject surface) {
     if (gAttachedWindow != nullptr)
         ANativeWindow_release(gAttachedWindow);
     gAttachedWindow = window;
+}
+
+// The launcher extracts assets/bundle/** to its files directory and passes the
+// app directory here. Mounts mirror the host probe: the bundle payload is
+// read-only, and the two writable application directories are created by the
+// launcher next to it.
+void mountGuestPayload(const std::string &payloadDirectory) {
+    if (payloadDirectory.empty())
+        return;
+    auto &files = radek::compat_runtime::guestFileSystem();
+    files.mount(radek::compat_runtime::bundleGuestPath(), payloadDirectory, false);
+    const std::string home = payloadDirectory + "/../radek-home";
+    files.mount("/Documents", home + "/Documents", true);
+    files.mount("/Library", home + "/Library", true);
 }
 
 jstring jsonString(JNIEnv *env, const radek::Json &json) {
@@ -100,6 +115,7 @@ Java_dev_radek_gameruntime_GameBootActivity_setGameSurface(JNIEnv *env, jclass, 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt(JNIEnv *env, jobject,
                                                                jbyteArray mainBinary,
+                                                               jstring payloadDirectory,
                                                                jboolean authorizationConfirmed) {
     if (authorizationConfirmed != JNI_TRUE)
         return jsonString(env, blockedReport("User authorization was not confirmed.", false));
@@ -120,16 +136,88 @@ Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt(JNIEnv *env, jobj
         radek::compat_runtime::audio::ShimAdapter audioShims;
         radek::compat_runtime::SjLjUnwindAdapter sjljUnwind;
         radek::compat_runtime::compiler_rt::ShimAdapter compilerRuntime;
+        radek::compat_runtime::gles::Forwarder glesForwarder;
         objcShims.registerBindings(shims);
         libsystemShims.registerBindings(shims);
         audioShims.registerBindings(shims);
         sjljUnwind.registerBindings(shims);
         compilerRuntime.registerBindings(shims);
+        // Guest OpenGL ES 1.1 calls go to the platform's EGL/GLES driver through
+        // the launcher's Surface; nothing is rasterized in this process.
+        glesForwarder.registerBindings(shims);
+
+        std::string payload;
+        if (payloadDirectory != nullptr) {
+            const char *utf = env->GetStringUTFChars(payloadDirectory, nullptr);
+            if (utf != nullptr) {
+                payload = utf;
+                env->ReleaseStringUTFChars(payloadDirectory, utf);
+            }
+            if (env->ExceptionCheck())
+                return nullptr;
+        }
+        mountGuestPayload(payload);
+        auto &files = radek::compat_runtime::guestFileSystem();
+
         radek::compat_runtime::TrapShimAdapter traps;
         const auto cpu = radek::compat_runtime::createArm32CpuBackend();
         radek::compat_runtime::BootAttemptRunner runner(shims, *cpu, traps,
                                                        objcShims.lifecycleHooks());
-        return jsonString(env, runner.run(bytes, true));
+        radek::Json report = runner.run(bytes, true);
+
+        // GL observability: which driver was found, whether the drawable was
+        // handed to the platform, and every call the runtime had to refuse.
+        {
+            radek::Json gles = radek::Json::object();
+            const auto driver = glesForwarder.driver();
+            gles["driverGlesLibraryLoaded"] = driver.glesLoaded;
+            gles["driverEglLibraryLoaded"] = driver.eglLoaded;
+            gles["driverDetail"] = driver.detail;
+            gles["drawableReady"] = glesForwarder.drawableReady();
+            gles["presentingToWindow"] = glesForwarder.presentingToWindow();
+            gles["drawableWidth"] = static_cast<std::uint64_t>(glesForwarder.drawableWidth());
+            gles["drawableHeight"] = static_cast<std::uint64_t>(glesForwarder.drawableHeight());
+            gles["forwardedCalls"] = static_cast<std::uint64_t>(glesForwarder.forwardedCalls());
+            gles["refusedCalls"] = static_cast<std::uint64_t>(glesForwarder.refusedCalls());
+            gles["framesPresented"] = static_cast<std::uint64_t>(glesForwarder.framesPresented());
+            radek::Json diagnostics = radek::Json::array();
+            for (const auto &diagnostic : glesForwarder.diagnostics())
+                diagnostics.push(radek::Json(diagnostic));
+            gles["diagnostics"] = std::move(diagnostics);
+            gles["note"] =
+                "guest OpenGL ES calls are forwarded to the platform EGL/GLES driver and "
+                "presented on the launcher's surface; refused calls are listed in "
+                "diagnostics; a rendered frame is guest output, not gameplay evidence";
+            report["gles"] = std::move(gles);
+        }
+
+        // Filesystem observability: which directories served the guest's own file
+        // reads and every access the runtime refused.
+        {
+            radek::Json guestFiles = radek::Json::object();
+            radek::Json mounts = radek::Json::array();
+            for (const auto &mount : files.mounts()) {
+                radek::Json entry = radek::Json::object();
+                entry["guestPath"] = mount.guestPrefix;
+                entry["writable"] = mount.writable;
+                mounts.push(std::move(entry));
+            }
+            guestFiles["mounts"] = std::move(mounts);
+            guestFiles["opens"] = static_cast<std::uint64_t>(files.openCount());
+            guestFiles["reads"] = static_cast<std::uint64_t>(files.readCount());
+            guestFiles["bytesRead"] = static_cast<std::uint64_t>(files.bytesRead());
+            guestFiles["refused"] = static_cast<std::uint64_t>(files.refusedCount());
+            radek::Json diagnostics = radek::Json::array();
+            for (const auto &diagnostic : files.diagnostics())
+                diagnostics.push(radek::Json(diagnostic));
+            guestFiles["diagnostics"] = std::move(diagnostics);
+            guestFiles["note"] =
+                "guest file reads are served from the launcher-extracted bundle payload; "
+                "refused accesses are listed in diagnostics";
+            report["guestFileSystem"] = std::move(guestFiles);
+        }
+
+        return jsonString(env, report);
     } catch (const std::exception &error) {
         const std::string detail = std::string("Runtime initialization failed closed: ") + error.what();
         return jsonString(env, blockedReport(detail, true));

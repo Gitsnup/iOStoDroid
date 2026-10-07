@@ -152,6 +152,17 @@ the GL layer recreate its EGL window surface so the guest's frames reach the dis
 the attempt stops for any reason, the launcher switches back to **portrait** with the
 diagnostic log visible; `configChanges` keeps a device rotation from restarting the guest.
 
+### The device path actually reaches the driver and the guest's own files
+
+The Android launcher now extracts the embedded bundle payload (`assets/bundle/**`)
+to its files directory and passes the app directory to the runtime, which mounts it
+as the guest's bundle plus writable `/Documents` and `/Library` scratch
+directories — the guest's own data reads are served from the APK instead of being
+refused. The JNI entry also registers the native GLES/EGL forwarding (it was only
+registered in the host probe before, so on-device GL calls never reached the
+driver) and reports the `gles` block (driver, drawable state, forwarded/refused
+calls, frames presented) and `guestFileSystem` block alongside the boot report.
+
 ### The sanitizer job builds the current runtime, not an older subset
 
 `tools/test_sanitized.sh` compiled only the pre-existing compat-runtime translation units,

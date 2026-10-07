@@ -2,10 +2,26 @@
 
 A `game-runtime-v1` APK packs a real iOS game executable and its bundle, runs
 the actual guest boot on-device, and shows that boot as a minimal diagnostic
-log. Guest execution stops at the first actually-used unimplemented import,
-but the Android launcher remains open with the stop reason rather than crashing.
+log. Guest execution stops at a documented boundary — the first actually-used
+unimplemented import, or the bounded instruction/time budget when the guest
+stays inside its own code — and the Android launcher remains open with the stop
+reason rather than crashing.
 It is not a conversion, not a static recompilation, and not gameplay; it never
 shows a preview or menu.
+
+## Native GL, not a reimplementation
+
+Guest OpenGL ES 1.1 calls are **forwarded to the platform's own EGL/GLES driver**
+(`libEGL.so`/`libGLESv1_CM.so`/`libGLESv2.so` opened at runtime); nothing is
+rasterized in-process. `renderbufferStorage:fromDrawable:` creates an EGL window
+surface on the launcher's Android surface (or an offscreen pbuffer when no surface
+was supplied), `presentRenderbuffer:` is `eglSwapBuffers`, and every guest pointer
+argument is translated through the mapped guest regions with a range check. A
+surface that arrives after the first offscreen attach makes the GL layer recreate
+its window surface, so late surfaces still receive frames. The report's `gles`
+block states which driver was loaded, whether the drawable was handed to the
+platform, `forwardedCalls`/`refusedCalls`/`framesPresented`, and every refusal as
+a named diagnostic: a rendered frame is guest output, not gameplay evidence.
 
 ## Behavior contract
 
@@ -14,23 +30,36 @@ shows a preview or menu.
    (`assets/bundle/**`), boot metadata (`assets/gameboot.json`), and the
    tested `libcompat_runtime_v1.so` guest-CPU runtime.
 2. The launcher (`dev.radek.gameruntime.GameBootActivity`) runs the boot once
-   through `Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt`.
+   through `Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt`,
+   passing the app directory it extracts from `assets/bundle/**`. The runtime
+   mounts that directory as the guest's own bundle (read-only) plus writable
+   `/Documents` and `/Library` scratch directories, so the guest reads its real
+   data files; refused accesses are listed in the report's `guestFileSystem`
+   block instead of being invented.
 3. Unimplemented imports are bound to abort-on-call traps. The guest executes
    real instructions from the Mach-O entry point until it calls (or touches
    data of) a documented boundary: the first unimplemented import it touches,
    or the bounded instruction/time budget when the guest stays inside its own
    code. Implemented adapters run for real
-   instead of trapping: libSystem memory/string/malloc, the Itanium C++ ABI
-   allocation entry points, the bounded Objective-C runtime, the AudioToolbox
-   session state calls, and the bounded application-lifecycle chain
+   instead of trapping: the native OpenGL ES 1.1 forwarding (below), libSystem
+   memory/string/malloc and the file/stdio/math/time shims served by the virtual
+   file system, the ARM EABI compiler-runtime helpers, the bounded Objective-C
+   runtime, the AudioToolbox session state calls, and the bounded
+   application-lifecycle chain
    (`UIApplicationMain` -> delegate instantiation -> `applicationDidFinishLaunching:`
    -> bounded service of the queued background-thread body).
 4. The launcher is **fullscreen** (`SYSTEM_UI_FLAG_IMMERSIVE_STICKY` plus
-   layout through the display cutout): the recovered bundle splash covers the
-   whole display and the boot log sits in a translucent panel at the bottom.
-   The splash advances **by itself** while the guest boots (one recovered frame
-   every ~0.9 s); touches never cycle frames, and the sequence stops on a stable
-   frame once the boot attempt ends.
+   layout through the display cutout) and runs in **sensor landscape** while the
+   guest boots, showing only the game: the recovered splash frames are shown
+   **once each** (~0.9 s apart) and the sequence then stays on the last frame —
+   it never cycles and touches never advance it. A `SurfaceView` above the
+   splash receives the guest's frames: its surface is handed to the runtime
+   (`setGameSurface` → `ANativeWindow` → EGL window surface) and the guest's
+   `renderbufferStorage:fromDrawable:`/`presentRenderbuffer:` pairs become
+   `eglCreateWindowSurface`/`eglSwapBuffers` on the platform GLES driver, so a
+   frame the guest renders covers the boot screen. The diagnostic panel stays
+   hidden while the guest runs and is revealed, after the launcher switches back
+   to **portrait**, when the attempt stops.
 5. The launcher shows loader/trap/instruction progress in that panel. When guest
    execution stops or setup fails, the launcher keeps the fullscreen diagnostic
    screen open; it does not throw an Android crash or show a preview. The stop

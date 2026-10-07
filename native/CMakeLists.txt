@@ -128,7 +128,9 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
                                              src/compat_runtime/gameruntime_jni.cpp)
         target_include_directories(compat_runtime_v1 PRIVATE include)
         target_compile_options(compat_runtime_v1 PRIVATE -Wall -Wextra -Werror)
-        target_link_libraries(compat_runtime_v1 PRIVATE compat_runtime_core)
+        # libandroid provides ANativeWindow_fromSurface, used to attach the
+        # launcher's Surface as the guest's EGL drawable.
+        target_link_libraries(compat_runtime_v1 PRIVATE compat_runtime_core android)
         target_link_options(compat_runtime_v1 PRIVATE "-Wl,-z,max-page-size=16384")
     else()
         # Host boot-attempt probe: loads one 32-bit ARM Mach-O, binds traps,

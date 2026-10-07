@@ -123,6 +123,7 @@ compat_sources = [
     root / "native/src/compat_runtime/objc_shims.cpp",
     root / "native/src/compat_runtime/audio_session_shims.cpp",
     root / "native/src/compat_runtime/sjlj_unwind.cpp",
+    root / "native/src/compat_runtime/trap_shims.cpp",
 ]
 subprocess.run(
     [
@@ -148,4 +149,16 @@ subprocess.run(
     check=True,
 )
 subprocess.run([str(out / "compat-runtime-objc-tests")], check=True)
-print("compat-runtime-v1 guest memory, Mach-O/dyld, shim registry, CPU boundary, and Objective-C tests passed")
+subprocess.run(
+    [
+        compiler,
+        *flags,
+        *map(str, compat_sources),
+        str(root / "native/tests/compat_runtime_traps.cpp"),
+        "-o",
+        str(out / "compat-runtime-traps-tests"),
+    ],
+    check=True,
+)
+subprocess.run([str(out / "compat-runtime-traps-tests")], check=True)
+print("compat-runtime-v1 guest memory, Mach-O/dyld, shim registry, CPU boundary, Objective-C, and trap tests passed")

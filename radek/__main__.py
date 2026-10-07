@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from .pipeline import Pipeline
 from .apk import Toolchain, validate_apk, validate_experimental_shell
+from .gameruntime import manifest_summary, run_gameboot
 
 
 def main():
@@ -24,6 +25,15 @@ def main():
             default="auto",
             help="assessment target ABI; auto prefers ARM64 in a FAT IPA and selects ARMv7 for ARM32-only inputs; no APK is emitted",
         )
+    p = sub.add_parser(
+        "gameboot",
+        help="probe the game-runtime boot attempt for one authorized IPA (contract game-runtime-v1)",
+    )
+    p.add_argument("ipa", type=Path)
+    p.add_argument("--output", type=Path, required=True, help="new, non-existing job directory")
+    p.add_argument(
+        "--authorized", action="store_true", help="confirm ownership/permission to convert this IPA"
+    )
     p = sub.add_parser(
         "validate-shell",
         help="validate an honestly labelled experimental shell APK (never a complete-game APK)",
@@ -46,6 +56,12 @@ def main():
     )
     args = parser.parse_args()
     try:
+        if args.command == "gameboot":
+            manifest = run_gameboot(args.ipa, args.authorized, args.output)
+            summary = manifest_summary(manifest)
+            summary["manifest"] = str(args.output / "game-runtime-manifest.json")
+            print(json.dumps(summary, indent=2))
+            return 0
         if args.command == "validate-shell":
             result = validate_experimental_shell(args.apk, Toolchain.discover())
             print(json.dumps(result, indent=2))

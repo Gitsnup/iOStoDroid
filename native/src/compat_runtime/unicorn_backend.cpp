@@ -33,6 +33,8 @@ struct HookState {
     GuestAddress calloutResumeAddress = 0;
     std::map<GuestAddress, std::size_t> mappedRegions;
     bool memoryFault = false;
+    bool hasFaultAddress = false;
+    GuestAddress faultAddress = 0;
     std::string message;
 };
 
@@ -284,6 +286,10 @@ bool invalidMemoryHook(uc_engine *, uc_mem_type, std::uint64_t address, int size
                        std::int64_t, void *userData) {
     auto &state = *static_cast<HookState *>(userData);
     state.memoryFault = true;
+    if (address <= std::numeric_limits<GuestAddress>::max()) {
+        state.hasFaultAddress = true;
+        state.faultAddress = static_cast<GuestAddress>(address);
+    }
     state.message = "guest memory access failed at 0x";
     constexpr char digits[] = "0123456789abcdef";
     for (int shift = 28; shift >= 0; shift -= 4)
@@ -446,6 +452,8 @@ class UnicornArm32Backend final : public CpuBackend {
         }
         result.started = hooks.instructions != 0;
         result.instructions = hooks.instructions;
+        result.hasFaultAddress = hooks.hasFaultAddress;
+        result.faultAddress = hooks.faultAddress;
         if (hooks.instructionLimitHit || hooks.instructions >= function.instructionLimit) {
             result.status = CpuExecutionStatus::InstructionLimit;
             result.message = hooks.message.empty() ? "guest function reached its instruction limit." : hooks.message;

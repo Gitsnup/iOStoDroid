@@ -25,6 +25,9 @@ class ResultProvider : ContentProvider() {
         if (requestedName == ArtifactNames.placeholderApkFileName(report)) {
             return PlaceholderArtifactContract.validate(report, entryDirectory, requestedName)
         }
+        if (requestedName == ArtifactNames.gameApkFileName(report)) {
+            return GameRuntimeArtifactContract.validate(report, entryDirectory, requestedName)
+        }
         val conversion = report.optJSONObject("hostConversion") ?: error("no complete-game conversion attached")
         val expectedName = ArtifactNames.apkFileName(report)
         require(conversion.optString("status") == "ATTACHED" &&

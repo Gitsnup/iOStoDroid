@@ -75,6 +75,7 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
         src/compat_runtime/objc_shims.cpp
         src/compat_runtime/audio_session_shims.cpp
         src/compat_runtime/sjlj_unwind.cpp
+        src/compat_runtime/trap_shims.cpp
     )
     if(RADEK_FETCH_UNICORN)
         include(FetchContent)
@@ -118,12 +119,19 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
     endif()
 
     if(ANDROID)
-        add_library(compat_runtime_v1 SHARED src/compat_runtime/jni.cpp)
+        add_library(compat_runtime_v1 SHARED src/compat_runtime/jni.cpp
+                                             src/compat_runtime/gameruntime_jni.cpp)
         target_include_directories(compat_runtime_v1 PRIVATE include)
         target_compile_options(compat_runtime_v1 PRIVATE -Wall -Wextra -Werror)
         target_link_libraries(compat_runtime_v1 PRIVATE compat_runtime_core)
         target_link_options(compat_runtime_v1 PRIVATE "-Wl,-z,max-page-size=16384")
     else()
+        # Host boot-attempt probe: loads one 32-bit ARM Mach-O, binds traps,
+        # and executes guest instructions until the first used missing import.
+        add_executable(radek-gameboot src/compat_runtime/gameboot_main.cpp)
+        target_include_directories(radek-gameboot PRIVATE include)
+        target_compile_options(radek-gameboot PRIVATE -Wall -Wextra -Werror)
+        target_link_libraries(radek-gameboot PRIVATE compat_runtime_core)
         add_executable(compat-runtime-tests tests/compat_runtime.cpp)
         target_include_directories(compat-runtime-tests PRIVATE include)
         target_compile_options(compat-runtime-tests PRIVATE -Wall -Wextra -Werror)
@@ -138,5 +146,16 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
         target_compile_options(compat-runtime-objc-tests PRIVATE -Wall -Wextra -Werror)
         target_link_libraries(compat-runtime-objc-tests PRIVATE compat_runtime_core)
         add_test(NAME compat-runtime-objc COMMAND compat-runtime-objc-tests)
+
+        # Trap binding/loader coverage needs no CPU backend; execution
+        # assertions run when the pinned Unicorn backend is linked.
+        add_executable(compat-runtime-traps-tests tests/compat_runtime_traps.cpp)
+        target_include_directories(compat-runtime-traps-tests PRIVATE include)
+        target_compile_options(compat-runtime-traps-tests PRIVATE -Wall -Wextra -Werror)
+        if(RADEK_FETCH_UNICORN)
+            target_compile_definitions(compat-runtime-traps-tests PRIVATE RADEK_TEST_REQUIRE_UNICORN=1)
+        endif()
+        target_link_libraries(compat-runtime-traps-tests PRIVATE compat_runtime_core)
+        add_test(NAME compat-runtime-traps COMMAND compat-runtime-traps-tests)
     endif()
 endif()

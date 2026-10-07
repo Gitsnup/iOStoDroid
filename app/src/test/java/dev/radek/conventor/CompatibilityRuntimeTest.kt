@@ -45,6 +45,36 @@ class CompatibilityRuntimeTest {
     }
 
     @Test
+    fun `extracts the game-runtime boot library without the bounded converter runtime`() {
+        val directory = Files.createTempDirectory("game-runtime").toFile()
+        try {
+            val baseApk = directory.resolve("base.apk")
+            val runtimeBytes = minimalElf(machine = 183)
+            val libcxxBytes = minimalElf(machine = 183)
+            ZipOutputStream(baseApk.outputStream()).use { zip ->
+                zip.putNextEntry(ZipEntry("lib/arm64-v8a/${CompatibilityRuntime.GAMERUNTIME_SONAME}"))
+                zip.write(runtimeBytes)
+                zip.closeEntry()
+                zip.putNextEntry(ZipEntry("lib/arm64-v8a/libc++_shared.so"))
+                zip.write(libcxxBytes)
+                zip.closeEntry()
+                zip.putNextEntry(ZipEntry("lib/arm64-v8a/${CompatibilityRuntime.SONAME}"))
+                zip.write(minimalElf(machine = 183))
+                zip.closeEntry()
+            }
+
+            val libraries = CompatibilityRuntime.extractGameRuntimeFromApks(listOf(baseApk), directory.resolve("staged"))
+
+            assertEquals(listOf(CompatibilityRuntime.GAMERUNTIME_SONAME, "libc++_shared.so"), libraries.map { it.soname })
+            assertArrayEquals(runtimeBytes, libraries.first().file.readBytes())
+            assertEquals(64, libraries.first().sha256.length)
+            assertTrue(libraries.all { it.file.isFile })
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `fails closed when required runtime is missing or not arm64`() {
         val directory = Files.createTempDirectory("compat-runtime-invalid").toFile()
         try {

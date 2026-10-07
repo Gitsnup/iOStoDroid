@@ -39,9 +39,21 @@ RADEK_ANALYZER="$PWD/.local/bin/radek-macho-sanitized" \
   native/src/compat_runtime/runner.cpp native/src/compat_runtime/cpu.cpp \
   native/src/compat_runtime/objc_runtime.cpp native/src/compat_runtime/objc_shims.cpp \
   native/src/compat_runtime/audio_session_shims.cpp \
-  native/src/compat_runtime/sjlj_unwind.cpp native/tests/compat_runtime.cpp \
+  native/src/compat_runtime/sjlj_unwind.cpp native/src/compat_runtime/trap_shims.cpp \
+  native/tests/compat_runtime.cpp \
   -o .local/bin/compat-runtime-sanitized
 .local/bin/compat-runtime-sanitized
+"${CXX:-g++}" -std=c++17 -g -O1 -pthread -Wall -Wextra -Werror \
+  -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie \
+  -I native/include native/src/compat_runtime/guest_memory.cpp \
+  native/src/compat_runtime/shim_registry.cpp native/src/compat_runtime/macho_loader.cpp \
+  native/src/compat_runtime/runner.cpp native/src/compat_runtime/cpu.cpp \
+  native/src/compat_runtime/objc_runtime.cpp native/src/compat_runtime/objc_shims.cpp \
+  native/src/compat_runtime/audio_session_shims.cpp \
+  native/src/compat_runtime/sjlj_unwind.cpp native/src/compat_runtime/trap_shims.cpp \
+  native/tests/compat_runtime_traps.cpp \
+  -o .local/bin/compat-runtime-traps-sanitized
+.local/bin/compat-runtime-traps-sanitized
 "${CXX:-g++}" -std=c++17 -g -O1 -pthread -Wall -Wextra -Werror \
   -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie \
   -I native/include native/src/compat_runtime/objc_runtime.cpp \

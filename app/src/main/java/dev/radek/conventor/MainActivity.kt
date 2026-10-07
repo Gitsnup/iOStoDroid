@@ -557,7 +557,7 @@ class MainActivity : Activity() {
             val buildCard = card()
             text("Host APK validation/attachment · ${conversion.optInt("percent", 0)}% · ${conversion.optString("status", "NOT_BUILT")}", 16f, statusColor(conversion.optString("status")), true, buildCard)
             text(conversion.optString("message"), 12f, muted, parent = buildCard)
-            text("This is the complete-game APK path; it requires statically recompiled reachable code, API replacements, resources and lifecycle. Force convert packages the proven bounded subset into a real signed APK; anything else gets an installable preview shell that contains no statically recompiled game code.", 12f, muted, parent = buildCard)
+            text("This is the complete-game APK path; it requires statically recompiled reachable code, API replacements, resources and lifecycle. Force convert packages the proven bounded subset into a real signed APK; anything else gets a game-runtime boot APK, and an installable preview shell that contains no statically recompiled game code remains available as a fallback.", 12f, muted, parent = buildCard)
         }
         report.optJSONObject("deviceRecompilation")?.takeIf { it.optString("status") == "PROVEN" && it.optInt("coveragePercent", 0) == 100 }?.let { proof ->
             val proofCard = card()
@@ -592,7 +592,7 @@ class MainActivity : Activity() {
         button("View full machine-readable report") { showText("Conversion report", report.toString(2)) }
         button("View real conversion logs") { showText("Logs", File(dir, "conversion.jsonl").takeIf { it.isFile }?.readText() ?: "No logs") }
         text("APK conversion", 22f, textColor, true)
-        text("A general iOS-to-Android game static recompilation backend and framework/API replacements are not implemented. What is implemented is the bounded subset: when the executable is statically proven to be exactly one closed-integer routine, Force convert packages its statically recompiled machine code into a signed, installable APK that runs the entry through JNI and shows the message recovered from the IPA. Anything outside the subset gets only a preview shell with the IPA app name and icon; it contains none of the executable and cannot run the game.", 14f, muted)
+        text("A general iOS-to-Android game static recompilation backend and framework/API replacements are not implemented. What is implemented is the bounded subset: when the executable is statically proven to be exactly one closed-integer routine, Force convert packages its statically recompiled machine code into a signed, installable APK that runs the entry through JNI and shows the message recovered from the IPA. Anything outside the subset gets a game-runtime APK instead: it packs the real 32-bit ARM executable and the bundle, opens into the actual guest boot shown as a minimal boot log, and stops at the first unimplemented call rather than showing a preview. A branded preview shell with no executable remains available as an explicit fallback.", 14f, muted)
         button("Copy host analysis command") {
             val abi = preferences.getString("target_abi", "auto") ?: "auto"
             val suffix = if (abi == "auto") "" else " --target-abi $abi"
@@ -657,6 +657,30 @@ class MainActivity : Activity() {
             button("Install ${placeholderOutputFile.name}", true) { installArtifact(dir, placeholderOutputFile.name) }
             button("Share ${placeholderOutputFile.name}") { shareResultApk(dir, placeholderOutputFile.name) }
         }
+        val gameRuntimeConversion = report.optJSONObject("gameRuntimeConversion")
+        val gameName = ArtifactNames.gameApkFileName(report)
+        val gameOutputFile = if (gameRuntimeConversion?.optString("status") == "GENERATED") {
+            runCatching { GameRuntimeArtifactContract.validate(report, dir, gameName) }.getOrNull()
+        } else null
+        if (gameRuntimeConversion?.optString("status") == "GENERATED" && gameOutputFile == null) {
+            text("The game-runtime APK is missing or its digest/metadata is invalid; it cannot be installed or shared.", 13f, statusColor("FAILED"))
+        }
+        report.optJSONObject("gameRuntimeBuildProgress")?.takeIf { it.optString("status") == "FAILED" }?.let { build ->
+            text("Game-runtime build failed: ${build.optString("message")}", 13f, statusColor("FAILED"))
+        }
+        if (gameOutputFile != null) {
+            val executableBytes = gameRuntimeConversion?.optLong("executableBytes", 0L) ?: 0L
+            val machoFormat = gameRuntimeConversion?.optString("machoFormat").orEmpty().ifBlank { "Mach-O" }
+            text("Game-runtime boot-attempt APK · $machoFormat executable, $executableBytes byte(s) packed", 13f, accent, true)
+            text("Opens into the real guest boot (shown as a minimal boot log) and stops at the first unimplemented call instead of showing a preview. No conversion, static recompilation, or gameplay is claimed.", 12f, muted)
+            button("Install ${gameOutputFile.name}", true) { installArtifact(dir, gameOutputFile.name) }
+            button("Share ${gameOutputFile.name}") { shareResultApk(dir, gameOutputFile.name) }
+            if (app.has("sha256")) button("Open installed game boot") {
+                val gamePackage = gameRuntimeConversion?.optString("package").orEmpty()
+                val intent = gamePackage.takeIf { it.isNotBlank() }?.let { packageManager.getLaunchIntentForPackage(it) }
+                if (intent == null) Toast.makeText(this, "Game-runtime program is not installed or not visible to Android", Toast.LENGTH_LONG).show() else startActivity(intent)
+            }
+        }
         if (File(dir, "source.ipa").isFile && app.has("sha256") && hostOutputFile == null) {
             val deviceConvertible = report.optJSONObject("deviceRecompilation")?.let {
                 it.optString("status") == "PROVEN" && it.optInt("coveragePercent", 0) == 100 && it.optInt("functionCount", 0) == 1
@@ -668,14 +692,17 @@ class MainActivity : Activity() {
                     startForceConvert(dir, true)
                 }
             } else {
-                text("This IPA is outside the bounded conversion subset; Force builds a signed, installable preview APK only. It does not statically recompile or run the game.", 12f, muted)
-                dangerButton(if (placeholderOutputFile != null) "Rebuild preview APK" else "Force convert to .apk") {
+                text("This IPA is outside the bounded conversion subset, so Force builds a game-runtime APK: it packs the real 32-bit ARM executable plus the bundle and opens into the actual guest boot (shown as a minimal boot log), stopping at the first unimplemented call instead of showing a preview. A preview shell without any executable remains available as a fallback.", 12f, muted)
+                dangerButton(if (gameOutputFile != null) "Rebuild game APK" else "Force convert to game APK") {
+                    startGameRuntimeBuild(dir)
+                }
+                button(if (placeholderOutputFile != null) "Rebuild preview APK" else "Build preview shell instead") {
                     startForceConvert(dir, false)
                 }
             }
         }
         button("Delete library entry") {
-            if (!Jobs.busy) AlertDialog.Builder(this).setTitle("Delete imported entry?").setMessage("Removes the retained IPA, analysis reports, recovered icon, any converted APK, and any generated preview APK from this device.")
+            if (!Jobs.busy) AlertDialog.Builder(this).setTitle("Delete imported entry?").setMessage("Removes the retained IPA, analysis reports, recovered icon, any converted APK, any game-runtime APK, and any generated preview APK from this device.")
                 .setNegativeButton("Cancel", null).setPositiveButton("Delete") { _, _ -> dir.deleteRecursively(); home() }.show()
         }
     }
@@ -701,6 +728,32 @@ class MainActivity : Activity() {
                 PlaceholderApkBuilder(applicationContext).build(dir) { percent, message ->
                     Jobs.update(percent, message)
                 }
+            }
+        }
+        if (!started) {
+            wasBusy = false
+            returnToDetailAfterJob = null
+            Toast.makeText(this, "A job is already running", Toast.LENGTH_SHORT).show()
+            return
+        }
+        home()
+    }
+
+    private fun startGameRuntimeBuild(dir: File) {
+        if (Jobs.busy) {
+            Toast.makeText(this, "A job is already running", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!File(dir, "source.ipa").isFile) {
+            Toast.makeText(this, "Retained IPA not found; nothing can be built", Toast.LENGTH_LONG).show()
+            return
+        }
+        Jobs.begin("Building game-runtime boot APK")
+        returnToDetailAfterJob = dir
+        wasBusy = true
+        val started = Jobs.tryRun {
+            GameRuntimeApkBuilder(applicationContext).build(dir) { percent, message ->
+                Jobs.update(percent, message)
             }
         }
         if (!started) {
@@ -783,6 +836,7 @@ class MainActivity : Activity() {
             val report = JSONObject(File(dir, "report.json").readText())
             report.optJSONObject("deviceConversion")?.optString("package").orEmpty()
                 .ifBlank { report.optJSONObject("hostConversion")?.optString("package").orEmpty() }
+                .ifBlank { report.optJSONObject("gameRuntimeConversion")?.optString("package").orEmpty() }
                 .ifBlank { report.optJSONObject("placeholderConversion")?.optString("package").orEmpty() }
         }.getOrDefault("")
         if (expectedPackage.isNotBlank()) {

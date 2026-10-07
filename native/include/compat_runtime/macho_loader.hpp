@@ -3,6 +3,7 @@
 #include "compat_runtime/cpu.hpp"
 #include "compat_runtime/guest_memory.hpp"
 #include "compat_runtime/shim_registry.hpp"
+#include "compat_runtime/trap_shims.hpp"
 #include "json.hpp"
 
 #include <cstddef>
@@ -25,6 +26,13 @@ struct MachOLoadReport {
     std::uint32_t rebasesApplied = 0;
     std::vector<radek::Json> resolvedSymbols;
     std::vector<radek::Json> unresolvedSymbols;
+    // Imports bound to abort-on-call traps by loadWithTraps. They have no
+    // implementation; the slot holds a trap address so execution can proceed
+    // until the import is actually used. Empty for load().
+    std::vector<radek::Json> trappedSymbols;
+    // Undefined symbols with no loader binding location (nlist-only). Seen by
+    // loadWithTraps only; load() keeps them in unresolvedSymbols.
+    std::vector<radek::Json> unboundNlistSymbols;
     std::optional<std::string> firstMissingImport;
 
     bool imageMapped() const noexcept;
@@ -38,6 +46,20 @@ class MachOLoader {
                          GuestAddressSpace &addressSpace,
                          const ShimRegistry &shims,
                          GuestAddress slide = 0) const;
+
+    /**
+     * Load and bind every trappable unresolved import to an abort-on-call
+     * trap. The registry gains one trap binding per unimplemented import;
+     * trapped imports are reported under trappedSymbols (never resolved) and
+     * firstMissingImport still names the first import without an
+     * implementation. Status is LOADED_WITH_TRAPS when every slot-backed
+     * import is bound and only traps (or unbindable nlist names) remain.
+     */
+    MachOLoadReport loadWithTraps(const std::vector<std::uint8_t> &mainBinary,
+                                  GuestAddressSpace &addressSpace,
+                                  ShimRegistry &shims,
+                                  TrapShimAdapter &traps,
+                                  GuestAddress slide = 0) const;
 };
 
 } // namespace radek::compat_runtime

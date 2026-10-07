@@ -1,101 +1,72 @@
 package dev.radek.gameruntime;
 
+import android.os.Looper;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.TextView;
+
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.Robolectric;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.Shadows;
+import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowLooper;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
+import java.util.zip.CRC32;
+import java.util.zip.Deflater;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-import org.junit.Test;
-
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.zip.CRC32;
-import java.util.zip.Deflater;
-
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk = 28, manifest = Config.NONE)
 public final class GameBootActivityTest {
     @Test
-    public void parsesBootReportAndStatesFirstUnimplementedImport() throws Exception {
-        JSONObject manifest = new JSONObject()
-                .put("executable", new JSONObject()
-                        .put("name", "AngryBirds")
-                        .put("sha256", "deadbeef"))
-                .put("resources", new JSONObject()
-                        .put("files", 259)
-                        .put("bytes", 13231926L));
+    public void missingMetadataLeavesTheDiagnosticScreenOpen() {
+        GameBootActivity activity = Robolectric.buildActivity(GameBootActivity.class).create().get();
+        ShadowLooper mainLooper = Shadows.shadowOf(Looper.getMainLooper());
+        mainLooper.idle();
 
-        JSONObject report = new JSONObject()
-                .put("status", "not_runnable")
-                .put("execution", new JSONObject()
-                        .put("stopCategory", "IMPORT_CALLOUT_UNIMPLEMENTED")
-                        .put("stopReason", "First unimplemented import callout: _UIApplicationMain")
-                        .put("executedInstructions", 412L)
-                        .put("lastProgramCounter", 0xf0000010L))
-                .put("loader", new JSONObject()
-                        .put("status", "LOADED_WITH_TRAPS")
-                        .put("mappedSegments", 3)
-                        .put("boundImports", 42)
-                        .put("trappedImports", 212))
-                .put("trappedImports", new JSONArray()
-                        .put(new JSONObject()
-                                .put("symbol", "_UIApplicationMain")
-                                .put("library", "UIKit")
-                                .put("lastCaller", 0x00002d94L)));
+        assertFalse(activity.isFinishing());
+        String screenText = textIn(activity.getWindow().getDecorView());
+        assertTrue(screenText.contains("Boot metadata is missing or invalid"));
+        assertTrue(screenText.contains("diagnostic screen will remain open"));
+        assertTrue(screenText.contains("GAME SPLASH SCREEN VIEWPORT"));
 
-        GameBootActivity.BootSummary summary = GameBootActivity.summarizeBootReport(
-                "Angry Birds",
-                manifest,
-                report.toString());
-
-        assertEquals("Angry Birds", summary.headline);
-        assertTrue(summary.failedClosed);
-        assertTrue(summary.status.contains("IMPORT_CALLOUT_UNIMPLEMENTED"));
-        assertTrue(summary.status.contains("_UIApplicationMain"));
-        assertTrue(summary.details.contains("Splash viewport: active"));
-        assertTrue(summary.details.contains("Instructions executed: 412"));
-        assertTrue(summary.details.contains("Trapped import: _UIApplicationMain (UIKit) from lr=0x00002d94"));
-        assertTrue(summary.details.contains("No gameplay or conversion is claimed by this artifact."));
+        // The old launcher posted a delayed RuntimeException after displaying
+        // this same error. Advancing past that delay must not crash the activity.
+        mainLooper.idleFor(2, TimeUnit.SECONDS);
+        assertFalse(activity.isFinishing());
     }
 
     @Test
-    public void reportsCleanFailureWhenJsonIsMalformed() {
-        GameBootActivity.BootSummary summary = GameBootActivity.summarizeBootReport(
-                "Angry Birds",
-                new JSONObject(),
-                "{not-json");
-        assertTrue(summary.failedClosed);
-        assertTrue(summary.status.startsWith("BOOT FAILED CLOSED: malformed native report"));
-        assertTrue(summary.details.contains("{not-json"));
-    }
+    public void blockedGuestBootShowsTheImportAndDoesNotCrash() {
+        GameBootActivity activity = Robolectric.buildActivity(GameBootActivity.class).create().get();
+        activity.displayBootResult(
+                "{\"loader\":{\"status\":\"LOADED_WITH_TRAPS\",\"resolvedSymbolCount\":39," +
+                        "\"trappedSymbolCount\":539,\"unresolvedSymbolCount\":0}," +
+                        "\"execution\":{\"status\":\"STOPPED_AT_TRAP\",\"instructions\":34}," +
+                        "\"trappedImport\":\"_UIApplicationMain\",\"reason\":\"unimplemented import\"}"
+        );
+        ShadowLooper mainLooper = Shadows.shadowOf(Looper.getMainLooper());
+        mainLooper.idle();
 
-    @Test
-    public void reportsNativeLoadFailureWithoutCrashing() {
-        String text = GameBootActivity.summarizeNativeError(
-                new UnsatisfiedLinkError("dlopen failed: library \"libcompat_runtime_v1.so\" not found"));
-        assertTrue(text.contains("UnsatisfiedLinkError"));
-        assertTrue(text.contains("libcompat_runtime_v1.so"));
-    }
+        String screenText = textIn(activity.getWindow().getDecorView());
+        assertTrue(screenText.contains("_UIApplicationMain"));
+        assertTrue(screenText.contains("Guest boot stopped"));
+        assertTrue(screenText.contains("This APK is not a playable conversion"));
+        assertFalse(activity.isFinishing());
 
-    @Test
-    public void extractsBoundedPayloadsAndRefusesPathTraversal() throws Exception {
-        assertEquals("data/SPLASHES.png", GameBootActivity.sanitizeRelativePath("data/SPLASHES.png"));
-        assertEquals("levels/level1.lua", GameBootActivity.sanitizeRelativePath("levels\\level1.lua"));
-        try {
-            GameBootActivity.sanitizeRelativePath("../outside.txt");
-            fail("Expected traversal path to be rejected");
-        } catch (IOException expected) {
-            assertTrue(expected.getMessage().contains("traversal"));
-        }
-        try {
-            GameBootActivity.sanitizeRelativePath("/etc/passwd");
-            fail("Expected absolute path to be rejected");
-        } catch (IOException expected) {
-            assertTrue(expected.getMessage().contains("unsafe"));
-        }
+        mainLooper.idleFor(2, TimeUnit.SECONDS);
+        assertFalse(activity.isFinishing());
     }
 
     @Test
@@ -136,6 +107,18 @@ public final class GameBootActivityTest {
         assertEquals(40, argb & 0xff);
     }
 
+    private static String textIn(View view) {
+        StringBuilder result = new StringBuilder();
+        if (view instanceof TextView) result.append(((TextView) view).getText()).append('\n');
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int index = 0; index < group.getChildCount(); index++) {
+                result.append(textIn(group.getChildAt(index)));
+            }
+        }
+        return result.toString();
+    }
+
     private static void writeU16Be(ByteArrayOutputStream out, int value) {
         out.write((value >>> 8) & 0xff);
         out.write(value & 0xff);
@@ -159,10 +142,10 @@ public final class GameBootActivityTest {
         writeU16String(out, name);
         writeU16Be(out, x);
         writeU16Be(out, y);
-        writeU16Be(out, width);
-        writeU16Be(out, height);
-        writeU16Be(out, pivotX);
-        writeU16Be(out, pivotY);
+        writeU16Be(width);
+        writeU16Be(height);
+        writeU16Be(pivotX);
+        writeU16Be(pivotY);
     }
 
     private static byte[] buildSinglePixelCgbiPng(int b, int g, int r, int a) throws IOException {

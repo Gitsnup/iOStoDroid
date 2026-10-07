@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compat_runtime/objc_runtime.hpp"
+#include "compat_runtime/runner.hpp"
 #include "compat_runtime/shim_registry.hpp"
 
 #include <cstdint>
@@ -13,6 +14,25 @@
 #include <vector>
 
 namespace radek::compat_runtime::objc {
+
+/**
+ * Bounded result of the application-lifecycle ("startup chain") adapters.
+ *
+ * The runtime drives `UIApplicationMain` far enough to instantiate the app's
+ * delegate, deliver `applicationDidFinishLaunching:`, and service a bounded
+ * number of queued background-thread iterations on the single guest CPU. None
+ * of these counters is gameplay evidence: they describe how far a boot attempt
+ * progressed before it stopped.
+ */
+struct LifecycleOutcome {
+    bool applicationMainEntered = false;
+    bool applicationMainReturned = false;
+    std::string delegateClassName;
+    std::uint32_t mainThreadFramesServiced = 0;
+    std::uint32_t mainThreadFramesLimit = 0;
+    bool mainThreadQueueExhausted = false;
+    std::vector<std::string> events;
+};
 
 /**
  * Bounded guest-facing Objective-C core adapters.
@@ -32,6 +52,61 @@ class ShimAdapter {
         bool atomic = false;
     };
 
+    // A native -> guest nested call (UIApplicationMain delivering a lifecycle
+    // message, performSelectorOnMainThread:, ...). The frame remembers where the
+    // interrupted shim callout must resume: the continuation callout restores
+    // LR and returns control to the guest caller.
+    struct LifecycleFrame {
+        std::uint32_t kind = 0;
+        GuestAddress callerReturnAddress = 0;
+        GuestAddress receiver = 0;
+    };
+
+    struct LifecycleState {
+        bool applicationMainEntered = false;
+        bool applicationMainReturned = false;
+        std::string delegateClassName;
+        GuestAddress application = 0;
+        GuestAddress delegate = 0;
+        GuestAddress keyWindow = 0;
+        GuestAddress screen = 0;
+        GuestAddress accelerometer = 0;
+        GuestAddress bundle = 0;
+        GuestAddress mainThread = 0;
+        GuestAddress backgroundThread = 0;
+        // Views and their Core Animation layers. A bounded adapter still keeps
+        // one layer per view so two views cannot alias.
+        std::map<GuestAddress, GuestAddress> viewLayers;
+        // `mutationsPtr` handed to guest fast enumeration: one zeroed word that
+        // never changes, because the bounded arrays are never mutated in place.
+        GuestAddress enumerationMutations = 0;
+        std::uint32_t statusBarOrientation = 1;
+        std::uint32_t statusBarStyle = 0;
+        bool statusBarHidden = false;
+        bool idleTimerDisabled = false;
+        double accelerometerInterval = 0.0;
+        GuestAddress accelerometerDelegate = 0;
+        GuestAddress currentContext = 0;
+        GuestAddress layerClass = 0;
+        // Bounded "main thread" service: the guest game thread asks the runtime
+        // to run a selector on the main thread; the adapter relays it into guest
+        // code and counts serviced calls. The sleep callout cancels the guest
+        // thread once the limit is reached so the harness terminates honestly.
+        std::uint32_t mainThreadFramesServiced = 0;
+        std::uint32_t mainThreadFramesLimit = 0;
+        bool mainThreadCancelled = false;
+        std::uint32_t sleepCount = 0;
+        // Set while the runner executes the queued background-thread body, so
+        // `+[NSThread currentThread]` answers the thread the guest is on.
+        bool mainThreadEntryRunning = false;
+        bool queuedMainThreadEntry = false;
+        GuestAddress queuedMainThreadTarget = 0;
+        Selector queuedMainThreadSelector = 0;
+        GuestAddress queuedMainThreadArgument = 0;
+        std::vector<LifecycleFrame> frames;
+        std::vector<std::string> events;
+    };
+
     struct GuestState {
         std::map<const Class *, GuestAddress> classAddresses;
         std::map<GuestAddress, const Class *> classesByAddress;
@@ -42,6 +117,7 @@ class ShimAdapter {
         std::map<std::string, GuestAddress> protocolAddresses;
         std::map<std::string, std::vector<std::string>> protocolParents;
         std::map<std::uint32_t, PropertyCopyContinuation> pendingPropertyCopies;
+        LifecycleState lifecycle;
     };
 
     struct AutoreleasePoolState {
@@ -70,6 +146,7 @@ class ShimAdapter {
     std::uint32_t nextCallout_ = 0xf0004000;
     std::uint32_t nextPropertyCopyToken_ = 1;
     GuestAddress propertyCopyContinuationAddress_ = 0;
+    GuestAddress lifecycleContinuationAddress_ = 0;
     bool registered_ = false;
 
     GuestState &guestState(GuestAddressSpace &memory);
@@ -86,6 +163,52 @@ class ShimAdapter {
     bool initializeImage(GuestAddressSpace &memory,
                          const std::vector<GuestImageSection> &sections,
                          std::string &reason);
+    // --- application lifecycle ("startup chain") -------------------------
+    GuestAddress lifecycleFrameworkObject(GuestAddressSpace &memory,
+                                          const std::string &className,
+                                          GuestAddress &slot);
+    bool applicationMain(CpuRegisterState &registers, GuestAddressSpace &memory,
+                         GuestAddress &guestTarget, std::string &reason);
+    bool lifecycleContinuation(CpuRegisterState &registers, GuestAddressSpace &memory,
+                               std::string &reason);
+    bool lifecycleSelector(CpuRegisterState &registers, GuestAddressSpace &memory,
+                           const std::string &selectorName, GuestAddress receiverAddress,
+                           Object *receiverObject, const Class *receiverClass, Value *rawReturn,
+                           GuestAddress *guestTarget, std::string &reason);
+    // Bounded message groups for the startup chain. Each group returns true
+    // when it produced the result for the selector and false when the selector
+    // is outside that group (the caller then fails closed with a named
+    // diagnostic instead of guessing a signature).
+    bool lifecycleFoundationMessage(CpuRegisterState &registers, GuestAddressSpace &memory,
+                                    const std::string &selectorName, GuestAddress receiverAddress,
+                                    Object *receiverObject, Value *rawReturn, std::string &reason);
+    bool lifecycleFoundationClassMessage(CpuRegisterState &registers, GuestAddressSpace &memory,
+                                         const Class *receiverClass,
+                                         const std::string &selectorName, Value *rawReturn,
+                                         std::string &reason);
+    bool lifecycleThreadMessage(CpuRegisterState &registers, GuestAddressSpace &memory,
+                                const std::string &selectorName, GuestAddress receiverAddress,
+                                Object *receiverObject, Value *rawReturn);
+    bool lifecycleViewMessage(CpuRegisterState &registers, GuestAddressSpace &memory,
+                             const std::string &selectorName, GuestAddress receiverAddress,
+                             Object *receiverObject, Value *rawReturn, std::string &reason);
+    GuestAddress lifecycleLayerForView(GuestAddressSpace &memory, GuestAddress view,
+                                       Object *viewObject);
+    /**
+     * Thread object the guest is running on. Only one guest thread executes at a
+     * time, so this is the main-thread object outside the queued background
+     * entry and the background-thread object while the runner services it.
+     */
+    GuestAddress lifecycleCurrentThreadAddress(GuestAddressSpace &memory);
+    bool beginNestedGuestCall(CpuRegisterState &registers, GuestAddressSpace &memory,
+                              GuestAddress receiver, Selector selector, std::uint32_t kind,
+                              GuestAddress argument, GuestAddress &guestTarget,
+                              std::string &reason);
+    bool performSelectorNested(CpuRegisterState &registers, GuestAddressSpace &memory,
+                               const std::string &selectorName, GuestAddress receiverAddress,
+                               GuestAddress &guestTarget, std::string &reason);
+    std::string readConstantString(GuestAddressSpace &memory, GuestAddress address);
+    void recordLifecycleEvent(LifecycleState &state, const std::string &event);
     bool dispatch(CpuRegisterState &registers, GuestAddressSpace &memory,
                   std::string &reason, bool superDispatch = false,
                   Value *rawReturn = nullptr, GuestAddress *guestTarget = nullptr);
@@ -139,8 +262,37 @@ class ShimAdapter {
 
     /** Add only the named Objective-C symbols with an explicit native adapter. */
     void registerBindings(ShimRegistry &registry);
+
+    /**
+     * Boot-runner hooks that expose this adapter's bounded lifecycle trace and
+     * the queued background-thread entry, if the image detached one.
+     */
+    BootLifecycleHooks lifecycleHooks();
+
     Runtime &runtime() noexcept { return runtime_; }
     const Runtime &runtime() const noexcept { return runtime_; }
+
+    /**
+     * Bound the number of background-thread iterations the startup chain may
+     * service. The value is delivered to the virtual `sleepForTimeInterval:`
+     * callout: after this many iterations the guest thread is marked cancelled
+     * so the bounded boot attempt terminates by itself.
+     */
+    void setMainThreadServiceLimit(GuestAddressSpace &memory, std::uint32_t frames);
+
+    /**
+     * Prepare an ABI-correct first call for the queued background-thread entry
+     * (an `NSThread` detach target). Returns false when nothing is queued or the
+     * entry cannot be represented in guest memory.
+     */
+    bool prepareQueuedMainThreadEntry(GuestAddressSpace &memory, CpuRegisterState &registers,
+                                      GuestAddress &entryPoint, std::string &reason);
+
+    /** Snapshot of the lifecycle trace; never gameplay evidence. */
+    LifecycleOutcome lifecycleOutcome(GuestAddressSpace &memory) const;
+
+    /** Guest object address of a registered framework class instance, or 0. */
+    GuestAddress guestObjectAddress(GuestAddressSpace &memory, Object *object) const;
 };
 
 } // namespace radek::compat_runtime::objc

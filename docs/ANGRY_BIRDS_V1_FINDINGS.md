@@ -65,6 +65,28 @@ Phase 2 adds bounded native Objective-C callouts and guest class-object resolver
 
 The Foundation subset now also binds `_NSSearchPathForDirectoriesInDomains` and returns guest-backed `NSArray`/`NSString` values for a bounded set of user-domain directories. Tests inspect the guest array and strings, verify ownership/copy behavior, and cover unsupported directories. These are virtual path strings only; they are not an Android-backed sandbox filesystem or proof the IPA calls the function. The v11 static report records zero recovered direct callsites for this import.
 
+### Runtime evidence: bounded startup chain (this change)
+
+The boot attempt no longer stops at `_UIApplicationMain`. With the VFP unit
+enabled for the guest, the bounded application-lifecycle adapter instantiated
+the image's own `AppController`, wired it into the `UIApplication` singleton,
+and delivered `applicationDidFinishLaunching:` to the real guest implementation
+at `0x6871c`. Inside that method the app created its window and EAGL view
+(`-[UIView layer]` -> `CAEAGLLayer`, `numberWithBool:`,
+`dictionaryWithObjectsAndKeys:`, `-[EAGLContext initWithAPI:]`,
+`setCurrentContext:`, `addSubview:`, `makeKeyAndVisible`) and entered its
+engine's render setup, where the **first OpenGL ES call (`_glFrontFace`, called
+from guest text around `0xAC50C`) stops the attempt** after 340,309 executed
+guest instructions. This is observed execution of the
+app's own startup code, still not a launch, not a rendered frame, and not
+gameplay: no GL entry point is implemented, and the nineteen still-unimplemented
+shim families (GL, OpenAL, pthreads, the Foundation file/date/time subset, ...)
+remain traps that stop the boot by name.
+
+Static texts below that call `_UIApplicationMain` "the next concrete startup
+blocker" describe the pre-runtime state; the runtime binding now exists and the
+blocker moved to OpenGL ES.
+
 ### Real-IPA loader probe after Phase 2 bindings
 
 The 1,822,112-byte ARMv6 main executable was re-extracted from the authorized local IPA into ignored `.local/angrybirds-analysis-v10/` storage and passed to `MachOLoader` with Objective-C, AudioToolbox, and SJLJ adapters registered. The latest probe maps three segments, reads entry `0x4320` from `LC_UNIXTHREAD`, and returns **`BLOCKED_UNRESOLVED_IMPORTS`**: 39 relocation/pointer fixups resolve across 30 unique symbols; 225 records remain unresolved across 224 unique symbols. The loader also applies the image's 348 absolute 32-bit ARM vanilla external relocations and 517-entry indirect-symbol table. `_AudioSessionInitialize` and `_AudioSessionSetActive` resolve through state-only adapters; `_NSSearchPathForDirectoriesInDomains` resolves through the bounded Foundation path adapter; Objective-C messaging, class data, mutation boundary, and SJLJ register/unregister callouts also resolve. `__Unwind_SjLj_Resume` is now import-resolved to an explicit exception-stop boundary and is tested not to return normally. The mutation adapter and resume boundary still stop rather than perform guest unwinding; personality dispatch, catch search, and landing-pad transfer are not implemented.

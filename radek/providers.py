@@ -267,80 +267,142 @@ IMPLEMENTED_C_API_SHIMS = {
 #: proof that the Darwin ABI or its behavior can be linked safely.
 BIONIC_SYMBOL_CANDIDATES = frozenset(
     """
-    __stack_chk_fail _exit abort abs accept access acos acosf acosh acoshf adler32 adler32_combine alarm asctime
-    asctime_r asin asinf asinh asinhf atan atan2 atan2f atanf atanh atanhf atexit atof atoi atol atoll bind bsearch
-    calloc cbrt cbrtf ceil ceilf chdir chmod clearerr clock clock_gettime clock_settime close closedir compress
-    compress2 compressBound connect copysign copysignf cos cosf cosh coshf crc32 crc32_combine creat ctime ctime_r
-    deflate deflateBound deflateCopy deflateEnd deflateInit2_ deflateInit_ deflateParams deflatePrime deflateReset
-    deflateSetDictionary deflateSetHeader deflateTune difftime dladdr dlclose dlerror dlinfo dlopen dlsym dup dup2
-    eglBindAPI eglBindTexImage eglChooseConfig eglCopyBuffers eglCreateContext eglCreatePbufferFromClientBuffer
-    eglCreatePbufferSurface eglCreatePixmapSurface eglCreateWindowSurface eglDestroyContext eglDestroySurface
-    eglGetConfigAttrib eglGetConfigs eglGetCurrentContext eglGetCurrentDisplay eglGetCurrentSurface eglGetDisplay
-    eglGetError eglGetPlatformDisplay eglGetProcAddress eglInitialize eglMakeCurrent eglQueryAPI eglQueryContext
-    eglQueryString eglQuerySurface eglReleaseTexImage eglReleaseThread eglSurfaceAttrib eglSwapBuffers
-    eglSwapInterval eglTerminate eglWaitClient eglWaitGL eglWaitNative endgrent endpwent erf erfc erfcf erff execl
-    execle execlp execv execve execvp exit exp exp2 exp2f expf expm1 expm1f fabs fabsf fchmod fchown fclose
-    fdatasync fdim fdimf fdopen feof ferror fflush fgetc fgetpos fgets fileno flock floor floorf fma fmaf fmax fmaxf
-    fmin fminf fmod fmodf fopen fputc fputs fread free freeaddrinfo freopen frexp frexpf fscanf fseek fseeko fsetpos
-    fsync ftell ftello ftruncate fwrite gai_strerror getc getcwd getegid getenv geteuid getgid getgrent getgrgid
-    getgrnam getgroups gethostbyaddr gethostbyname gethostname getlogin getpeername getpgrp getpid getppid getpwent
-    getpwnam getpwuid getservbyname getservbyport getsockname getsockopt gettimeofday getuid glActiveTexture
-    glAlphaFunc glAttachShader glBindAttribLocation glBindBuffer glBindFramebuffer glBindRenderbuffer glBindTexture
-    glBlendColor glBlendEquation glBlendEquationSeparate glBlendFunc glBlendFuncSeparate glBufferData
-    glBufferSubData glCheckFramebufferStatus glClear glClearColor glClearDepthf glClearStencil glClientActiveTexture
-    glColor4f glColor4ub glColor4x glColorMask glColorPointer glCompileShader glCompressedTexImage2D
-    glCompressedTexSubImage2D glCopyTexImage2D glCopyTexSubImage2D glCreateProgram glCreateShader glCullFace
-    glDeleteBuffers glDeleteFramebuffers glDeleteProgram glDeleteRenderbuffers glDeleteShader glDeleteTextures
-    glDepthFunc glDepthMask glDepthRangef glDetachShader glDisable glDisableClientState glDisableVertexAttribArray
-    glDrawArrays glDrawElements glEnable glEnableClientState glEnableVertexAttribArray glFinish glFlush glFogf
-    glFogfv glFogi glFogiv glFramebufferRenderbuffer glFramebufferTexture2D glFrontFace glFrustumf glGenBuffers
-    glGenFramebuffers glGenRenderbuffers glGenTextures glGenerateMipmap glGetActiveAttrib glGetActiveUniform
-    glGetAttribLocation glGetBooleanv glGetBufferParameteriv glGetClipPlane glGetError glGetFloatv
-    glGetFramebufferAttachmentParameteriv glGetIntegerv glGetLightfv glGetLightiv glGetMaterialfv glGetMaterialiv
-    glGetPointerv glGetProgramInfoLog glGetProgramiv glGetRenderbufferParameteriv glGetShaderInfoLog
-    glGetShaderPrecisionFormat glGetShaderiv glGetString glGetTexEnviv glGetTexEnvxv glGetTexParameterfv
-    glGetTexParameteriv glGetTexParameterxv glGetUniformLocation glGetUniformfv glGetUniformiv glGetVertexAttribfv
-    glGetVertexAttribiv glHint glIsBuffer glIsEnabled glIsFramebuffer glIsProgram glIsRenderbuffer glIsShader
-    glIsTexture glLightModelf glLightModelfv glLightf glLightfv glLighti glLightiv glLineWidth glLinkProgram
-    glLoadIdentity glLoadMatrixf glLogicOp glMaterialf glMaterialfv glMatrixMode glMultMatrixf glMultiTexCoord4f
-    glNormal3f glNormalPointer glOrthof glPixelStorei glPointSize glPolygonOffset glPopMatrix glPushMatrix
-    glReadPixels glReleaseShaderCompiler glRenderbufferStorage glRotatef glSampleCoverage glScalef glScissor
-    glShadeModel glShaderBinary glShaderSource glStencilFunc glStencilFuncSeparate glStencilMask
-    glStencilMaskSeparate glStencilOp glStencilOpSeparate glTexCoordPointer glTexEnvf glTexEnvfv glTexEnvi
-    glTexEnviv glTexEnvx glTexEnvxv glTexImage2D glTexParameterf glTexParameterfv glTexParameteri glTexParameteriv
-    glTexParameterx glTexParameterxv glTexSubImage2D glTranslatef glUniform1f glUniform1fv glUniform1i glUniform1iv
-    glUniform2f glUniform2fv glUniform2i glUniform2iv glUniform3f glUniform3fv glUniform3i glUniform3iv glUniform4f
-    glUniform4fv glUniform4i glUniform4iv glUniformMatrix2fv glUniformMatrix3fv glUniformMatrix4fv glUseProgram
-    glValidateProgram glVertexAttrib1f glVertexAttrib1fv glVertexAttrib2f glVertexAttrib2fv glVertexAttrib3f
-    glVertexAttrib3fv glVertexAttrib4f glVertexAttrib4fv glVertexAttribPointer glVertexPointer glViewport gmtime
-    gmtime_r gzclose gzopen gzread gzwrite hypot hypotf iconv iconv_close iconv_open ilogb ilogbf inet_addr
-    inet_aton inet_ntoa inet_ntop inet_pton inflate inflateBack inflateBackEnd inflateBackInit_ inflateCopy
-    inflateEnd inflateInit2_ inflateInit_ inflatePrime inflateReset inflateSetDictionary inflateSync
-    inflateSyncPoint isatty isdigit islower isspace isupper isxdigit j0 j1 jn kill lchown ldexp ldexpf lgamma
-    lgammaf link listen llrint llrintf llround llroundf localtime localtime_r log log10 log10f log1p log1pf log2
-    log2f logb logbf logf lrint lrintf lround lroundf lseek malloc memchr memcmp memcpy memmem memmove memrchr
-    memset mkdir mkdtemp mkstemp mktime mmap modf modff mprotect munmap nanosleep nearbyint nearbyintf nextafter
-    nextafterf nexttoward open opendir pathconf pause pclose perror pipe popen pow powf printf pselect
-    pthread_atfork pthread_attr_destroy pthread_attr_init pthread_attr_setdetachstate pthread_attr_setschedparam
-    pthread_attr_setstacksize pthread_cond_broadcast pthread_cond_destroy pthread_cond_init pthread_cond_signal
-    pthread_cond_timedwait pthread_cond_wait pthread_create pthread_detach pthread_equal pthread_exit
-    pthread_getspecific pthread_join pthread_key_create pthread_key_delete pthread_kill pthread_mutex_destroy
-    pthread_mutex_init pthread_mutex_lock pthread_mutex_trylock pthread_mutex_unlock pthread_mutexattr_destroy
-    pthread_mutexattr_init pthread_mutexattr_settype pthread_once pthread_rwlock_destroy pthread_rwlock_rdlock
-    pthread_rwlock_unlock pthread_rwlock_wrlock pthread_self pthread_setname_np pthread_setschedparam
-    pthread_setspecific pthread_sigmask putc putchar putenv puts qsort raise rand random read readdir readdir_r
-    readlink readv realloc realpath recv recvfrom recvmsg remainder remainderf remove remquo remquof rename
-    rewinddir rint rintf rmdir round roundf scalbn scalbnf scanf sched_yield seekdir select send sendmsg sendto
-    setbuf setenv setgrent setgroups setlocale setpwent setsockopt setvbuf sigaddset sigdelset sigemptyset
-    sigfillset sigismember signal significand sin sinf sinh sinhf sleep snprintf socket socketpair sprintf sqrt
-    sqrtf srand srandom sscanf strcasecmp strcat strchr strcmp strcoll strcpy strcspn strdup strerror strerror_r
-    strftime strlen strncasecmp strncat strncmp strncpy strndup strnlen strpbrk strptime strrchr strsep strsignal
-    strspn strstr strtod strtof strtoimax strtok strtok_r strtol strtold strtoll strtoul strtoull strtoumax strxfrm
-    symlink sysconf system tan tanf tanh tanhf tcdrain tcflow tcflush tcgetattr tcsendbreak tcsetattr telldir tgamma
+    AAssetManager_fromJava AAssetManager_open AAssetManager_openDir AAsset_close AAsset_getBuffer AAsset_getLength
+    AAsset_getLength64 AAsset_getRemainingLength AAsset_getRemainingLength64 AAsset_isAllocated
+    AAsset_openFileDescriptor AAsset_openFileDescriptor64 AAsset_read AAsset_seek AAsset_seek64 AConfiguration_delete
+    AConfiguration_fromAssetManager AConfiguration_getCountry AConfiguration_getLanguage AConfiguration_new
+    AInputQueue_attachLooper AInputQueue_detachLooper AInputQueue_finishEvent AInputQueue_getEvent
+    AInputQueue_preDispatchEvent ALooper_addFd ALooper_forThread ALooper_pollAll ALooper_pollOnce ALooper_prepare
+    ALooper_removeFd ALooper_wake AMediaCodec_configure AMediaCodec_createDecoderByType AMediaCodec_createInputBuffer
+    AMediaCodec_createOutputBuffer AMediaCodec_delete AMediaCodec_dequeueInputBuffer AMediaCodec_dequeueOutputBuffer
+    AMediaCodec_flush AMediaCodec_getInputBuffer AMediaCodec_getOutputBuffer AMediaCodec_getOutputFormat
+    AMediaCodec_queueInputBuffer AMediaCodec_releaseInputBuffer AMediaCodec_releaseOutputBuffer AMediaCodec_start
+    AMediaCodec_stop AMediaExtractor_advance AMediaExtractor_create AMediaExtractor_getSampleFlags
+    AMediaExtractor_getSampleTime AMediaExtractor_getSampleTrackIndex AMediaExtractor_getTrackCount
+    AMediaExtractor_getTrackFormat AMediaExtractor_readSampleData AMediaExtractor_release AMediaExtractor_seekTo
+    AMediaExtractor_setDataSource AMediaFormat_create AMediaFormat_delete AMediaFormat_getInt32 AMediaFormat_getString
+    AMediaFormat_setBuffer AMediaFormat_setInt32 AMediaFormat_setString ANativeActivity_finish
+    ANativeActivity_setWindowFlags ANativeWindow_acquire ANativeWindow_fromSurface ANativeWindow_getFormat
+    ANativeWindow_getHeight ANativeWindow_getWidth ANativeWindow_lock ANativeWindow_release
+    ANativeWindow_setBuffersGeometry ANativeWindow_unlockAndPost ASensorEventQueue_disableSensor
+    ASensorEventQueue_enableSensor ASensorEventQueue_getEvents ASensorEventQueue_hasEvents
+    ASensorEventQueue_setEventRate ASensorManager_createEventQueue ASensorManager_destroyEventQueue
+    ASensorManager_getDefaultSensor ASensorManager_getInstance ASensorManager_getSensorList AndroidBitmap_getInfo
+    AndroidBitmap_lockPixels AndroidBitmap_unlockPixels __android_log_assert __android_log_buf_print
+    __android_log_buf_write __android_log_is_loggable __android_log_print __android_log_vprint __android_log_write
+    __assert __assert2 __cxa_atexit __cxa_finalize __errno __libc_current_sigrtmax __libc_current_sigrtmin
+    __memcpy_chk __memmove_chk __memset_chk __sprintf_chk __stack_chk_fail __strcat_chk __strcpy_chk __strlen_chk
+    __vsnprintf_chk __vsprintf_chk _exit abort abs accept access acos acosf acosh acoshf adler32 adler32_combine
+    adler32_z alarm android_dlopen_ext asctime asctime_r asin asinf asinh asinhf atan atan2 atan2f atanf atanh atanhf
+    atexit atof atoi atol atoll basename bind brk bsearch btowc cabs cabsf cacos cacosf cacosh cacoshf calloc carg
+    cargf casin casinf casinh casinhf catan catanf catanh catanhf cbrt cbrtf ccos ccosf ccosh ccoshf ceil ceilf cexp
+    cexpf chdir chmod cimag cimagf clearerr clock clock_gettime clock_settime clog clogf close closedir closelog
+    compress compress2 compressBound conj conjf connect copysign copysignf cos cosf cosh coshf cpow cpowf cproj cprojf
+    crc32 crc32_combine crc32_z creal crealf creat csin csinf csinh csinhf csqrt csqrtf ctan ctanf ctanh ctanhf ctime
+    ctime_r deflate deflateBound deflateCopy deflateEnd deflateGetDictionary deflateInit2_ deflateInit_ deflateParams
+    deflatePending deflatePrime deflateReset deflateResetKeep deflateSetDictionary deflateSetHeader deflateTune
+    difftime dirname dl_iterate_phdr dladdr dlclose dlerror dlinfo dlopen dlsym dup dup2 eglBindAPI eglBindTexImage
+    eglChooseConfig eglClientWaitSyncKHR eglCopyBuffers eglCreateContext eglCreateImageKHR
+    eglCreatePbufferFromClientBuffer eglCreatePbufferSurface eglCreatePixmapSurface eglCreatePlatformPixmapSurface
+    eglCreatePlatformWindowSurface eglCreateSyncKHR eglCreateWindowSurface eglDestroyContext eglDestroyImageKHR
+    eglDestroySurface eglDestroySyncKHR eglGetConfigAttrib eglGetConfigs eglGetCurrentContext eglGetCurrentDisplay
+    eglGetCurrentSurface eglGetDisplay eglGetError eglGetPlatformDisplay eglGetProcAddress eglGetSyncAttribKHR
+    eglInitialize eglMakeCurrent eglPresentationTimeANDROID eglQueryAPI eglQueryContext eglQueryString eglQuerySurface
+    eglQuerySurfacePointerANGLE eglReleaseTexImage eglReleaseThread eglSetDamageRegionKHR eglSignalSyncKHR
+    eglSurfaceAttrib eglSwapBuffers eglSwapBuffersWithDamageKHR eglSwapInterval eglTerminate eglWaitClient eglWaitGL
+    eglWaitNative eglWaitSyncKHR endgrent endpwent erf erfc erfcf erff execl execle execlp execv execve execvp exit
+    exp exp2 exp2f expf expm1 expm1f fabs fabsf fchmod fchown fclose fdatasync fdim fdimf fdopen feof ferror fflush
+    ffs ffsl ffsll fgetc fgetpos fgets fileno flock floor floorf fma fmaf fmax fmaxf fmemopen fmin fminf fmod fmodf
+    fnmatch fopen fprintf fputc fputs fread free freeaddrinfo freopen frexp frexpf fscanf fseek fseeko fsetpos fstat
+    fstatat fstatfs fstatvfs fsync ftell ftello ftruncate fwrite gai_strerror getc getcwd getdtablesize getegid getenv
+    geteuid getgid getgrent getgrgid getgrnam getgroups gethostbyaddr gethostbyname gethostname getline getlogin
+    getopt getopt_long getopt_long_only getpagesize getpeername getpgrp getpid getppid getpriority getprogname
+    getpwent getpwnam getpwuid getservbyname getservbyport getsockname getsockopt gettid gettimeofday getuid
+    glActiveTexture glAlphaFunc glAlphaFuncx glAttachShader glBeginQueryEXT glBindAttribLocation glBindBuffer
+    glBindFramebuffer glBindFramebufferOES glBindRenderbuffer glBindRenderbufferOES glBindTexture glBlendColor
+    glBlendEquation glBlendEquationOES glBlendEquationSeparate glBlendEquationSeparateOES glBlendFunc
+    glBlendFuncSeparate glBlendFuncSeparateOES glBufferData glBufferSubData glCheckFramebufferStatus
+    glCheckFramebufferStatusOES glClear glClearColor glClearColorx glClearDepthf glClearStencil glClientActiveTexture
+    glClipPlanef glClipPlanex glColor4f glColor4ub glColor4x glColorMask glColorPointer glCompileShader
+    glCompressedTexImage2D glCompressedTexSubImage2D glCopyTexImage2D glCopyTexSubImage2D glCreateProgram
+    glCreateShader glCullFace glDeleteBuffers glDeleteFramebuffers glDeleteFramebuffersOES glDeleteProgram
+    glDeleteQueriesEXT glDeleteRenderbuffers glDeleteRenderbuffersOES glDeleteShader glDeleteTextures glDepthFunc
+    glDepthMask glDepthRangef glDetachShader glDisable glDisableClientState glDisableVertexAttribArray
+    glDiscardFramebufferEXT glDrawArrays glDrawElements glDrawTexfOES glDrawTexfvOES glDrawTexiOES glDrawTexivOES
+    glDrawTexsOES glDrawTexsvOES glDrawTexxOES glDrawTexxvOES glEGLImageTargetRenderbufferStorageOES
+    glEGLImageTargetTexture2DOES glEnable glEnableClientState glEnableVertexAttribArray glEndQueryEXT glFinish glFlush
+    glFogf glFogfv glFogi glFogiv glFogx glFogxv glFramebufferRenderbuffer glFramebufferRenderbufferOES
+    glFramebufferTexture2D glFramebufferTexture2DOES glFrontFace glFrustumf glFrustumx glGenBuffers glGenFramebuffers
+    glGenFramebuffersOES glGenQueriesEXT glGenRenderbuffers glGenRenderbuffersOES glGenTextures glGenerateMipmap
+    glGetActiveAttrib glGetActiveUniform glGetAttribLocation glGetBooleanv glGetBufferParameteriv glGetClipPlane
+    glGetClipPlanef glGetClipPlanex glGetError glGetFixedv glGetFloatv glGetFramebufferAttachmentParameteriv
+    glGetIntegerv glGetLightfv glGetLightiv glGetLightxv glGetMaterialfv glGetMaterialiv glGetMaterialxv glGetPointerv
+    glGetProgramBinaryOES glGetProgramInfoLog glGetProgramiv glGetQueryObjectuivEXT glGetQueryivEXT
+    glGetRenderbufferParameteriv glGetRenderbufferParameterivOES glGetShaderInfoLog glGetShaderPrecisionFormat
+    glGetShaderiv glGetString glGetTexEnviv glGetTexEnvxv glGetTexGenfvOES glGetTexGenivOES glGetTexGenxvOES
+    glGetTexParameterfv glGetTexParameteriv glGetTexParameterxv glGetUniformLocation glGetUniformfv glGetUniformiv
+    glGetVertexAttribPointerv glGetVertexAttribfv glGetVertexAttribiv glHint glIsBuffer glIsEnabled glIsFramebuffer
+    glIsFramebufferOES glIsProgram glIsQueryEXT glIsRenderbuffer glIsRenderbufferOES glIsShader glIsTexture
+    glLightModelf glLightModelfv glLightModelx glLightModelxv glLightf glLightfv glLighti glLightiv glLightx glLightxv
+    glLineWidth glLineWidthx glLinkProgram glLoadIdentity glLoadMatrixf glLoadMatrixx glLogicOp glMaterialf
+    glMaterialfv glMaterialx glMaterialxv glMatrixMode glMultMatrixf glMultMatrixx glMultiTexCoord4f glMultiTexCoord4x
+    glNormal3f glNormal3x glNormalPointer glOrthof glOrthox glPixelStorei glPointParameterf glPointParameterfv
+    glPointSize glPointSizePointerOES glPointSizex glPolygonOffset glPolygonOffsetx glPopMatrix glProgramBinaryOES
+    glPushMatrix glQueryMatrixxOES glReadPixels glReleaseShaderCompiler glRenderbufferStorage glRenderbufferStorageOES
+    glRotatef glRotatex glSampleCoverage glSampleCoveragex glScalef glScalex glScissor glShadeModel glShaderBinary
+    glShaderSource glStencilFunc glStencilFuncSeparate glStencilMask glStencilMaskSeparate glStencilOp
+    glStencilOpSeparate glTexCoordPointer glTexEnvf glTexEnvfv glTexEnvi glTexEnviv glTexEnvx glTexEnvxv glTexGenfOES
+    glTexGenfvOES glTexGeniOES glTexGenivOES glTexGenxOES glTexGenxvOES glTexImage2D glTexParameterf glTexParameterfv
+    glTexParameteri glTexParameteriv glTexParameterx glTexParameterxv glTexSubImage2D glTranslatef glTranslatex
+    glUniform1f glUniform1fv glUniform1i glUniform1iv glUniform2f glUniform2fv glUniform2i glUniform2iv glUniform3f
+    glUniform3fv glUniform3i glUniform3iv glUniform4f glUniform4fv glUniform4i glUniform4iv glUniformMatrix2fv
+    glUniformMatrix3fv glUniformMatrix4fv glUseProgram glValidateProgram glVertexAttrib1f glVertexAttrib1fv
+    glVertexAttrib2f glVertexAttrib2fv glVertexAttrib3f glVertexAttrib3fv glVertexAttrib4f glVertexAttrib4fv
+    glVertexAttribPointer glVertexPointer glViewport gmtime gmtime_r gzclearerr gzclose gzeof gzerror gzflush gzgetc
+    gzgets gzoffset gzopen gzprintf gzputc gzputs gzread gzrewind gzseek gztell gzungetc gzwrite hstrerror htonl htons
+    hypot hypotf iconv iconv_close iconv_open if_indextoname if_nametoindex ilogb ilogbf inet_addr inet_aton inet_ntoa
+    inet_ntop inet_pton inflate inflateBack inflateBackEnd inflateBackInit_ inflateCodesUsed inflateCopy inflateEnd
+    inflateGetDictionary inflateGetHeader inflateInit2_ inflateInit_ inflatePrime inflateReset inflateReset2
+    inflateResetKeep inflateSetDictionary inflateSync inflateSyncPoint inflateUndermine inflateValidate ioctl isalnum
+    isalpha isatty isblank iscntrl isdigit isgraph islower isprint ispunct isspace isupper isxdigit j0 j1 jn kill
+    lchown ldexp ldexpf lgamma lgamma_r lgammaf lgammaf_r link listen llrint llrintf llround llroundf localeconv
+    localtime localtime_r log log10 log10f log1p log1pf log2 log2f logb logbf logf lrint lrintf lround lroundf lseek
+    lstat madvise malloc malloc_usable_size mallopt mblen mbrlen mbrtowc mbsinit mbsrtowcs mbstowcs mbtowc memalign
+    memccpy memchr memcmp memcpy memmem memmove mempcpy memrchr memset mincore mkdir mkdtemp mkstemp mktime mlock
+    mlockall mmap modf modff mprotect mremap msync munlock munlockall munmap nan nanf nanosleep nearbyint nearbyintf
+    newlocale nextafter nextafterf nexttoward nl_langinfo ntohl ntohs open opendir openlog pathconf pause pclose
+    perror pipe popen pow powf printf pselect psignal pthread_atfork pthread_attr_destroy pthread_attr_init
+    pthread_attr_setdetachstate pthread_attr_setschedparam pthread_attr_setstacksize pthread_cond_broadcast
+    pthread_cond_destroy pthread_cond_init pthread_cond_signal pthread_cond_timedwait pthread_cond_wait pthread_create
+    pthread_detach pthread_equal pthread_exit pthread_getspecific pthread_join pthread_key_create pthread_key_delete
+    pthread_kill pthread_mutex_destroy pthread_mutex_init pthread_mutex_lock pthread_mutex_trylock
+    pthread_mutex_unlock pthread_mutexattr_destroy pthread_mutexattr_init pthread_mutexattr_settype pthread_once
+    pthread_rwlock_destroy pthread_rwlock_rdlock pthread_rwlock_unlock pthread_rwlock_wrlock pthread_self
+    pthread_setname_np pthread_setschedparam pthread_setspecific pthread_sigmask putc putchar putenv puts qsort raise
+    rand random read readdir readdir_r readlink readv realloc realpath recv recvfrom recvmsg regcomp regerror regexec
+    regfree remainder remainderf remove remquo remquof rename rewinddir rint rintf rmdir round roundf sbrk scalbn
+    scalbnf scandir scanf sched_yield seekdir select sem_destroy sem_getvalue sem_init sem_post sem_timedwait
+    sem_trywait sem_wait send sendmsg sendto setbuf setbuffer setenv setgrent setgroups setlinebuf setlocale
+    setpriority setprogname setpwent setsockopt setvbuf sigaction sigaddset sigaltstack sigdelset sigemptyset
+    sigfillset sigismember signal significand sigprocmask sigwait sin sinf sinh sinhf slCreateEngine sleep snprintf
+    socket socketpair sprintf sqrt sqrtf srand srandom sscanf stat statfs statvfs strcasecmp strcasestr strcat strchr
+    strchrnul strcmp strcoll strcpy strcspn strdup strerror strerror_r strftime strlcat strlcpy strlen strncasecmp
+    strncat strncmp strncpy strndup strnlen strpbrk strptime strrchr strsep strsignal strspn strstr strtod strtof
+    strtoimax strtok strtok_r strtol strtold strtoll strtoul strtoull strtoumax strxfrm swab symlink symlinkat sysconf
+    syslog system tan tanf tanh tanhf tcdrain tcflow tcflush tcgetattr tcsendbreak tcsetattr telldir tempnam tgamma
     tgammaf time timegm tmpfile tmpnam tolower toupper towlower towupper trunc truncate truncf ttyname tzset umask
-    uname uncompress ungetc unlink unsetenv unzClose unzOpen unzReadCurrentFile usleep utime utimes vfork vfprintf
-    vfscanf vprintf vscanf vsnprintf vsprintf vsscanf wait waitpid write writev y0 y1 yn zlibCompileFlags
-    zlibVersion
+    uname uncompress uncompress2 ungetc unlink unlinkat unsetenv unzClose unzOpen unzReadCurrentFile uselocale usleep
+    utime utimensat utimes vasprintf vdprintf vfork vfprintf vfscanf vkAcquireNextImageKHR vkAllocateCommandBuffers
+    vkAllocateMemory vkBeginCommandBuffer vkCmdBindPipeline vkCmdDraw vkCmdDrawIndexed vkCreateBuffer
+    vkCreateCommandPool vkCreateDevice vkCreateFramebuffer vkCreateGraphicsPipelines vkCreateImage vkCreateImageView
+    vkCreateInstance vkCreateRenderPass vkCreateShaderModule vkCreateSwapchainKHR vkDestroyBuffer vkDestroyCommandPool
+    vkDestroyDevice vkDestroyFramebuffer vkDestroyImage vkDestroyImageView vkDestroyInstance vkDestroyPipeline
+    vkDestroyRenderPass vkDestroyShaderModule vkDestroySwapchainKHR vkDeviceWaitIdle vkEndCommandBuffer
+    vkEnumeratePhysicalDevices vkFreeCommandBuffers vkFreeMemory vkGetDeviceQueue vkGetPhysicalDeviceProperties
+    vkGetSwapchainImagesKHR vkQueuePresentKHR vkQueueSubmit vkQueueWaitIdle vprintf vscanf vsnprintf vsprintf vsscanf
+    vsyslog wait wait3 wait4 waitpid wcrtomb wcschr wcscmp wcscoll wcscpy wcscspn wcslen wcsncat wcsncmp wcsncpy
+    wcspbrk wcsrchr wcsrtombs wcsstr wcstod wcstol wcstombs wcstoul wctomb wcwidth wmemchr wmemcmp wmemcpy wmemmove
+    wmemset write writev y0 y1 yn zlibCompileFlags zlibVersion
     """.split()
 )
 

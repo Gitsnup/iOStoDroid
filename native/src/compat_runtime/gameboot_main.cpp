@@ -8,6 +8,7 @@
 // the probe itself failed (usage or I/O error).
 #include "compat_runtime/audio_session_shims.hpp"
 #include "compat_runtime/cpu.hpp"
+#include "compat_runtime/libsystem_shims.hpp"
 #include "compat_runtime/objc_shims.hpp"
 #include "compat_runtime/runner.hpp"
 #include "compat_runtime/shim_registry.hpp"
@@ -53,14 +54,17 @@ int main(int argc, char **argv) {
         const auto bytes = readMainBinary(argv[1]);
         radek::compat_runtime::ShimRegistry shims;
         radek::compat_runtime::objc::ShimAdapter objcShims;
+        radek::compat_runtime::libsystem::ShimAdapter libsystemShims;
         radek::compat_runtime::audio::ShimAdapter audioShims;
         radek::compat_runtime::SjLjUnwindAdapter sjljUnwind;
         objcShims.registerBindings(shims);
+        libsystemShims.registerBindings(shims);
         audioShims.registerBindings(shims);
         sjljUnwind.registerBindings(shims);
         radek::compat_runtime::TrapShimAdapter traps;
         const auto cpu = radek::compat_runtime::createArm32CpuBackend();
-        radek::compat_runtime::BootAttemptRunner runner(shims, *cpu, traps);
+        radek::compat_runtime::BootAttemptRunner runner(shims, *cpu, traps,
+                                                       objcShims.lifecycleHooks());
         const radek::Json report = runner.run(bytes, true);
         std::cout << report.dump() << "\n";
 

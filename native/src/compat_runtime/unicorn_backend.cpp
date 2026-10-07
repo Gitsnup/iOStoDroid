@@ -21,6 +21,12 @@ constexpr std::uint32_t kCpsrModeMask = 0x1f;
 constexpr std::uint32_t kCpsrUserMode = 0x10;
 constexpr std::uint64_t kMaximumInstructionLimit = 100000000;
 constexpr std::uint64_t kMaximumTimeLimitMicros = 60000000;
+// The iOS kernel hands user code a fully enabled VFP unit: CPACR grants
+// CP10/CP11 to EL0 and FPEXC.EN is set. Unicorn starts from a bare CPU, so a
+// guest `vpush`/`vmov`/`vadd` would otherwise decode as an invalid instruction
+// instead of executing. Enable the same state the device provides.
+constexpr std::uint32_t kVfpAccessControlRegister = 0x00F00000U; // CPACR CP10/CP11 full access
+constexpr std::uint32_t kVfpEnableBit = 1U << 30;                // FPEXC.EN
 
 struct HookState {
     const GuestMemoryCallbacks *memory = nullptr;
@@ -53,10 +59,16 @@ bool readRegisters(uc_engine *engine, CpuRegisterState &state) {
             return false;
         state.r[index] = value;
     }
-    return readRegister(engine, UC_ARM_REG_SP, state.r[13]) == UC_ERR_OK &&
-           readRegister(engine, UC_ARM_REG_LR, state.r[14]) == UC_ERR_OK &&
-           readRegister(engine, UC_ARM_REG_PC, state.r[15]) == UC_ERR_OK &&
-           readRegister(engine, UC_ARM_REG_CPSR, state.cpsr) == UC_ERR_OK;
+    if (readRegister(engine, UC_ARM_REG_SP, state.r[13]) != UC_ERR_OK ||
+        readRegister(engine, UC_ARM_REG_LR, state.r[14]) != UC_ERR_OK ||
+        readRegister(engine, UC_ARM_REG_PC, state.r[15]) != UC_ERR_OK ||
+        readRegister(engine, UC_ARM_REG_CPSR, state.cpsr) != UC_ERR_OK)
+        return false;
+    for (std::size_t index = 0; index < state.d.size(); ++index) {
+        if (uc_reg_read(engine, UC_ARM_REG_D0 + static_cast<int>(index), &state.d[index]) != UC_ERR_OK)
+            return false;
+    }
+    return readRegister(engine, UC_ARM_REG_FPSCR, state.fpscr) == UC_ERR_OK;
 }
 
 bool writeRegisters(uc_engine *engine, const CpuRegisterState &state) {
@@ -68,9 +80,15 @@ bool writeRegisters(uc_engine *engine, const CpuRegisterState &state) {
         if (writeRegister(engine, UC_ARM_REG_R0 + static_cast<int>(index), state.r[index]) != UC_ERR_OK)
             return false;
     }
-    return writeRegister(engine, UC_ARM_REG_SP, state.r[13]) == UC_ERR_OK &&
-           writeRegister(engine, UC_ARM_REG_LR, state.r[14]) == UC_ERR_OK &&
-           writeRegister(engine, UC_ARM_REG_PC, state.r[15]) == UC_ERR_OK;
+    if (writeRegister(engine, UC_ARM_REG_SP, state.r[13]) != UC_ERR_OK ||
+        writeRegister(engine, UC_ARM_REG_LR, state.r[14]) != UC_ERR_OK ||
+        writeRegister(engine, UC_ARM_REG_PC, state.r[15]) != UC_ERR_OK)
+        return false;
+    for (std::size_t index = 0; index < state.d.size(); ++index) {
+        if (uc_reg_write(engine, UC_ARM_REG_D0 + static_cast<int>(index), &state.d[index]) != UC_ERR_OK)
+            return false;
+    }
+    return writeRegister(engine, UC_ARM_REG_FPSCR, state.fpscr) == UC_ERR_OK;
 }
 
 std::uint32_t unicornPermissions(MemoryPermission permissions) {
@@ -339,6 +357,24 @@ class UnicornArm32Backend final : public CpuBackend {
         if (status != UC_ERR_OK) {
             result.status = CpuExecutionStatus::ExecutionFault;
             result.message = std::string("could not initialize ARM32 backend: ") + uc_strerror(status);
+            return result;
+        }
+
+        // Enable the guest VFP unit before anything else: the guest's scalar
+        // float math (frame timing, geometry) is VFP and would otherwise stop
+        // the boot with a decode fault that is not a guest-program fault.
+        if (writeRegister(engine, UC_ARM_REG_C1_C0_2, kVfpAccessControlRegister) != UC_ERR_OK) {
+            (void)uc_close(engine);
+            result.status = CpuExecutionStatus::ExecutionFault;
+            result.message = "ARM32 backend could not grant the guest VFP coprocessor access (CPACR).";
+            return result;
+        }
+        std::uint32_t fpexc = 0;
+        if (readRegister(engine, UC_ARM_REG_FPEXC, fpexc) != UC_ERR_OK ||
+            writeRegister(engine, UC_ARM_REG_FPEXC, fpexc | kVfpEnableBit) != UC_ERR_OK) {
+            (void)uc_close(engine);
+            result.status = CpuExecutionStatus::ExecutionFault;
+            result.message = "ARM32 backend could not enable the guest VFP unit (FPEXC.EN).";
             return result;
         }
 

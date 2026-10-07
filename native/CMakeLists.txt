@@ -76,6 +76,8 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
         src/compat_runtime/audio_session_shims.cpp
         src/compat_runtime/sjlj_unwind.cpp
         src/compat_runtime/trap_shims.cpp
+        src/compat_runtime/libsystem_shims.cpp
+        src/compat_runtime/app_lifecycle.cpp
     )
     if(RADEK_FETCH_UNICORN)
         include(FetchContent)
@@ -140,6 +142,21 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
         endif()
         target_link_libraries(compat-runtime-tests PRIVATE compat_runtime_core)
         add_test(NAME compat-runtime COMMAND compat-runtime-tests)
+
+        add_executable(compat-runtime-libsystem-tests tests/compat_runtime_libsystem.cpp)
+        target_include_directories(compat-runtime-libsystem-tests PRIVATE include)
+        target_compile_options(compat-runtime-libsystem-tests PRIVATE -Wall -Wextra -Werror)
+        target_link_libraries(compat-runtime-libsystem-tests PRIVATE compat_runtime_core)
+        add_test(NAME compat-runtime-libsystem COMMAND compat-runtime-libsystem-tests)
+
+        add_executable(compat-runtime-lifecycle-tests tests/compat_runtime_lifecycle.cpp)
+        target_include_directories(compat-runtime-lifecycle-tests PRIVATE include)
+        target_compile_options(compat-runtime-lifecycle-tests PRIVATE -Wall -Wextra -Werror)
+        if(RADEK_FETCH_UNICORN)
+            target_compile_definitions(compat-runtime-lifecycle-tests PRIVATE RADEK_TEST_REQUIRE_UNICORN=1)
+        endif()
+        target_link_libraries(compat-runtime-lifecycle-tests PRIVATE compat_runtime_core)
+        add_test(NAME compat-runtime-lifecycle COMMAND compat-runtime-lifecycle-tests)
 
         add_executable(compat-runtime-objc-tests tests/compat_runtime_objc.cpp)
         target_include_directories(compat-runtime-objc-tests PRIVATE include)

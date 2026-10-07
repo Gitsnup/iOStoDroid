@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -17,6 +18,10 @@ constexpr std::size_t kMaximumImageClasses = 4096;
 constexpr std::size_t kMaximumImageMethods = 65535;
 constexpr std::size_t kMaximumImageIvars = 4096;
 constexpr std::uint32_t kObjectiveCDataMask32 = 0xfffffffcU;
+// Bounded virtual view surface used by the startup chain for CGRect returns.
+// It is a deterministic diagnostic value; nothing renders on it.
+constexpr float kVirtualViewWidth = 320.0f;
+constexpr float kVirtualViewHeight = 480.0f;
 constexpr std::uint32_t kSmallMethodListFlag = 0x80000000U;
 
 struct GuestClass32 {
@@ -223,6 +228,14 @@ std::vector<std::string> readIvarNames(const GuestAddressSpace &memory,
     }
     return names;
 }
+std::string hexWord(std::uint32_t value) {
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string text = "0x";
+    for (int shift = 28; shift >= 0; shift -= 4)
+        text.push_back(digits[(value >> shift) & 0xf]);
+    return text;
+}
+
 } // namespace
 
 ShimAdapter::ShimAdapter() {
@@ -232,10 +245,14 @@ ShimAdapter::ShimAdapter() {
     classes_.emplace("NSAutoreleasePool", autoreleasePoolClass_);
     for (const auto *name : {
              "NSString", "NSArray", "NSDictionary", "NSNumber", "NSURL", "NSBundle", "NSThread",
-             "UIApplication", "UIWindow", "UIView", "UIScreen", "UIAccelerometer", "CAEAGLLayer",
+             "UIWindow", "UIView", "UIScreen", "UIAccelerometer", "CAEAGLLayer",
              "EAGLContext"}) {
         classes_.emplace(name, runtime_.registerClass(name, rootClass_));
     }
+    // The lifecycle adapters wire the delegate through the singleton's first
+    // instance slot, so UIApplication declares it explicitly.
+    classes_.emplace("UIApplication",
+                     runtime_.registerClass("UIApplication", rootClass_, {"delegate"}));
     auto *touchClass = runtime_.registerClass("UITouch", rootClass_, {"locationX", "locationY"});
     classes_.emplace("UITouch", touchClass);
 
@@ -923,6 +940,28 @@ void ShimAdapter::registerBindings(ShimRegistry &registry) {
     nextCallout_ += 4U;
     registry.registerBinding(std::move(searchPathsBinding));
 
+    // --- bounded application lifecycle ("startup chain") ------------------
+    if (nextCallout_ > 0xf000ffffU - 4U)
+        throw std::overflow_error("Objective-C lifecycle callout range is exhausted");
+    ShimBinding lifecycleContinuationBinding;
+    lifecycleContinuationBinding.darwinSymbol = "_radek_lifecycle_continuation";
+    lifecycleContinuationBinding.library = "UIKit";
+    lifecycleContinuationBinding.adapterName = "uikit-lifecycle-continuation";
+    lifecycleContinuationBinding.guestAddress = nextCallout_;
+    lifecycleContinuationBinding.invoke = [this](auto &registers, auto &memory, auto &reason) {
+        return lifecycleContinuation(registers, memory, reason);
+    };
+    nextCallout_ += 4U;
+    registry.registerBinding(std::move(lifecycleContinuationBinding));
+    const auto lifecycleContinuation = registry.resolve("_radek_lifecycle_continuation");
+    if (!lifecycleContinuation || !lifecycleContinuation->invoke)
+        throw std::runtime_error("Objective-C lifecycle continuation was not registered");
+    lifecycleContinuationAddress_ = lifecycleContinuation->guestAddress;
+    registerTransferFunction(registry, "_UIApplicationMain", "uikit-application-main",
+                             [this](auto &registers, auto &memory, auto &target, auto &reason) {
+                                 return applicationMain(registers, memory, target, reason);
+                             });
+
     constexpr const char *copyContinuationSymbol =
         "_radek_objc_setProperty_copy_continuation";
     registerFunction(registry, copyContinuationSymbol,
@@ -1035,6 +1074,45 @@ bool ShimAdapter::dispatchStret(CpuRegisterState &registers, GuestAddressSpace &
         const auto receiver = registers.r[1];
         const auto selector = registers.r[2];
         const auto firstArgument = registers.r[3];
+        // A 16-byte CGRect return (UIView/UIWindow/UIScreen bounds or frame) has
+        // no register arguments, so it is served directly from the bounded view
+        // state instead of the generic two-word path below.
+        {
+            const auto selectorValue = selectorForGuest(memory, selector);
+            std::string selectorName;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                selectorName = selectorNames_.at(selectorValue);
+            }
+            if (selectorName == "bounds" || selectorName == "frame") {
+                auto *receiverObject = objectForGuest(memory, receiver);
+                if (!receiverObject)
+                    throw std::runtime_error("struct-return selector '" + selectorName +
+                                             "' received an unknown guest receiver");
+                if (!(receiverObject->isa &&
+                      (receiverObject->isa->name == "UIScreen" ||
+                       receiverObject->isa->name == "UIView" ||
+                       receiverObject->isa->name == "UIWindow" ||
+                       receiverObject->isa->name == "CAEAGLLayer")))
+                    throw std::runtime_error("struct-return selector '" + selectorName +
+                                             "' is only implemented for UIKit views");
+                std::array<float, 4> storedFrame{0.0f, 0.0f, kVirtualViewWidth, kVirtualViewHeight};
+                if (receiverObject->ivars.size() >= 4) {
+                    for (std::size_t index = 0; index < storedFrame.size(); ++index) {
+                        const auto bits = static_cast<std::uint32_t>(receiverObject->ivars[index]);
+                        std::memcpy(&storedFrame[index], &bits, sizeof(bits));
+                    }
+                }
+                const std::array<float, 4> frame =
+                    selectorName == "bounds"
+                        ? std::array<float, 4>{0.0f, 0.0f, storedFrame[2], storedFrame[3]}
+                        : storedFrame;
+                if (!memory.write(returnBuffer, frame.data(), sizeof(frame)))
+                    throw std::runtime_error("objc_msgSend_stret could not write the CGRect result");
+                registers.r[0] = returnBuffer;
+                return true;
+            }
+        }
         registers.r[0] = receiver;
         registers.r[1] = selector;
         registers.r[2] = firstArgument;
@@ -1510,7 +1588,11 @@ bool ShimAdapter::dispatch(CpuRegisterState &registers, GuestAddressSpace &memor
                     *rawReturn = 0;
                 return true;
             }
-            throw std::runtime_error("objc_msgSend received an unknown guest receiver");
+            // Name the call site: the guest link register still holds the
+            // return address of the `bl` that reached this callout.
+            throw std::runtime_error("objc_msgSend received an unknown guest receiver " +
+                                     hexWord(receiverAddress) + " for selector '" + selectorName +
+                                     "' (call site " + hexWord(registers.r[14]) + ")");
         }
         if (receiverObject)
             synchronizeObject(memory, receiverObject, receiverAddress);
@@ -1683,6 +1765,17 @@ bool ShimAdapter::dispatch(CpuRegisterState &registers, GuestAddressSpace &memor
             }
         }
 
+        // The bounded application-lifecycle subset (UIKit startup chain) runs
+        // after guest implementations: an image's own method always wins.
+        std::string lifecycleReason;
+        if (lifecycleSelector(registers, memory, selectorName, receiverAddress, receiverObject,
+                              receiverClass, rawReturn, guestTarget, lifecycleReason))
+            return true;
+        if (!lifecycleReason.empty()) {
+            reason = std::move(lifecycleReason);
+            return false;
+        }
+
         if (receiverObject && !superDispatch && receiverObject->isa &&
             receiverObject->isa->name == "NSString" &&
             (selectorName == "description" || selectorName == "length" ||
@@ -1782,6 +1875,7 @@ bool ShimAdapter::dispatch(CpuRegisterState &registers, GuestAddressSpace &memor
         }
 
         Value result = 0;
+        try {
         if (superDispatch) {
             if (receiverObject)
                 result = runtime_.sendSuper(receiverObject, superClass, selectorValue, arguments);
@@ -1792,6 +1886,15 @@ bool ShimAdapter::dispatch(CpuRegisterState &registers, GuestAddressSpace &memor
             result = runtime_.send(receiverObject, selectorValue, arguments);
         } else {
             result = runtime_.send(const_cast<Class *>(receiverClass), selectorValue, arguments);
+        }
+        } catch (const std::exception &error) {
+            const std::string owner = receiverObject
+                ? (receiverObject->isa ? receiverObject->isa->name : std::string("?"))
+                : (receiverClass ? receiverClass->name : std::string("?"));
+            throw std::runtime_error(
+                std::string("unimplemented framework selector ") +
+                (receiverObject ? "-" : "+") + "[" + owner + " " + selectorName + "]: " +
+                error.what());
         }
 
         const Class *resultClass = nullptr;

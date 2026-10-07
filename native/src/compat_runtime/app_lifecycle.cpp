@@ -39,13 +39,6 @@ namespace {
 
 constexpr std::uint32_t kFrameDidFinishLaunching = 1;
 constexpr std::uint32_t kFramePerformSelector = 2;
-constexpr std::uint32_t kFrameMainThreadEntry = 3;
-
-// The bounded virtual device surface the startup chain reports. It is a fixed
-// iPhone-sized surface for deterministic diagnostics; the boot attempt never
-// renders and the value is not read back from any real display.
-constexpr float kVirtualSurfaceWidth = 320.0f;
-constexpr float kVirtualSurfaceHeight = 480.0f;
 
 // Name of the framework classes the startup chain can serve. Anything else must
 // come from the image's own Objective-C metadata.

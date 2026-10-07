@@ -9,12 +9,14 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -42,10 +44,14 @@ import java.util.zip.Inflater;
  * Launcher of a game-runtime boot-attempt APK (contract "game-runtime-v1").
  *
  * <p>The APK embeds one authorized IPA main executable and its bundle assets.
- * This activity renders the recovered bundle splash screen (supporting standard
- * PNG/JPEG, Apple CgBI PNGs, and sprite-sheet descriptors such as
- * SPLASHES.png + SPLASHES.dat) in a visual viewport while running the real guest
- * boot through libcompat_runtime_v1.so and showing the boot attempt diagnostic log.
+ * This activity runs in fullscreen and plays the recovered bundle splash screen
+ * (supporting standard PNG/JPEG, Apple CgBI PNGs, and sprite-sheet descriptors
+ * such as SPLASHES.png + SPLASHES.dat) as an automatically advancing boot
+ * animation while running the real guest boot through libcompat_runtime_v1.so.
+ * The splash never needs a touch: it advances on its own while the guest boots
+ * and stops on a stable frame when the boot attempt ends. When guest execution
+ * stops or setup fails, the fullscreen diagnostic panel stays open with the
+ * exact stop reason instead of crashing.
  */
 public final class GameBootActivity extends Activity {
     private static final String RUNTIME_LIBRARY = "compat_runtime_v1";
@@ -58,6 +64,8 @@ public final class GameBootActivity extends Activity {
     private static final int MAX_CGBI_INFLATED_BYTES = 16 * 1024 * 1024;
     private static final int DEFAULT_VIEWPORT_WIDTH = 480;
     private static final int DEFAULT_VIEWPORT_HEIGHT = 320;
+    /** Automatic boot-animation interval between recovered splash frames. */
+    private static final long SPLASH_FRAME_INTERVAL_MS = 900L;
     private static final byte[] PNG_SIGNATURE = new byte[] {
         (byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
     };
@@ -71,7 +79,21 @@ public final class GameBootActivity extends Activity {
     private TextView splashCaptionView;
     private final List<SplashFrame> activeSplashFrames = new ArrayList<>();
     private int currentSplashIndex = 0;
+    private boolean splashAnimationRunning = false;
+    private boolean bootFinished = false;
     private volatile boolean destroyed = false;
+
+    private final Runnable splashAdvance = new Runnable() {
+        @Override
+        public void run() {
+            if (destroyed || bootFinished || activeSplashFrames.size() <= 1) {
+                splashAnimationRunning = false;
+                return;
+            }
+            showSplashFrame(currentSplashIndex + 1);
+            mainHandler.postDelayed(this, SPLASH_FRAME_INTERVAL_MS);
+        }
+    };
 
     private static native String runGameBootAttempt(byte[] mainBinary, boolean authorizationConfirmed);
 
@@ -156,13 +178,17 @@ public final class GameBootActivity extends Activity {
     /**
      * Report a terminal boot result without throwing on Android's main thread.
      * A missing import or runtime dependency should leave useful diagnostics on
-     * screen, not turn a handled boot failure into an application crash.
+     * screen, not turn a handled boot failure into an application crash. The
+     * splash animation stops on its current frame so the stop reason is stable.
      */
     private void showTerminalState(final String title, final String detail) {
+        bootFinished = true;
         mainHandler.post(new Runnable() {
             @Override
             public void run() {
                 if (destroyed || titleView == null || logView == null) return;
+                splashAnimationRunning = false;
+                mainHandler.removeCallbacks(splashAdvance);
                 titleView.setText(title);
                 titleView.setTextColor(Color.rgb(255, 190, 92));
                 logView.append(detail);
@@ -220,20 +246,62 @@ public final class GameBootActivity extends Activity {
                         .append(loader.optInt("unresolvedSymbolCount", 0)).append(" unresolved)");
             }
             summary.append("\n");
+            long executed = 0;
+            String executionStatus = "";
             if (execution != null) {
-                summary.append("Executed ").append(execution.optLong("instructions", 0)).append(" guest instruction(s); ");
-                summary.append("status ").append(execution.optString("status", "?")).append("\n");
+                executed = execution.optLong("instructions", 0);
+                executionStatus = execution.optString("status", "");
+                summary.append("Executed ").append(executed).append(" guest instruction(s); ");
+                summary.append("status ").append(executionStatus.isEmpty() ? "?" : executionStatus).append("\n");
             }
-            String trapped = report.optString("trappedImport", "");
-            if (!trapped.isEmpty()) summary.append("Stopped at unimplemented import: ").append(trapped).append("\n");
+            // A JSON null must never be printed as the literal import name "null":
+            // that produced a diagnostic claiming a stop at an unnamed import.
+            if (!report.isNull("trappedImport")) {
+                String trapped = report.optString("trappedImport", "");
+                if (!trapped.isEmpty() && !"null".equals(trapped)) {
+                    summary.append("Stopped at unimplemented import: ").append(trapped).append("\n");
+                }
+            } else if ("STOPPED_AT_TRAP".equals(executionStatus)) {
+                summary.append("The guest reached an unimplemented import trap, but the report did not name it.\n");
+            }
             JSONArray trappedSymbols = report.optJSONArray("trappedSymbols");
             if (trappedSymbols != null) summary.append("Trapped imports bound: ").append(trappedSymbols.length()).append("\n");
+            String budgetNote = budgetStopDescription(executed, executionStatus);
+            if (!budgetNote.isEmpty()) summary.append(budgetNote).append("\n");
             String reason = report.optString("reason", "");
             if (!reason.isEmpty()) summary.append(reason);
             return summary.toString();
         } catch (Exception error) {
             return "Unparseable boot report (" + error + "): " + reportText;
         }
+    }
+
+    /**
+     * Human-readable sentence for a bounded-execution stop. The runtime ends a
+     * boot attempt at a fixed instruction/time budget, a memory fault, or an
+     * exception; each of those is a different statement and must not be reported
+     * as if the guest had called an unimplemented import.
+     */
+    private static String budgetStopDescription(long executed, String status) {
+        if ("TIME_LIMIT".equals(status) || "INSTRUCTION_LIMIT".equals(status)) {
+            return "The guest was still executing real instructions when its bounded "
+                    + ("TIME_LIMIT".equals(status) ? "time" : "instruction")
+                    + " budget (" + executed + " instruction(s)) expired. "
+                    + "No unimplemented import was reached during this window.";
+        }
+        if ("MEMORY_FAULT".equals(status)) {
+            return "Guest execution stopped on a guest-visible memory fault.";
+        }
+        if ("GUEST_EXCEPTION_RAISED".equals(status)) {
+            return "Guest execution stopped because the guest raised an Objective-C exception.";
+        }
+        if ("EXECUTION_FAULT".equals(status)) {
+            return "Guest execution stopped on an execution fault reported by the CPU backend.";
+        }
+        if ("BACKEND_UNAVAILABLE".equals(status)) {
+            return "The guest CPU backend was not available on this device.";
+        }
+        return "";
     }
 
     private String bootStatus(String reportText) {
@@ -250,100 +318,137 @@ public final class GameBootActivity extends Activity {
     void displayBootResult(String reportText) {
         String safeReport = reportText != null ? reportText : "{}";
         appendLine(summarizeBoot(safeReport));
-        if ("RETURNED".equals(bootStatus(safeReport))) {
+        String status = bootStatus(safeReport);
+        String trapped = "";
+        try {
+            JSONObject report = new JSONObject(safeReport);
+            if (!report.isNull("trappedImport")) trapped = report.optString("trappedImport", "");
+        } catch (Exception ignored) {
+            trapped = "";
+        }
+        if ("RETURNED".equals(status)) {
             showTerminalState("Guest entry returned", "Guest entry returned without a game lifecycle.");
+        } else if ("TIME_LIMIT".equals(status) || "INSTRUCTION_LIMIT".equals(status)) {
+            showTerminalState(
+                    "Guest boot budget reached",
+                    "Guest execution ran its real startup code and then hit the bounded "
+                            + ("TIME_LIMIT".equals(status) ? "time" : "instruction")
+                            + " budget before reaching an unimplemented import. Nothing crashed.");
+        } else if ("MEMORY_FAULT".equals(status) || "EXECUTION_FAULT".equals(status)) {
+            showTerminalState("Guest boot faulted", "Guest execution stopped on a memory/execution fault.");
+        } else if ("GUEST_EXCEPTION_RAISED".equals(status)) {
+            showTerminalState("Guest boot raised a guest exception", "Guest execution stopped on an Objective-C exception.");
+        } else if ("BACKEND_UNAVAILABLE".equals(status)) {
+            showTerminalState("Guest CPU backend unavailable", "This device build has no working guest CPU backend.");
+        } else if (!trapped.isEmpty()) {
+            showTerminalState("Guest boot stopped", "Guest execution stopped at the unimplemented import " + trapped + ".");
         } else {
             showTerminalState("Guest boot stopped", "Guest execution stopped at a missing or unimplemented runtime call.");
         }
     }
 
+    /**
+     * Fullscreen boot screen: the recovered splash covers the whole display and
+     * the diagnostics sit in a translucent panel at the bottom. No viewport tap
+     * is needed or accepted for frame cycling — the splash advances by itself.
+     */
+    private void applyFullscreenMode() {
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            WindowManager.LayoutParams attributes = getWindow().getAttributes();
+            attributes.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(attributes);
+        }
+        View decor = getWindow().getDecorView();
+        decor.setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && !destroyed) applyFullscreenMode();
+    }
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        getWindow().setStatusBarColor(Color.rgb(11, 16, 29));
-        getWindow().setNavigationBarColor(Color.rgb(11, 16, 29));
+        applyFullscreenMode();
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.rgb(11, 16, 29));
-        root.setPadding(dp(20), dp(32), dp(20), dp(32));
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.rgb(6, 9, 16));
+
+        splashImageView = new ImageView(this);
+        splashImageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        splashImageView.setContentDescription("Recovered game splash screen");
+        root.addView(splashImageView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+
+        LinearLayout overlay = new LinearLayout(this);
+        overlay.setOrientation(LinearLayout.VERTICAL);
+        overlay.setPadding(dp(14), dp(14), dp(14), dp(14));
 
         titleView = new TextView(this);
         titleView.setText("Game boot attempt");
-        titleView.setTextSize(20);
+        titleView.setTextSize(18);
         titleView.setTextColor(Color.WHITE);
         titleView.setTypeface(null, Typeface.BOLD);
         titleView.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.addView(titleView, new LinearLayout.LayoutParams(
+        titleView.setShadowLayer(6f, 0f, 0f, Color.BLACK);
+        overlay.addView(titleView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        LinearLayout splashCard = new LinearLayout(this);
-        splashCard.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable cardBg = new GradientDrawable();
-        cardBg.setColor(Color.rgb(17, 25, 43));
-        cardBg.setCornerRadius(dp(12));
-        cardBg.setStroke(dp(1), Color.rgb(38, 56, 89));
-        splashCard.setBackground(cardBg);
-        splashCard.setPadding(dp(10), dp(10), dp(10), dp(10));
 
         TextView splashHeader = new TextView(this);
         splashHeader.setText("GAME SPLASH SCREEN VIEWPORT");
-        splashHeader.setTextSize(11);
+        splashHeader.setTextSize(10);
         splashHeader.setTypeface(null, Typeface.BOLD);
-        splashHeader.setTextColor(Color.rgb(122, 184, 255));
-        splashHeader.setPadding(0, 0, 0, dp(6));
-        splashCard.addView(splashHeader);
-
-        FrameLayout viewportContainer = new FrameLayout(this);
-        GradientDrawable viewportBg = new GradientDrawable();
-        viewportBg.setColor(Color.rgb(6, 9, 16));
-        viewportBg.setCornerRadius(dp(8));
-        viewportBg.setStroke(dp(1), Color.rgb(28, 42, 68));
-        viewportContainer.setBackground(viewportBg);
-        viewportContainer.setMinimumHeight(dp(190));
-
-        splashImageView = new ImageView(this);
-        splashImageView.setAdjustViewBounds(true);
-        splashImageView.setMaxHeight(dp(240));
-        splashImageView.setMinimumHeight(dp(180));
-        splashImageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        FrameLayout.LayoutParams imageParams = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER);
-        viewportContainer.addView(splashImageView, imageParams);
-        viewportContainer.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                cycleSplashFrame();
-            }
-        });
-        splashCard.addView(viewportContainer, new LinearLayout.LayoutParams(
+        splashHeader.setTextColor(Color.rgb(170, 208, 255));
+        splashHeader.setGravity(Gravity.CENTER_HORIZONTAL);
+        splashHeader.setShadowLayer(6f, 0f, 0f, Color.BLACK);
+        overlay.addView(splashHeader, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        overlay.addView(new View(this), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f));
 
         splashCaptionView = new TextView(this);
         splashCaptionView.setText("Searching packaged bundle for game splash assets…");
-        splashCaptionView.setTextSize(11);
-        splashCaptionView.setTextColor(Color.rgb(160, 178, 199));
-        splashCaptionView.setPadding(0, dp(6), 0, 0);
-        splashCard.addView(splashCaptionView);
+        splashCaptionView.setTextSize(10);
+        splashCaptionView.setTextColor(Color.rgb(205, 216, 230));
+        splashCaptionView.setShadowLayer(6f, 0f, 0f, Color.BLACK);
+        splashCaptionView.setPadding(0, 0, 0, dp(6));
+        overlay.addView(splashCaptionView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        LinearLayout.LayoutParams splashParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        splashParams.topMargin = dp(12);
-        root.addView(splashCard, splashParams);
+        GradientDrawable logBg = new GradientDrawable();
+        logBg.setColor(Color.argb(225, 11, 16, 29));
+        logBg.setCornerRadius(dp(10));
+        logBg.setStroke(dp(1), Color.rgb(38, 56, 89));
 
         logView = new TextView(this);
-        logView.setTextSize(12);
+        logView.setTextSize(11);
         logView.setTextColor(Color.rgb(92, 227, 181));
         logView.setTypeface(Typeface.MONOSPACE);
+        logView.setPadding(dp(10), dp(10), dp(10), dp(10));
+        logView.setTextIsSelectable(true);
         scroller = new ScrollView(this);
+        scroller.setBackground(logBg);
         scroller.addView(logView, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams scrollerParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f);
-        scrollerParams.topMargin = dp(12);
-        root.addView(scroller, scrollerParams);
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.05f);
+        overlay.addView(scroller, scrollerParams);
+
+        root.addView(overlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         setContentView(root);
 
         preloadSplashFromAssets();
@@ -375,7 +480,7 @@ public final class GameBootActivity extends Activity {
                             public void run() {
                                 if (!destroyed && (activeSplashFrames.isEmpty()
                                         || discovered.size() > activeSplashFrames.size())) {
-                                    installSplashFrames(discovered, activeSplashFrames.isEmpty());
+                                    installSplashFrames(discovered);
                                 }
                             }
                         });
@@ -423,37 +528,28 @@ public final class GameBootActivity extends Activity {
         try {
             List<SplashFrame> preloaded = discoverSplashFramesFromAssets(getAssets());
             if (!preloaded.isEmpty()) {
-                installSplashFrames(preloaded, true);
+                installSplashFrames(preloaded);
             }
         } catch (Throwable ignored) {
             // Non-fatal; worker thread will also scan resourceInventory.
         }
     }
 
-    private void installSplashFrames(List<SplashFrame> frames, boolean playBootSequence) {
+    /**
+     * Install recovered splash frames and start the automatic boot animation.
+     * The animation is driven only by the launcher: touches never cycle frames,
+     * and the sequence stops on a stable frame when the boot attempt ends.
+     */
+    private void installSplashFrames(List<SplashFrame> frames) {
         if (frames == null || frames.isEmpty() || destroyed) return;
+        boolean wasEmpty = activeSplashFrames.isEmpty();
         activeSplashFrames.clear();
         activeSplashFrames.addAll(frames);
         currentSplashIndex = 0;
         showSplashFrame(0);
-        if (playBootSequence && activeSplashFrames.size() >= 3 && splashImageView != null) {
-            showSplashFrame(1);
-            splashImageView.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    if (!destroyed && activeSplashFrames.size() >= 3) {
-                        showSplashFrame(2);
-                    }
-                }
-            }, 350L);
-            splashImageView.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    if (!destroyed && !activeSplashFrames.isEmpty()) {
-                        showSplashFrame(0);
-                    }
-                }
-            }, 750L);
+        if (wasEmpty && !bootFinished && activeSplashFrames.size() > 1 && !splashAnimationRunning) {
+            splashAnimationRunning = true;
+            mainHandler.postDelayed(splashAdvance, SPLASH_FRAME_INTERVAL_MS);
         }
     }
 
@@ -463,18 +559,13 @@ public final class GameBootActivity extends Activity {
                 % activeSplashFrames.size();
         SplashFrame frame = activeSplashFrames.get(currentSplashIndex);
         splashImageView.setImageBitmap(frame.bitmap);
-        String cycleHint = activeSplashFrames.size() > 1
+        String advanceHint = activeSplashFrames.size() > 1
                 ? " · Frame " + (currentSplashIndex + 1) + "/" + activeSplashFrames.size()
-                        + " (tap viewport to cycle)"
+                        + (bootFinished ? " · boot finished" : " · advancing automatically")
                 : "";
         splashCaptionView.setText(
                 "Rendered splash: " + frame.sourcePath + " [" + frame.label + " "
-                        + frame.width + "×" + frame.height + "]" + cycleHint);
-    }
-
-    private void cycleSplashFrame() {
-        if (activeSplashFrames.size() <= 1) return;
-        showSplashFrame(currentSplashIndex + 1);
+                        + frame.width + "×" + frame.height + "]" + advanceHint);
     }
 
     /**
@@ -928,6 +1019,8 @@ public final class GameBootActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        splashAnimationRunning = false;
+        mainHandler.removeCallbacks(splashAdvance);
         super.onDestroy();
     }
 }

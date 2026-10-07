@@ -70,6 +70,42 @@ public final class GameBootActivityTest {
     }
 
     @Test
+    public void budgetStopIsReportedAsABudgetAndNeverAsAnImportNamedNull() {
+        GameBootActivity activity = Robolectric.buildActivity(GameBootActivity.class).create().get();
+        activity.displayBootResult(
+                "{\"loader\":{\"status\":\"LOADED_WITH_TRAPS\",\"resolvedSymbolCount\":60," +
+                        "\"trappedSymbolCount\":518,\"unresolvedSymbolCount\":0}," +
+                        "\"execution\":{\"status\":\"TIME_LIMIT\",\"instructions\":338936}," +
+                        "\"trappedImport\":null,\"reason\":\"guest function reached its time limit\"}"
+        );
+        ShadowLooper mainLooper = Shadows.shadowOf(Looper.getMainLooper());
+        mainLooper.idle();
+
+        String screenText = textIn(activity.getWindow().getDecorView());
+        // A JSON null trap name was previously printed as an import called "null".
+        assertFalse(screenText.contains("import: null"));
+        assertTrue(screenText.contains("338936"));
+        assertTrue(screenText.contains("TIME_LIMIT"));
+        assertTrue(screenText.contains("Guest boot budget reached"));
+        assertTrue(screenText.contains("No unimplemented import was reached during this window."));
+        assertTrue(screenText.contains("This APK is not a playable conversion"));
+        assertFalse(activity.isFinishing());
+
+        mainLooper.idleFor(3, TimeUnit.SECONDS);
+        assertFalse(activity.isFinishing());
+    }
+
+    @Test
+    public void splashNeverAsksForTouchCycling() {
+        GameBootActivity activity = Robolectric.buildActivity(GameBootActivity.class).create().get();
+        ShadowLooper mainLooper = Shadows.shadowOf(Looper.getMainLooper());
+        mainLooper.idle();
+
+        String screenText = textIn(activity.getWindow().getDecorView());
+        assertFalse(screenText.contains("tap viewport to cycle"));
+    }
+
+    @Test
     public void parsesAngryBirdsSplashSheetDescriptor() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         writeU16String(out, "SPLASHES.png");

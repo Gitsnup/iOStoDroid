@@ -27,6 +27,19 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      # Reuse the pinned SDK components between runs. On a hit nothing is
+      # downloaded; sdkmanager below then finds every package already installed
+      # and returns immediately. Keyed by the exact pinned versions, so a version
+      # bump simply misses the cache instead of serving a stale SDK.
+      - name: Cache pinned Android SDK components
+        uses: actions/cache@v6
+        with:
+          path: |
+            /usr/local/lib/android/sdk/ndk/27.2.12479018
+            /usr/local/lib/android/sdk/cmake/3.22.1
+            /usr/local/lib/android/sdk/build-tools/35.0.0
+            /usr/local/lib/android/sdk/platforms/android-35
+          key: radek-android-sdk-${{ runner.os }}-platform35-bt35.0.0-ndk27.2.12479018-cmake3.22.1
       - name: Android SDK and licenses
         uses: android-actions/setup-android@v4
         with:
@@ -34,13 +47,37 @@ jobs:
           packages: platform-tools
       - name: Install pinned platform, build tools, NDK and CMake
         run: python3 tools/ci_run.py sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
+      # The host C++ analyzer, the compat runtime and the NDK build all compile
+      # the same pinned Unicorn sources; a compiler cache removes most of that
+      # repeat work on later runs. Missing ccache simply disables it.
+      - name: Prepare compiler cache
+        run: |
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --max-size=2G
+            echo "RADEK_USE_CCACHE=1" >> "$GITHUB_ENV"
+            echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+            echo "ccache enabled ($(ccache --version | head -1))"
+          else
+            echo "ccache unavailable; building without a compiler cache"
+          fi
+      - name: Cache compiler cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.ccache
+          key: radek-ccache-${{ runner.os }}-${{ hashFiles('native/CMakeLists.txt', 'app/build.gradle.kts', 'compat-runtime-v1/build.gradle.kts') }}
+          restore-keys: |
+            radek-ccache-${{ runner.os }}-
       - name: Configure Gradle and validate wrapper
         uses: gradle/actions/setup-gradle@v5
       - name: Build native analyzer and run C++ runtime tests
         run: python3 tools/build_native.py
       - name: Configure and run CMake compat-runtime-v1 with pinned Unicorn ARM32 host tests
         run: |
-          cmake -S native -B .local/native-cmake -DRADEK_BUILD_COMPAT_RUNTIME=ON -DRADEK_FETCH_UNICORN=ON
+          launcher=""
+          if [ "${RADEK_USE_CCACHE:-0}" = "1" ]; then
+            launcher="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          fi
+          cmake -S native -B .local/native-cmake -DRADEK_BUILD_COMPAT_RUNTIME=ON -DRADEK_FETCH_UNICORN=ON $launcher
           cmake --build .local/native-cmake --parallel 2
           ctest --test-dir .local/native-cmake --output-on-failure
       - name: Validate compat-runtime-v1 smoke database
@@ -49,6 +86,11 @@ jobs:
           python3 compat-runtime-v1/tools/smoke_db.py validate
       - name: AddressSanitizer and UndefinedBehaviorSanitizer tests
         run: python3 tools/ci_run.py bash tools/test_sanitized.sh
+      # The host static-recompilation plan (radek/plan.py) uses this optional
+      # package to run the game lifter over real inputs. Without it the plan
+      # reports UNAVAILABLE and its tests skip, so this stays a soft dependency.
+      - name: Install optional host lifter dependency (capstone)
+        run: python3 -m pip install --disable-pip-version-check --no-cache-dir 'capstone==5.0.7'
       - name: Host tests and placeholder/complete-game separation regressions
         run: python3 tools/ci_run.py python3 -m unittest discover -v
       - name: Probe Angry Birds game-runtime boot attempt

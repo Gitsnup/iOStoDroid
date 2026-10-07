@@ -23,10 +23,21 @@ shows a preview or menu.
    session state calls, and the bounded application-lifecycle chain
    (`UIApplicationMain` -> delegate instantiation -> `applicationDidFinishLaunching:`
    -> bounded service of the queued background-thread body).
-4. The launcher shows loader/trap/instruction progress as a scrolling boot
-   log. When guest execution stops or setup fails, the launcher keeps the
-   diagnostic screen open; it does not throw an Android crash or show a preview.
-5. Every report keeps `status: "not_runnable"`. Executed instructions are
+4. The launcher is **fullscreen** (`SYSTEM_UI_FLAG_IMMERSIVE_STICKY` plus
+   layout through the display cutout): the recovered bundle splash covers the
+   whole display and the boot log sits in a translucent panel at the bottom.
+   The splash advances **by itself** while the guest boots (one recovered frame
+   every ~0.9 s); touches never cycle frames, and the sequence stops on a stable
+   frame once the boot attempt ends.
+5. The launcher shows loader/trap/instruction progress in that panel. When guest
+   execution stops or setup fails, the launcher keeps the fullscreen diagnostic
+   screen open; it does not throw an Android crash or show a preview. The stop
+   reason is reported as what it is: a named unimplemented import trap, the
+   bounded `TIME_LIMIT`/`INSTRUCTION_LIMIT` budget with the executed instruction
+   count (explicitly *not* an unimplemented import), a guest exception, a memory
+   or execution fault, or an unavailable CPU backend. A JSON `null` trap name is
+   never printed as an import called `null`.
+6. Every report keeps `status: "not_runnable"`. Executed instructions are
    loader/CPU progress, never evidence of a working game.
 
 ## Artifact names

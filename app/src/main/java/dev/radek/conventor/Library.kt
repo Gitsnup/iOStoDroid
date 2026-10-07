@@ -522,10 +522,13 @@ class Library(private val context: Context) {
                 report.put("portProgress", JSONObject()
                     .put("percent", 0)
                     .put("status", "NO_RUNNABLE_ANDROID_CODE_BUILT")
-                    .put("basis", "On-device importer analyzed the IPA but emitted no Android executable code; this is actual output progress, not a stability prediction."))
+                    .put("basis", "On-device importer analyzed the IPA but emitted no Android executable code; this is actual output progress, not a stability prediction. The on-device prover statically recompiles an executable only when its whole code is one proven closed-integer routine; the host CLI's wider static-recompilation plan for this same IPA is reported separately (report.json → staticRecompilationPlan)."))
             }
+            val reviewedMappingCount = apiMapping.optInt("reviewedMappingCount", ndkNameCandidateCount)
+            val reviewedMappingPercent = apiMapping.optInt("reviewedMappingCoveragePercent", 0)
+            val mappingBreakdown = apiMapping.optJSONObject("reviewedMapping")?.optJSONObject("breakdown")
             log(ConversionState.ANALYZING,
-                "Inventoried $importSymbolCount API symbols; $ndkNameCandidateCount direct NDK name candidates, $verifiedNdkExportCount/$ndkNameCandidateCount candidates ($verifiedNdkCandidatePercent%) verified by device export lookup and $verifiedNdkExportCount/$importSymbolCount imports ($verifiedNdkImportPercent%) matched. Also found $verifiedApiReplacements concrete compatibility exports (not linked), $unimplementedCompatStubCount unimplemented compat stubs, and ${apiMapping.getInt("semanticRewriteCandidates")} semantic rewrite candidates.", 50)
+                "Inventoried $importSymbolCount API symbols; reviewed Android mappings cover $reviewedMappingCount/$importSymbolCount ($reviewedMappingPercent%) = $ndkNameCandidateCount same-name NDK/system exports + ${mappingBreakdown?.optInt("concreteCompatImplementation", 0) ?: 0} compiled compatibility implementations + ${mappingBreakdown?.optInt("compilerRuntimeToolchain", 0) ?: 0} toolchain-runtime candidates + ${mappingBreakdown?.optInt("reviewedSemanticApiTarget", 0) ?: 0} semantic API targets; the strict same-name NDK subset is $ndkNameCandidateCount/$importSymbolCount ($verifiedNdkCandidatePercent% of it verified by device export lookup, $verifiedNdkExportCount/$importSymbolCount imports matched overall). Also found $verifiedApiReplacements concrete compatibility exports (not linked), $unimplementedCompatStubCount unimplemented compat stubs, and ${apiMapping.getInt("semanticRewriteCandidates")} semantic rewrite candidates. Mapping is triage, not linked code.", 50)
             val apiBlocker = if (importSymbolCount > 0) {
                 " API triage found $importSymbolCount imported symbols; $unimplementedCompatStubCount have only explicitly unimplemented compat handlers. Export hits and stubs do not rewrite or link those callsites."
             } else ""

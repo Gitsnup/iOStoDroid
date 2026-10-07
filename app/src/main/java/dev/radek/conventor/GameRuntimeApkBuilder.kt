@@ -26,9 +26,10 @@ internal class GameRuntimeApkBuilder(private val context: Context) {
     companion object {
         private const val MAX_TEMPLATE_ENTRY_BYTES = 32L * 1024 * 1024
         private const val MAX_ICON_BYTES = 16L * 1024 * 1024
-        private const val MAX_RESOURCE_FILE_BYTES = 256L * 1024 * 1024
-        private const val MAX_RESOURCE_TOTAL_BYTES = 1024L * 1024 * 1024
-        private const val MAX_RESOURCE_FILES = 4096
+        internal const val MAX_RESOURCE_FILE_BYTES = 1024L * 1024 * 1024
+        /** Report-size guard only: every payload is packaged, this caps the JSON inventory. */
+        private const val MAX_REPORTED_RESOURCES = 20_000
+        internal const val MAX_RESOURCE_FILES = 200_000
         private const val MAX_EXECUTABLE_BYTES = 256L * 1024 * 1024
         private const val MACHO_HEADER_BYTES = 64 * 1024
         private const val MAX_FAT_SLICES = 64
@@ -126,25 +127,27 @@ internal class GameRuntimeApkBuilder(private val context: Context) {
             val resourceEntries = ArrayList<Pair<String, File>>()
             var totalResourceBytes = 0L
             var resourceCount = 0
-            // Every payload is copied to disk and streamed into the archive from
-            // there. Buffering a whole game bundle in RAM is what used to kill
-            // the app mid-conversion; nothing here holds a resource in memory.
-            val bundleStage = File(staged, "bundle")
+            // Payloads stay in the extracted tree and are streamed from there
+            // straight into the archive: no second on-disk copy, and nothing
+            // held in RAM. The old fixed total cap rejected larger games; the
+            // only remaining bound is the device's own free storage, checked
+            // below before the archive is written.
             appDir.walkTopDown().filter { it.isFile }.sortedBy { it.path }.forEach { file ->
                 if (file == binary) return@forEach
                 val relative = file.relativeTo(appDir).path.replace(File.separatorChar, '/')
                 SafeZip.validateName(relative)
-                require(++resourceCount <= MAX_RESOURCE_FILES) { "too many bundle resources for the game-runtime packager" }
+                require(++resourceCount <= MAX_RESOURCE_FILES) {
+                    "too many bundle resources for the game-runtime packager ($resourceCount > $MAX_RESOURCE_FILES)"
+                }
                 require(file.length() <= MAX_RESOURCE_FILE_BYTES) { "bundle resource exceeds the limit: $relative" }
-                val target = File(bundleStage, "$resourceCount.bin")
-                target.parentFile?.mkdirs()
-                file.copyTo(target, overwrite = true)
-                require(target.length() == file.length()) { "bundle resource could not be staged: $relative" }
-                totalResourceBytes += target.length()
-                require(totalResourceBytes <= MAX_RESOURCE_TOTAL_BYTES) { "bundle resources exceed the bounded total limit" }
-                inventory.put(JSONObject().put("path", relative).put("sha256", sha256(target)))
-                resourceEntries += relative to target
+                totalResourceBytes += file.length()
+                if (inventory.length() < MAX_REPORTED_RESOURCES) {
+                    inventory.put(JSONObject().put("path", relative).put("sha256", sha256(file)))
+                }
+                resourceEntries += relative to file
             }
+            if (resourceEntries.isEmpty()) error("the bundle contains no resources to package")
+            SafeZip.requireStorage(dir, totalResourceBytes)
 
             setProgress(48, "CONVERTING", "Staging the tested guest-CPU boot-attempt runtime")
             val compatibilityLibraries = CompatibilityRuntime.extractGameRuntimeInstalled(context, File(staged, "runtime"))
@@ -245,6 +248,11 @@ internal class GameRuntimeApkBuilder(private val context: Context) {
                         }
                     }))
                 .put("resourceInventory", inventory)
+                .put("resources", JSONObject()
+                    .put("files", resourceCount)
+                    .put("bytes", totalResourceBytes)
+                    .put("inventoryEntries", inventory.length())
+                    .put("inventoryTruncated", inventory.length() < resourceCount))
 
             setProgress(68, "PACKAGING", "Assembling the game-runtime APK entries")
             val entries = ArrayList<AlignedApkZip.Entry>()
@@ -357,6 +365,9 @@ internal class GameRuntimeApkBuilder(private val context: Context) {
                 .put("bytes", resultFile.length())
                 .put("backend", BACKEND)
                 .put("executableName", executableName)
+                .put("resources", JSONObject()
+                    .put("files", resourceCount)
+                    .put("bytes", totalResourceBytes))
                 .put("executableBytes", slice.file.length())
                 .put("executableSha256", executableSha)
                 .put("machoFormat", slice.format)

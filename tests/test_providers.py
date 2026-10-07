@@ -174,6 +174,33 @@ class ProviderTests(unittest.TestCase):
                 }
                 self.assertEqual(provider.status, status_values[status])
 
+    def test_ndk_name_candidate_catalogs_match_between_kotlin_and_host(self):
+        """The on-device mapper and the host CLI must agree on every candidate.
+
+        A symbol listed only on one side would make the device report a direct
+        NDK candidate that the host calls unmapped (or the other way round).
+        """
+        source = API_MAPPER_KOTLIN.read_text(encoding="utf-8")
+        block = source[source.index("private val bionicLibraries = mapOf("):]
+        block = block[: block.index("\n    )")]
+        per_library = {
+            library: set(re.findall(r'"([^"]+)"', chunk))
+            for library, chunk in re.findall(r'"(lib[^"]+\.so)" to setOf\((.*?)\n        \)', block, re.S)
+        }
+        self.assertTrue(per_library, "failed to parse the Kotlin NDK candidate catalog")
+        self.assertEqual(set(providers.BIONIC_SYMBOL_CANDIDATES), set().union(*per_library.values()))
+        # Candidates are shared names only: the Kotlin catalog must never list one
+        # symbol in two libraries, or the reported target library would depend on
+        # map iteration order.
+        all_symbols = [symbol for symbols in per_library.values() for symbol in symbols]
+        self.assertEqual(len(all_symbols), len(set(all_symbols)))
+        for expected in ("malloc", "memcpy", "glDrawArrays", "glAlphaFunc", "deflate", "eglSwapBuffers", "dlopen"):
+            self.assertIn(expected, providers.BIONIC_SYMBOL_CANDIDATES)
+        # OpenAL has no Android provider, so its entry points must stay out of the
+        # same-name catalog and keep reaching the compat-stub resolver instead.
+        openal = {"alSourcePlay", "alDeleteSources", "alGenBuffers", "alSourceQueueBuffers", "alcOpenDevice"}
+        self.assertFalse(openal & providers.BIONIC_SYMBOL_CANDIDATES)
+
     def test_runtime_ndk_export_whitelists_match_between_kotlin_and_jni(self):
         kotlin = API_MAPPER_KOTLIN.read_text()
         cpp = NATIVE_JNI.read_text()

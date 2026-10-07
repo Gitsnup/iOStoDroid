@@ -1,0 +1,611 @@
+#include "compat_runtime/libsystem_shims.hpp"
+
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace radek::compat_runtime::libsystem {
+namespace {
+
+constexpr std::size_t kCopyChunk = 64U * 1024U;
+constexpr std::size_t kMaximumStringBytes = 1U * 1024U * 1024U;
+constexpr std::size_t kMinimumAllocation = 8U;
+constexpr std::size_t kBlockAlignment = 8U;
+
+/** Guest reads that tolerate a range ending exactly at a region boundary. */
+bool readGuest(const GuestAddressSpace &memory, GuestAddress address, std::uint8_t *destination,
+               std::size_t size) {
+    if (size == 0)
+        return true;
+    if (memory.read(address, destination, size))
+        return true;
+    for (std::size_t index = 0; index < size; ++index) {
+        if (!memory.read(static_cast<GuestAddress>(address + index), destination + index, 1))
+            return false;
+    }
+    return true;
+}
+
+bool writeGuest(GuestAddressSpace &memory, GuestAddress address, const std::uint8_t *source,
+                std::size_t size) {
+    if (size == 0)
+        return true;
+    if (memory.write(address, source, size))
+        return true;
+    for (std::size_t index = 0; index < size; ++index) {
+        if (!memory.write(static_cast<GuestAddress>(address + index), source + index, 1))
+            return false;
+    }
+    return true;
+}
+
+bool readCString(const GuestAddressSpace &memory, GuestAddress address, std::string &result,
+                 std::size_t limit = kMaximumStringBytes) {
+    result.clear();
+    if (address == 0)
+        return false;
+    GuestAddress cursor = address;
+    while (result.size() < limit) {
+        char chunk[64];
+        if (!readGuest(memory, cursor, reinterpret_cast<std::uint8_t *>(chunk), sizeof(chunk)))
+            return false;
+        const auto *terminator = static_cast<const char *>(
+            std::memchr(chunk, '\0', sizeof(chunk)));
+        if (terminator != nullptr) {
+            result.append(chunk, static_cast<std::size_t>(terminator - chunk));
+            return true;
+        }
+        result.append(chunk, sizeof(chunk));
+        cursor = static_cast<GuestAddress>(cursor + sizeof(chunk));
+    }
+    return false;
+}
+
+/** memcpy-style copy. A host staging buffer makes the operation region-agnostic. */
+bool copyForward(GuestAddressSpace &memory, GuestAddress destination, GuestAddress source,
+                 std::size_t size) {
+    std::vector<std::uint8_t> buffer(std::min(size, kCopyChunk));
+    std::size_t copied = 0;
+    while (copied < size) {
+        const std::size_t chunk = std::min(buffer.size(), size - copied);
+        if (!readGuest(memory, static_cast<GuestAddress>(source + copied), buffer.data(), chunk))
+            return false;
+        if (!writeGuest(memory, static_cast<GuestAddress>(destination + copied), buffer.data(),
+                        chunk))
+            return false;
+        copied += chunk;
+    }
+    return true;
+}
+
+/** memmove semantics: reverse order when the ranges overlap forward. */
+bool copyRanges(GuestAddressSpace &memory, GuestAddress destination, GuestAddress source,
+                std::size_t size) {
+    const bool overlaps = destination > source && destination < source + size;
+    if (!overlaps)
+        return copyForward(memory, destination, source, size);
+    std::vector<std::uint8_t> buffer(std::min(size, kCopyChunk));
+    std::size_t remaining = size;
+    while (remaining > 0) {
+        const std::size_t chunk = std::min(buffer.size(), remaining);
+        remaining -= chunk;
+        const auto from = static_cast<GuestAddress>(source + remaining);
+        const auto to = static_cast<GuestAddress>(destination + remaining);
+        if (!readGuest(memory, from, buffer.data(), chunk))
+            return false;
+        if (!writeGuest(memory, to, buffer.data(), chunk))
+            return false;
+    }
+    return true;
+}
+
+int compareBytes(std::uint8_t left, std::uint8_t right) {
+    if (left == right)
+        return 0;
+    return left < right ? -1 : 1;
+}
+
+bool fail(GuestAddressSpace &, std::string &reason, const std::string &detail) {
+    reason = detail;
+    return false;
+}
+
+// ---- individual adapters (guest ABI: r0-r3 arguments, r0 result) ----
+
+bool memcpyAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason) {
+    const auto destination = registers.r[0];
+    const auto source = registers.r[1];
+    const auto size = registers.r[2];
+    if (!copyRanges(memory, destination, source, size))
+        return fail(memory, reason, "memcpy could not read or write the guest range it was given");
+    registers.r[0] = destination;
+    return true;
+}
+
+bool memsetAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason) {
+    const auto destination = registers.r[0];
+    const auto value = static_cast<std::uint8_t>(registers.r[1] & 0xffU);
+    const auto size = static_cast<std::size_t>(registers.r[2]);
+    std::vector<std::uint8_t> buffer(std::min(size, kCopyChunk), value);
+    std::size_t written = 0;
+    while (written < size) {
+        const std::size_t chunk = std::min(buffer.size(), size - written);
+        if (!writeGuest(memory, static_cast<GuestAddress>(destination + written), buffer.data(),
+                        chunk))
+            return fail(memory, reason, "memset could not write the guest range it was given");
+        written += chunk;
+    }
+    registers.r[0] = destination;
+    return true;
+}
+
+bool memcmpAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason) {
+    const auto left = registers.r[0];
+    const auto right = registers.r[1];
+    const auto size = static_cast<std::size_t>(registers.r[2]);
+    std::vector<std::uint8_t> leftChunk(std::min(size, kCopyChunk));
+    std::vector<std::uint8_t> rightChunk(std::min(size, kCopyChunk));
+    std::size_t compared = 0;
+    int result = 0;
+    while (compared < size && result == 0) {
+        const std::size_t chunk = std::min(leftChunk.size(), size - compared);
+        if (!readGuest(memory, static_cast<GuestAddress>(left + compared), leftChunk.data(), chunk) ||
+            !readGuest(memory, static_cast<GuestAddress>(right + compared), rightChunk.data(), chunk))
+            return fail(memory, reason, "memcmp could not read the guest ranges it was given");
+        for (std::size_t index = 0; index < chunk; ++index) {
+            result = compareBytes(leftChunk[index], rightChunk[index]);
+            if (result != 0)
+                break;
+        }
+        compared += chunk;
+    }
+    registers.r[0] = static_cast<std::uint32_t>(result);
+    return true;
+}
+
+bool strlenAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason) {
+    std::string text;
+    if (!readCString(memory, registers.r[0], text))
+        return fail(memory, reason, "strlen could not read a terminated guest string");
+    registers.r[0] = static_cast<std::uint32_t>(text.size());
+    return true;
+}
+
+bool strcmpAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason,
+                   bool bounded) {
+    std::string left;
+    std::string right;
+    if (!readCString(memory, registers.r[0], left) || !readCString(memory, registers.r[1], right))
+        return fail(memory, reason, "strcmp could not read a terminated guest string");
+    // Comparing with the terminator treated as an ordinary byte gives strcmp;
+    // bounding the comparison gives strncmp. Both stop at the first difference.
+    const std::size_t limit =
+        bounded ? std::min<std::size_t>(registers.r[2], std::max(left.size(), right.size()))
+                : std::max(left.size(), right.size());
+    int result = 0;
+    for (std::size_t index = 0; index < limit && result == 0; ++index) {
+        const auto leftByte = index < left.size() ? static_cast<std::uint8_t>(left[index]) : 0;
+        const auto rightByte = index < right.size() ? static_cast<std::uint8_t>(right[index]) : 0;
+        result = compareBytes(leftByte, rightByte);
+    }
+    registers.r[0] = static_cast<std::uint32_t>(result);
+    return true;
+}
+
+bool strncmpAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason) {
+    return strcmpAdapter(registers, memory, reason, true);
+}
+
+bool strcmpExactAdapter(CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) {
+    return strcmpAdapter(registers, memory, reason, false);
+}
+
+bool readLengthBoundedString(const GuestAddressSpace &memory, GuestAddress address,
+                             std::string &result, std::size_t maximum) {
+    result.clear();
+    if (address == 0)
+        return false;
+    GuestAddress cursor = address;
+    while (result.size() < maximum) {
+        char chunk[64];
+        if (!readGuest(memory, cursor, reinterpret_cast<std::uint8_t *>(chunk), sizeof(chunk)))
+            return false;
+        const auto *terminator =
+            static_cast<const char *>(std::memchr(chunk, '\0', sizeof(chunk)));
+        const std::size_t available = terminator != nullptr
+            ? static_cast<std::size_t>(terminator - chunk)
+            : sizeof(chunk);
+        const std::size_t take = std::min(available, maximum - result.size());
+        result.append(chunk, take);
+        if (terminator != nullptr || take < available)
+            return true;
+        cursor = static_cast<GuestAddress>(cursor + sizeof(chunk));
+    }
+    return true;
+}
+
+bool strcpyAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason,
+                   bool bounded) {
+    const auto destination = registers.r[0];
+    const auto maximum = bounded ? static_cast<std::size_t>(registers.r[2]) : kMaximumStringBytes;
+    std::string text;
+    if (bounded) {
+        // strncpy copies at most n bytes and pads the rest with NULs.
+        if (!readLengthBoundedString(memory, registers.r[1], text, maximum))
+            return fail(memory, reason, "strncpy could not read the guest source string");
+        std::vector<std::uint8_t> bytes(maximum, 0);
+        std::copy(text.begin(), text.end(), bytes.begin());
+        if (!writeGuest(memory, destination, bytes.data(), maximum))
+            return fail(memory, reason, "strncpy could not write the guest destination");
+        registers.r[0] = destination;
+        return true;
+    }
+    if (!readCString(memory, registers.r[1], text))
+        return fail(memory, reason, "strcpy could not read the guest source string");
+    if (!writeGuest(memory, destination, reinterpret_cast<const std::uint8_t *>(text.c_str()),
+                    text.size() + 1))
+        return fail(memory, reason, "strcpy could not write the guest destination");
+    registers.r[0] = destination;
+    return true;
+}
+
+bool strcatAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason) {
+    const auto destination = registers.r[0];
+    std::string base;
+    std::string suffix;
+    if (!readCString(memory, destination, base) ||
+        !readCString(memory, registers.r[1], suffix))
+        return fail(memory, reason, "strcat could not read a terminated guest string");
+    const std::string combined = base + suffix;
+    if (!writeGuest(memory, destination,
+                    reinterpret_cast<const std::uint8_t *>(combined.c_str()),
+                    combined.size() + 1))
+        return fail(memory, reason, "strcat could not write the guest destination");
+    registers.r[0] = destination;
+    return true;
+}
+
+bool strchrAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason,
+                   bool reverse) {
+    const auto text = registers.r[0];
+    const char needle = static_cast<char>(registers.r[1] & 0xffU);
+    std::string value;
+    if (!readCString(memory, text, value))
+        return fail(memory, reason, "strchr could not read a terminated guest string");
+    const auto position = reverse ? value.rfind(needle) : value.find(needle);
+    if (needle == '\0')
+        registers.r[0] = static_cast<std::uint32_t>(text + value.size());
+    else if (position == std::string::npos)
+        registers.r[0] = 0;
+    else
+        registers.r[0] = static_cast<std::uint32_t>(text + position);
+    return true;
+}
+
+bool strstrAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason) {
+    const auto haystack = registers.r[0];
+    std::string haystackText;
+    std::string needleText;
+    if (!readCString(memory, haystack, haystackText) ||
+        !readCString(memory, registers.r[1], needleText))
+        return fail(memory, reason, "strstr could not read a terminated guest string");
+    const auto position = haystackText.find(needleText);
+    registers.r[0] = position == std::string::npos
+        ? 0
+        : static_cast<std::uint32_t>(haystack + position);
+    return true;
+}
+
+bool strnlenAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason) {
+    std::string text;
+    if (!readLengthBoundedString(memory, registers.r[0], text, registers.r[1]))
+        return fail(memory, reason, "strnlen could not read the guest string");
+    registers.r[0] = static_cast<std::uint32_t>(text.size());
+    return true;
+}
+
+bool memchrAdapter(CpuRegisterState &registers, GuestAddressSpace &memory, std::string &reason) {
+    const auto address = registers.r[0];
+    const auto needle = static_cast<std::uint8_t>(registers.r[1] & 0xffU);
+    const auto size = static_cast<std::size_t>(registers.r[2]);
+    std::vector<std::uint8_t> buffer(std::min(size, kCopyChunk));
+    std::size_t scanned = 0;
+    while (scanned < size) {
+        const std::size_t chunk = std::min(buffer.size(), size - scanned);
+        if (!readGuest(memory, static_cast<GuestAddress>(address + scanned), buffer.data(), chunk))
+            return fail(memory, reason, "memchr could not read the guest range it was given");
+        for (std::size_t index = 0; index < chunk; ++index) {
+            if (buffer[index] == needle) {
+                registers.r[0] = static_cast<std::uint32_t>(address + scanned + index);
+                return true;
+            }
+        }
+        scanned += chunk;
+    }
+    registers.r[0] = 0;
+    return true;
+}
+
+} // namespace
+
+bool ShimAdapter::ensureHeap(GuestAddressSpace &memory) {
+    if (heapOwner_ == &memory)
+        return true;
+    if (heapOwner_ != nullptr) {
+        // One guest address space per boot attempt: a second one must not share
+        // block bookkeeping that belongs to the first.
+        return false;
+    }
+    const std::size_t limit = memory.memoryLimit();
+    std::size_t size = limit / 4;
+    size = std::max(size, kMinimumHeapBytes);
+    size = std::min(size, kMaximumHeapBytes);
+    if (limit <= size)
+        return false;
+    try {
+        heapBase_ = memory.mapAny(size, MemoryPermission::Read | MemoryPermission::Write,
+                                  "guest-heap");
+    } catch (const std::exception &) {
+        return false;
+    }
+    heapOwner_ = &memory;
+    heapSize_ = size;
+    heapCursor_ = 0;
+    return true;
+}
+
+GuestAddress ShimAdapter::allocate(GuestAddressSpace &memory, std::size_t size) {
+    if (!ensureHeap(memory))
+        return 0;
+    const std::size_t requested =
+        std::max(kMinimumAllocation, (size + kBlockAlignment - 1) & ~(kBlockAlignment - 1));
+    // First fit over freed blocks.
+    for (auto block = blocks_.begin(); block != blocks_.end(); ++block) {
+        if (!block->second.free || block->second.size < requested)
+            continue;
+        const auto address = block->first;
+        const std::size_t leftover = block->second.size - requested;
+        if (leftover >= kMinimumAllocation + kBlockAlignment) {
+            block->second.size = requested;
+            blocks_.emplace(static_cast<GuestAddress>(address + requested),
+                            Block{leftover, true});
+        }
+        block->second.free = false;
+        ++allocations_;
+        return address;
+    }
+    // Bump-allocate above the highest block, trimming trailing free space first.
+    while (!blocks_.empty()) {
+        const auto last = std::prev(blocks_.end());
+        if (!last->second.free)
+            break;
+        heapCursor_ = static_cast<std::size_t>(last->first - heapBase_);
+        blocks_.erase(last);
+    }
+    const std::size_t aligned = (heapCursor_ + kBlockAlignment - 1) & ~(kBlockAlignment - 1);
+    if (aligned + requested > heapSize_)
+        return 0;
+    const auto address = static_cast<GuestAddress>(heapBase_ + aligned);
+    blocks_.emplace(address, Block{requested, false});
+    heapCursor_ = aligned + requested;
+    ++allocations_;
+    return address;
+}
+
+void ShimAdapter::release(GuestAddressSpace &memory, GuestAddress address) {
+    if (address == 0 || heapOwner_ != &memory)
+        return;
+    const auto found = blocks_.find(address);
+    if (found == blocks_.end() || found->second.free)
+        return;
+    found->second.free = true;
+    // Coalesce with the following block, then with the preceding one.
+    auto next = std::next(found);
+    if (next != blocks_.end() && next->second.free) {
+        found->second.size += next->second.size;
+        blocks_.erase(next);
+    }
+    if (found != blocks_.begin()) {
+        auto previous = std::prev(found);
+        if (previous->second.free) {
+            previous->second.size += found->second.size;
+            blocks_.erase(found);
+        }
+    }
+    ++frees_;
+}
+
+void ShimAdapter::registerFunction(
+    ShimRegistry &registry, const std::string &symbol, const std::string &adapterName,
+    std::function<bool(CpuRegisterState &, GuestAddressSpace &, std::string &)> invoke) {
+    if (nextCallout_ > 0xf004ffffU - 4U)
+        throw std::overflow_error("libSystem shim callout range is exhausted");
+    ShimBinding binding;
+    binding.darwinSymbol = symbol;
+    binding.library = "libSystem.B.dylib";
+    binding.adapterName = adapterName;
+    binding.guestAddress = nextCallout_;
+    binding.invoke = std::move(invoke);
+    nextCallout_ += 4U;
+    registry.registerBinding(std::move(binding));
+}
+
+void ShimAdapter::registerBindings(ShimRegistry &registry) {
+    if (registered_)
+        throw std::runtime_error("libSystem shim adapter is already registered");
+    registerFunction(registry, "_memcpy", "libsystem-memcpy",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return memcpyAdapter(registers, memory, reason); });
+    registerFunction(registry, "_memmove", "libsystem-memmove",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return memcpyAdapter(registers, memory, reason); });
+    registerFunction(registry, "_memset", "libsystem-memset",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return memsetAdapter(registers, memory, reason); });
+    registerFunction(registry, "_memcmp", "libsystem-memcmp",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return memcmpAdapter(registers, memory, reason); });
+    registerFunction(registry, "_memchr", "libsystem-memchr",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return memchrAdapter(registers, memory, reason); });
+    registerFunction(registry, "_strlen", "libsystem-strlen",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return strlenAdapter(registers, memory, reason); });
+    registerFunction(registry, "_strnlen", "libsystem-strnlen",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return strnlenAdapter(registers, memory, reason); });
+    registerFunction(registry, "_strcmp", "libsystem-strcmp",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return strcmpExactAdapter(registers, memory, reason); });
+    registerFunction(registry, "_strncmp", "libsystem-strncmp",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return strncmpAdapter(registers, memory, reason); });
+    registerFunction(registry, "_strcpy", "libsystem-strcpy",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return strcpyAdapter(registers, memory, reason, false); });
+    registerFunction(registry, "_strncpy", "libsystem-strncpy",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return strcpyAdapter(registers, memory, reason, true); });
+    registerFunction(registry, "_strcat", "libsystem-strcat",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return strcatAdapter(registers, memory, reason); });
+    registerFunction(registry, "_strchr", "libsystem-strchr",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return strchrAdapter(registers, memory, reason, false); });
+    registerFunction(registry, "_strrchr", "libsystem-strrchr",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return strchrAdapter(registers, memory, reason, true); });
+    registerFunction(registry, "_strstr", "libsystem-strstr",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) { return strstrAdapter(registers, memory, reason); });
+    registerFunction(registry, "_strdup", "libsystem-strdup",
+                     [this](CpuRegisterState &registers, GuestAddressSpace &memory,
+                            std::string &reason) {
+                         std::string text;
+                         if (!readCString(memory, registers.r[0], text))
+                             return fail(memory, reason,
+                                         "strdup could not read a terminated guest string");
+                         std::lock_guard<std::mutex> lock(mutex_);
+                         const auto copy = allocate(memory, text.size() + 1);
+                         if (copy == 0)
+                             return fail(memory, reason,
+                                         "strdup could not allocate from the bounded guest heap");
+                         if (!writeGuest(memory, copy,
+                                         reinterpret_cast<const std::uint8_t *>(text.c_str()),
+                                         text.size() + 1))
+                             return fail(memory, reason, "strdup could not write the guest copy");
+                         registers.r[0] = copy;
+                         return true;
+                     });
+    registerFunction(registry, "_malloc", "libsystem-malloc",
+                     [this](CpuRegisterState &registers, GuestAddressSpace &memory,
+                            std::string &reason) {
+                         const std::size_t requested = registers.r[0];
+                         std::lock_guard<std::mutex> lock(mutex_);
+                         const auto block = allocate(memory, requested);
+                         if (block == 0)
+                             return fail(memory, reason,
+                                         "malloc could not satisfy " +
+                                             std::to_string(requested) +
+                                             " bytes from the bounded guest heap");
+                         registers.r[0] = block;
+                         registers.r[0] = block;
+                         return true;
+                     });
+    registerFunction(registry, "_calloc", "libsystem-calloc",
+                     [this](CpuRegisterState &registers, GuestAddressSpace &memory,
+                            std::string &reason) {
+                         const std::size_t count = registers.r[0];
+                         const std::size_t size = registers.r[1];
+                         if (size != 0 && count > (kMaximumHeapBytes * 4) / size)
+                             return fail(memory, reason,
+                                         "calloc element count overflows the bounded guest heap");
+                         std::lock_guard<std::mutex> lock(mutex_);
+                         const auto block = allocate(memory, count * size);
+                         if (block == 0)
+                             return fail(memory, reason,
+                                         "calloc could not satisfy the request from the bounded "
+                                         "guest heap");
+                         registers.r[0] = block;
+                         return true;
+                     });
+    registerFunction(registry, "_realloc", "libsystem-realloc",
+                     [this](CpuRegisterState &registers, GuestAddressSpace &memory,
+                            std::string &reason) {
+                         const auto previous = registers.r[0];
+                         const std::size_t size = registers.r[1];
+                         std::lock_guard<std::mutex> lock(mutex_);
+                         if (previous == 0) {
+                             const auto block = allocate(memory, size);
+                             if (block == 0)
+                                 return fail(memory, reason,
+                                             "realloc could not allocate from the bounded guest "
+                                             "heap");
+                             registers.r[0] = block;
+                             return true;
+                         }
+                         const auto found = blocks_.find(previous);
+                         if (found == blocks_.end() || found->second.free)
+                             return fail(memory, reason,
+                                         "realloc received a pointer that is not a live guest "
+                                         "allocation");
+                         if (size == 0) {
+                             release(memory, previous);
+                             registers.r[0] = 0;
+                             return true;
+                         }
+                         if (found->second.size >= size) {
+                             registers.r[0] = previous;
+                             return true;
+                         }
+                         const auto block = allocate(memory, size);
+                         if (block == 0)
+                             return fail(memory, reason,
+                                         "realloc could not grow the block in the bounded guest "
+                                         "heap");
+                         std::vector<std::uint8_t> buffer(found->second.size);
+                         if (!readGuest(memory, previous, buffer.data(), buffer.size()) ||
+                             !writeGuest(memory, block, buffer.data(), buffer.size()))
+                             return fail(memory, reason, "realloc could not copy the guest block");
+                         release(memory, previous);
+                         registers.r[0] = block;
+                         return true;
+                     });
+    registerFunction(registry, "_free", "libsystem-free",
+                     [this](CpuRegisterState &registers, GuestAddressSpace &memory,
+                            std::string &reason) {
+                         std::lock_guard<std::mutex> lock(mutex_);
+                         if (registers.r[0] != 0 && heapOwner_ != &memory)
+                             return fail(memory, reason,
+                                         "free received a pointer for an address space that does "
+                                         "not own the guest heap");
+                         release(memory, registers.r[0]);
+                         // free returns void; a deterministic r0 keeps the guest
+                         // register file reproducible for diagnostics.
+                         registers.r[0] = 0;
+                         return true;
+                     });
+    registered_ = true;
+}
+
+std::size_t ShimAdapter::allocationCount() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return allocations_;
+}
+
+std::size_t ShimAdapter::freeCount() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return frees_;
+}
+
+std::size_t ShimAdapter::heapBytes() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return heapSize_;
+}
+
+} // namespace radek::compat_runtime::libsystem

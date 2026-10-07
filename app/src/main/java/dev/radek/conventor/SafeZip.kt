@@ -13,14 +13,34 @@ object SafeZip {
      * (expansion ratio, member count, encrypted and ZIP64 members), which exist
      * to stop ZIP bombs rather than to police how large a game may be.
      */
-    private const val MAX_FILE = 1024L * 1024 * 1024
+    internal const val MAX_FILE = 1024L * 1024 * 1024
+    /** Deflate expansion ceiling per member; the importer and the read-back check share it. */
+    internal const val MAX_EXPANSION_RATIO = 250
+    /** Largest entry count a non-ZIP64 archive can declare (see [centralDirectory]). */
+    private const val MAX_ENTRIES = 65534
     private const val MIN_FREE_HEADROOM = 64L * 1024 * 1024
+    /**
+     * Name bounds. Shipped games nest deeply (a framework inside a framework
+     * inside the `.app`, plus deep asset folders inside each), and the earlier
+     * 32-component/1 KiB limits rejected real bundles with "unsafe ZIP path".
+     * These bounds are the ones the destination filesystem actually has —
+     * 255 bytes per component, 4096 bytes per path — with a generous depth cap.
+     * Traversal, absolute paths, NUL bytes and absurd names still fail closed.
+     */
+    private const val MAX_NAME_COMPONENTS = 96
+    private const val MAX_NAME_BYTES = 4096
+    private const val MAX_COMPONENT_BYTES = 255
+
     /** Strict form: used for names that must already be canonical. */
     fun validateName(name: String): String {
         require(name.isNotEmpty() && !name.startsWith('/') && '\\' !in name && ':' !in name && '\u0000' !in name) { "unsafe ZIP path" }
         val parts = name.trimEnd('/').split('/')
-        require(parts.size <= 32 && name.toByteArray().size <= 1024 && parts.none { it == ".." || it == "." || it.isEmpty() }) { "unsafe ZIP path" }
-        return parts.joinToString("/")
+        require(parts.none { it == ".." || it == "." || it.isEmpty() }) { "unsafe ZIP path" }
+        require(parts.size <= MAX_NAME_COMPONENTS) { "unsafe ZIP path: more than $MAX_NAME_COMPONENTS path components" }
+        require(parts.all { it.toByteArray().size <= MAX_COMPONENT_BYTES }) { "unsafe ZIP path: path component exceeds $MAX_COMPONENT_BYTES bytes" }
+        val joined = parts.joinToString("/")
+        require(joined.toByteArray().size <= MAX_NAME_BYTES) { "unsafe ZIP path: path exceeds $MAX_NAME_BYTES bytes" }
+        return joined
     }
 
     /**
@@ -38,9 +58,12 @@ object SafeZip {
         while (candidate.startsWith("/")) candidate = candidate.substring(1)
         val parts = candidate.split('/').map { it.trim() }.filter { it.isNotEmpty() && it != "." }
         require(parts.isNotEmpty() && parts.none { it == ".." }) { "unsafe ZIP path" }
-        require(parts.size <= 32) { "unsafe ZIP path" }
+        require(parts.size <= MAX_NAME_COMPONENTS) { "unsafe ZIP path: more than $MAX_NAME_COMPONENTS path components" }
+        require(parts.all { it.toByteArray().size <= MAX_COMPONENT_BYTES }) {
+            "unsafe ZIP path: path component exceeds $MAX_COMPONENT_BYTES bytes"
+        }
         val joined = parts.joinToString("/")
-        require(joined.toByteArray().size <= 1024) { "unsafe ZIP path" }
+        require(joined.toByteArray().size <= MAX_NAME_BYTES) { "unsafe ZIP path: path exceeds $MAX_NAME_BYTES bytes" }
         return joined
     }
 
@@ -59,7 +82,11 @@ object SafeZip {
                 ?: error("ZIP end record missing")
             require(u16(tail, end+4) == 0 && u16(tail, end+6) == 0) { "multi-disk ZIP unsupported" }
             val entries = u16(tail, end+10)
-            require(entries <= 20000 && entries == u16(tail, end+8)) { "ZIP entry limit / ZIP64 unsupported" }
+            // 65534 is the largest count the non-ZIP64 end record can hold; a
+            // larger archive reports 0xFFFF here and is rejected as ZIP64.
+            require(entries <= MAX_ENTRIES && entries == u16(tail, end+8)) {
+                "ZIP entry limit / ZIP64 unsupported"
+            }
             val size = u32(tail, end+12); val offset = u32(tail, end+16)
             require(size <= 16 * 1024 * 1024 && offset + size == length - tail.size + end) { "invalid central directory / ZIP64 unsupported" }
             f.seek(offset)
@@ -108,7 +135,7 @@ object SafeZip {
         try {
             ZipFile(source).use { zip ->
                 val entries = zip.entries().toList()
-                require(entries.size <= 20000)
+                require(entries.size <= MAX_ENTRIES) { "ZIP entry limit" }
                 val uncompressedTotal = entries.sumOf { it.size }
                 requireStorage(destination, uncompressedTotal + source.length())
                 val names = mutableSetOf<String>()
@@ -116,7 +143,7 @@ object SafeZip {
                 entries.forEachIndexed { index, entry ->
                     val name = memberName(entry.name)
                     require(names.add(name.lowercase(java.util.Locale.ROOT))) { "duplicate/case-colliding ZIP path" }
-                    require(entry.size in 0..MAX_FILE && entry.compressedSize >= 0 && entry.size <= maxOf(1L, entry.compressedSize) * 250) { "ZIP expansion limit" }
+                    require(entry.size in 0..MAX_FILE && entry.compressedSize >= 0 && entry.size <= maxOf(1L, entry.compressedSize) * MAX_EXPANSION_RATIO) { "ZIP expansion limit" }
                     val target = File(destination, name)
                     require(target.canonicalPath.startsWith(destination.canonicalPath + File.separator))
                     if (entry.isDirectory) {

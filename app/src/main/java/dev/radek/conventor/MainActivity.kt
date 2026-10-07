@@ -962,9 +962,15 @@ class MainActivity : Activity() {
                 }
                 ZipFile(temporary).use { zip ->
                     val zipEntries = zip.entries().asSequence().toList()
-                    require(zipEntries.size <= 20000) { "APK has too many entries" }
-                    require(zipEntries.sumOf { it.size.coerceAtLeast(0L) } <= 1024L * 1024 * 1024) { "APK expands beyond the allowed size" }
-                    require(zipEntries.all { it.size <= 256L * 1024 * 1024 }) { "APK contains an oversized entry" }
+                    // Re-importing one of our own results: the caps here have to admit
+                    // everything the packagers may legitimately emit, while still
+                    // refusing a bomb that claims more than the storage it came from.
+                    require(zipEntries.size <= ConvertedApkBuilder.MAX_RESOURCE_FILES + 4096) { "APK has too many entries" }
+                    require(zipEntries.all { it.size <= SafeZip.MAX_FILE }) { "APK contains an oversized entry" }
+                    require(
+                        zipEntries.sumOf { it.size.coerceAtLeast(0L) } <=
+                            zipEntries.sumOf { it.compressedSize.coerceAtLeast(1L) } * SafeZip.MAX_EXPANSION_RATIO
+                    ) { "APK expands beyond the allowed ratio" }
                     val names = zipEntries.map { it.name }
                     names.forEach { SafeZip.validateName(it) }
                     require(names.size == names.toSet().size) { "APK contains duplicate paths" }

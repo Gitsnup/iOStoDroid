@@ -10,6 +10,7 @@
 #include "compat_runtime/audio_session_shims.hpp"
 #include "compat_runtime/compiler_rt_shims.hpp"
 #include "compat_runtime/cpu.hpp"
+#include "compat_runtime/darwin_compat_shims.hpp"
 #include "compat_runtime/gles_shims.hpp"
 #include "compat_runtime/libsystem_shims.hpp"
 #include "compat_runtime/objc_shims.hpp"
@@ -76,12 +77,14 @@ int main(int argc, char **argv) {
         radek::compat_runtime::SjLjUnwindAdapter sjljUnwind;
         radek::compat_runtime::compiler_rt::ShimAdapter compilerRuntime;
         radek::compat_runtime::gles::Forwarder glesForwarder;
+        radek::compat_runtime::darwin_compat::ShimAdapter darwinShims(&objcShims);
         objcShims.registerBindings(shims);
         libsystemShims.registerBindings(shims);
         audioShims.registerBindings(shims);
         sjljUnwind.registerBindings(shims);
         compilerRuntime.registerBindings(shims);
         glesForwarder.registerBindings(shims);
+        darwinShims.registerBindings(shims);
         radek::compat_runtime::TrapShimAdapter traps;
         const auto cpu = radek::compat_runtime::createArm32CpuBackend();
         radek::compat_runtime::BootAttemptRunner runner(shims, *cpu, traps,
@@ -170,6 +173,27 @@ int main(int argc, char **argv) {
                 "refused calls are listed in diagnostics; a rendered frame is guest output, "
                 "not gameplay evidence and not a playable conversion";
             report["gles"] = std::move(gles);
+        }
+
+        // Darwin-only translation layer: names Android does not ship get an
+        // explicit, individually reported adapter instead of a trap.
+        {
+            radek::Json compat = radek::Json::object();
+            compat["boundSymbols"] = static_cast<std::uint64_t>(darwinShims.boundSymbolCount());
+            compat["ctypeCalls"] = darwinShims.ctypeCalls();
+            compat["openalCalls"] = darwinShims.openalCalls();
+            compat["streamCells"] = darwinShims.streamCellCount();
+            compat["personalityBoundaries"] = darwinShims.personalityBoundaries();
+            radek::Json diagnostics = radek::Json::array();
+            for (const auto &diagnostic : darwinShims.diagnostics())
+                diagnostics.push(radek::Json(diagnostic));
+            compat["diagnostics"] = std::move(diagnostics);
+            compat["note"] =
+                "Darwin-only imports with no Android system export are served by explicit "
+                "minimal adapters: real process-stream cells, ASCII C-locale ctype, real "
+                "NSString EAGL keys, a guest errno cell, a state-only OpenAL subset and a "
+                "fail-closed SJLJ personality boundary; none of them is a same-name NDK export";
+            report["darwinCompat"] = std::move(compat);
         }
 
         std::cout << report.dump() << "\n";

@@ -4,6 +4,41 @@ All notable changes to RadekiOSConventor. Every entry states what was verified a
 what was **not**: analysis, triage, name mappings and host static-recompilation
 coverage never mean a linked game, a playable conversion or a device-tested APK.
 
+## 2026-10-08 — Darwin-only translation layer + game-only launcher presentation
+
+### Darwin-only imports now have translation-layer adapters
+
+Android ships no same-name export for the Apple-spelled imports of the tracked
+fixture (`__tolower`/`__toupper`/`__maskrune`, `___error`, `__stdinp`/`__stdoutp`/
+`__stderrp`, `__DefaultRuneLocale`, the four `kEAGL*` keys,
+`__CFConstantStringClassReference`, `_gxx_personality_sj0`, 19 OpenAL entries).
+They are now bound by `darwin_compat::ShimAdapter` (34 bindings, callout window
+`0xf0050000`–`0xf0080000`), registered next to the other shims in the host probe
+and the device JNI, and reported in a `darwinCompat` block with per-adapter
+counters. Pinned by `native/tests/darwin_compat.cpp`. None of them is added to
+the Android catalogs: the **same-name NDK subset stays 181/254 = 71.26%** for
+this image, and the layer's report says so explicitly.
+
+Required loader capability: a 32-bit indirect symbol-pointer slot now accepts the
+materialized guest address of a data import, not only a callout thunk address.
+Measured effect on the fixture: loader `LOADED_WITH_TRAPS`, **171 resolved /
+407 trapped / 0 unresolved** (was 138 resolved / 440 trapped / 0 unresolved, with
+8 data imports refused); the boot still runs to the bounded 2,000,000-instruction
+budget with the same 10-event startup chain.
+
+### Game-only launcher presentation
+
+`GameBootActivity` now creates in `SENSOR_LANDSCAPE`, hides the diagnostics
+overlay while the game is displayed, puts a fullscreen `SurfaceView`
+(`setZOrderOnTop(true)`) above the splash, and publishes the surface to the
+runtime through the new JNI `setGameSurface(Surface)` ->
+`gles::setDefaultNativeWindow` path (the GL layer recreates its EGL window
+surface when the drawable arrives after the guest started). On a terminal state
+the activity switches to `SCREEN_ORIENTATION_PORTRAIT`, hides the surface and
+shows the overlay with the log. Splash frames are shown once each and the last
+one is held; the earlier tap-to-cycle behavior is gone. Pinned by the
+Robolectric tests in the app module.
+
 ## 2026-10-07 — Angry Birds v1.0 feedback round
 
 Input under test: `tests/data/AngryBirds_v1.0_os30.ipa` (ARMv6, 254 imports) and the

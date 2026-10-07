@@ -46,6 +46,16 @@ class VirtualFileSystem {
 
     /** Opens a guest path. Returns 0 (never a valid handle) on refusal. */
     GuestAddress open(const std::string &guestPath, const std::string &mode, std::string &detail);
+
+    /**
+     * One of the guest's standard streams. The Darwin libc exposes them as the
+     * data symbols stdin/stdout/stderr (`__stdinp`/`__stdoutp`/`__stderrp` in an
+     * armv6 Mach-O); the runtime materializes those cells with these handles so
+     * the guest's own fread/fwrite/fprintf calls work against the process
+     * streams. Returns 0 only if the stream cannot be represented.
+     */
+    enum class StandardStream { Input, Output, Error };
+    GuestAddress standardStream(StandardStream stream);
     std::size_t read(GuestAddress handle, void *destination, std::size_t size, std::string &detail);
     std::size_t write(GuestAddress handle, const void *source, std::size_t size,
                       std::string &detail);
@@ -76,6 +86,9 @@ class VirtualFileSystem {
         std::FILE *stream = nullptr;
         std::string guestPath;
         bool writable = false;
+        // A standard stream is owned by the process, not by the guest: close()
+        // must never fclose it.
+        bool standard = false;
     };
 
     void note(const std::string &detail);

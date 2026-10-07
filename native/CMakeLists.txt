@@ -80,6 +80,7 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
         src/compat_runtime/trap_shims.cpp
         src/compat_runtime/libsystem_shims.cpp
         src/compat_runtime/gles_shims.cpp
+        src/compat_runtime/darwin_compat_shims.cpp
         src/compat_runtime/app_lifecycle.cpp
     )
     if(RADEK_FETCH_UNICORN)
@@ -162,6 +163,12 @@ if(RADEK_BUILD_COMPAT_RUNTIME)
         endif()
         target_link_libraries(compat-runtime-lifecycle-tests PRIVATE compat_runtime_core)
         add_test(NAME compat-runtime-lifecycle COMMAND compat-runtime-lifecycle-tests)
+
+        add_executable(compat-runtime-darwin-compat-tests tests/darwin_compat.cpp)
+        target_include_directories(compat-runtime-darwin-compat-tests PRIVATE include)
+        target_compile_options(compat-runtime-darwin-compat-tests PRIVATE -Wall -Wextra -Werror)
+        target_link_libraries(compat-runtime-darwin-compat-tests PRIVATE compat_runtime_core)
+        add_test(NAME compat-runtime-darwin-compat COMMAND compat-runtime-darwin-compat-tests)
 
         add_executable(compat-runtime-objc-tests tests/compat_runtime_objc.cpp)
         target_include_directories(compat-runtime-objc-tests PRIVATE include)

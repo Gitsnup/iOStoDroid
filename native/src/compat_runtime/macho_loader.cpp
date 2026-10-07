@@ -882,17 +882,15 @@ void applyIndirectSymbolPointers(const Reader &reader, const ImageState &image,
                                          symbol.weakImport(), resolutionError, "indirect-symbol");
                         continue;
                     }
-                    if (binding->resolveGuestAddress) {
-                        appendUnresolved(report, symbol.name, library, ordinal, target,
-                                         symbol.weakImport(),
-                                         "guest data symbol cannot occupy a function pointer slot",
-                                         "indirect-symbol");
-                        continue;
-                    }
+                    // A 32-bit indirect pointer slot holds a guest address: a
+                    // callout thunk for a function import, or the materialized
+                    // guest address of a data import (both fit the slot).
                     if (!memory.initialize(target, &resolvedAddress, sizeof(resolvedAddress))) {
                         appendUnresolved(report, symbol.name, library, ordinal, target,
                                          symbol.weakImport(),
-                                         "could not write the callout address into an indirect symbol pointer",
+                                         binding->resolveGuestAddress
+                                             ? "could not write the resolved data address into an indirect symbol pointer"
+                                             : "could not write the callout address into an indirect symbol pointer",
                                          "indirect-symbol");
                         continue;
                     }

@@ -145,7 +145,10 @@ and digest against the report.
 `tests/data/AngryBirds_v1.0_os30.ipa` (thin ARMv6 Mach-O, 1,822,112 bytes,
 267 bundle files):
 
-- Loader: `LOADED_WITH_TRAPS`, 138 resolved / 440 trapped / 0 unresolved.
+- Loader: `LOADED_WITH_TRAPS`, 171 resolved / 407 trapped / 0 unresolved. The
+  Darwin-only imports that Android has no same-name export for are now bound
+  through the translation layer described below (stream cells, ctype sweep,
+  EAGL keys, errno cell, rune locale, CoreFoundation class token, OpenAL).
 - Boot: entry point reached, **2,000,000 guest instructions executed** (the
   bounded entry budget). The runtime enters `_main`, performs the
   `NSAutoreleasePool +new` setup, enters `UIApplicationMain`, instantiates the
@@ -174,5 +177,57 @@ and digest against the report.
   import or a bounded execution limit — and a non-empty startup chain); the
   manifest from the CI run is uploaded as
   `angrybirds-gameboot-artifacts`.
-- Remaining honest gap: OpenGL ES (51 `_gl*` imports) is **not** implemented, so
-  the attempt stops at the first GL call and nothing is rendered.
+- Remaining honest gap: on the host the OpenGL ES calls have no driver to
+  forward to, so nothing is rendered there; on Android the same calls are
+  forwarded to the platform GLES/EGL driver (see the GL forwarding section).
+
+## Darwin-only translation layer (`darwin_compat`)
+
+Android ships no system library that exports the Apple-spelled names the old
+Mach-O images import (`__tolower`, `___error`, `__stdoutp`, `__DefaultRuneLocale`,
+`kEAGLColorFormatRGB565`, `_gxx_personality_sj0`, OpenAL's `_alc*`/`_al*`, ...).
+Those imports are **not** added to the Android catalogs — inventing same-name
+NDK exports would be lying about the platform. Instead they get explicit minimal
+adapters in `native/src/compat_runtime/darwin_compat_shims.cpp`
+(`darwin_compat::ShimAdapter`, callout window `0xf0050000`–`0xf0080000`):
+
+- **ctype sweep** (`__tolower`, `__toupper`, `__maskrune`): ASCII/C-locale
+  behavior; bytes above `0x7f` are returned unchanged (no locale tables are
+  reproduced).
+- **stream cells** (`__stdinp`, `__stdoutp`, `__stderrp`): guest cells holding
+  real process-stream handles served by the compat filesystem; guest `fclose`
+  on them is a recorded no-op and never closes the host stream.
+- **errno cell** (`__error`): a single guest cell (per-thread errno is not
+  reproduced — stated in the reported diagnostics).
+- **rune locale** (`__DefaultRuneLocale`): a zeroed guest page; the table layout
+  is not reproduced and `__maskrune` does not read it.
+- **EAGL keys** (`kEAGLColorFormatRGB565`/`RGBA8`,
+  `kEAGLDrawablePropertyColorFormat`/`RetainedBacking`): real
+  `NSString` constant objects created through the Objective-C adapter.
+- **CoreFoundation token** (`__CFConstantStringClassReference`): a zeroed class
+  token; CoreFoundation string classes are not implemented.
+- **OpenAL** (14 `_al*` + 5 `_alc*` entries): state-only bookkeeping (generated
+  buffer/source ids, and per-source int/float/queue state round-tripped through
+  `_alGetSourcei`/`_alGetSourcef`). No audio is produced and the report says so.
+- **`_gxx_personality_sj0`**: an explicit fail-closed boundary — calling it
+  raises the guest exception path instead of pretending to unwind; the C++
+  exception runtime stays trapped.
+
+Each adapter is counted (`boundSymbols`, `ctypeCalls`, `openalCalls`,
+`streamCells`, `personalityBoundaries`) and the set is pinned by
+`native/tests/darwin_compat.cpp` (34 bindings) so a removal fails the suite. The
+host probe and the on-device JNI register the adapter next to the other shims and
+report a `darwinCompat` block.
+
+One loader capability was required for these data imports: a 32-bit Mach-O
+indirect symbol-pointer slot may hold the materialized guest **address of a data
+import**, not only a callout thunk address (`macho_loader.cpp`). Before this, a
+data import that arrived through a pointer slot (instead of an external
+relocation) was refused as unresolved.
+
+### Same-name NDK subset after this layer
+
+The translation layer changes what *runs*, not what *same-name* means: the
+honest same-name subset for this image stays **181/254 = 71.26%**, because these
+imports are served by compat implementations, not by same-name NDK exports. The
+reviewed-mapping figure (254/254) already counts every one of them.

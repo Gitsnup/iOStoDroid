@@ -212,9 +212,42 @@ bool VirtualFileSystem::close(GuestAddress handle) {
     const auto found = files_.find(handle);
     if (found == files_.end())
         return false;
+    if (found->second.standard) {
+        // The process owns its standard streams; a guest fclose is a no-op that
+        // must not close stdout/stderr for the whole app.
+        note("guest fclose on " + found->second.guestPath + " is ignored: the stream is owned by the process");
+        return true;
+    }
     std::fclose(found->second.stream);
     files_.erase(found);
     return true;
+}
+
+GuestAddress VirtualFileSystem::standardStream(StandardStream stream) {
+    const char *name = stream == StandardStream::Input  ? "<stdin>"
+                       : stream == StandardStream::Output ? "<stdout>"
+                                                          : "<stderr>";
+    for (const auto &[handle, file] : files_) {
+        if (file.standard && file.guestPath == name)
+            return handle;
+    }
+    std::FILE *native = stream == StandardStream::Input  ? stdin
+                        : stream == StandardStream::Output ? stdout
+                                                           : stderr;
+    if (native == nullptr) {
+        ++refused_;
+        note(std::string("standard stream ") + name + " is unavailable in this process");
+        return 0;
+    }
+    const auto handle = nextHandle_++;
+    File file;
+    file.stream = native;
+    file.guestPath = name;
+    file.writable = stream != StandardStream::Input;
+    file.standard = true;
+    files_.emplace(handle, std::move(file));
+    openPaths_.push_back(name);
+    return handle;
 }
 
 bool VirtualFileSystem::isOpen(GuestAddress handle) const {

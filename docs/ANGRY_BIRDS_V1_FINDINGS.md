@@ -182,6 +182,28 @@ change this binary's figure. **100% same-name for this binary is not reachable**
 71.26% is the honest same-name share, while the reviewed-mapping figure (254/254)
 is the one that is 100%, because every import has exactly one reviewed target kind.
 
+### The 73 non-same-name imports run through the translation layer, not through fake exports
+
+Making these imports *work* is a separate axis from the same-name metric. The
+Darwin-only spellings above are bound by explicit minimal adapters in the compat
+runtime (`darwin_compat::ShimAdapter`, 34 bindings: ASCII ctype sweep, real
+process-stream cells for `__stdinp`/`__stdoutp`/`__stderrp`, a guest errno cell,
+a zeroed `__DefaultRuneLocale` page, real `NSString` EAGL keys, a zeroed
+CoreFoundation class token, a state-only OpenAL subset, and an explicit
+fail-closed `__gxx_personality_sj0` boundary). The Objective-C classes go through
+the ObjC adapter, the compiler-rt/libunwind symbols through the compiler-runtime
+shims, and the rest through the compiled `libioscompat` registry — all registered
+next to the other shims in the host probe and the device JNI.
+
+Measured effect on the tracked fixture: the loader moved from 138 resolved /
+440 trapped / 0 unresolved (with 8 data imports refused — a data symbol could not
+occupy an indirect pointer slot) to **171 resolved / 407 trapped / 0 unresolved**,
+and the boot still executes the full bounded 2,000,000-instruction budget with the
+same ten-event startup chain (last: `-[UIWindow makeKeyAndVisible]`). What changed
+is that the Darwin-only names now *resolve and execute* instead of aborting on a
+trap; none of them was added to the Android catalogs, and the `darwinCompat`
+report block states this in the artifact.
+
 ## Next three shim families to prioritize
 
 This ordering is based on the startup trace and static import ranking; each item still needs an ABI contract, integration tests, and real loader evidence before it can be called supported.

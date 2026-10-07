@@ -9,6 +9,7 @@
 // visible in its diagnostic screen without pretending to be playable.
 #include "compat_runtime/audio_session_shims.hpp"
 #include "compat_runtime/compiler_rt_shims.hpp"
+#include "compat_runtime/darwin_compat_shims.hpp"
 #include "compat_runtime/gles_shims.hpp"
 #include "compat_runtime/virtual_file_system.hpp"
 #include "compat_runtime/cpu.hpp"
@@ -137,6 +138,7 @@ Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt(JNIEnv *env, jobj
         radek::compat_runtime::SjLjUnwindAdapter sjljUnwind;
         radek::compat_runtime::compiler_rt::ShimAdapter compilerRuntime;
         radek::compat_runtime::gles::Forwarder glesForwarder;
+        radek::compat_runtime::darwin_compat::ShimAdapter darwinShims(&objcShims);
         objcShims.registerBindings(shims);
         libsystemShims.registerBindings(shims);
         audioShims.registerBindings(shims);
@@ -145,6 +147,7 @@ Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt(JNIEnv *env, jobj
         // Guest OpenGL ES 1.1 calls go to the platform's EGL/GLES driver through
         // the launcher's Surface; nothing is rasterized in this process.
         glesForwarder.registerBindings(shims);
+        darwinShims.registerBindings(shims);
 
         std::string payload;
         if (payloadDirectory != nullptr) {
@@ -189,6 +192,27 @@ Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt(JNIEnv *env, jobj
                 "presented on the launcher's surface; refused calls are listed in "
                 "diagnostics; a rendered frame is guest output, not gameplay evidence";
             report["gles"] = std::move(gles);
+        }
+
+        // Darwin-only translation layer: names Android does not ship get an
+        // explicit, individually reported adapter instead of a trap.
+        {
+            radek::Json compat = radek::Json::object();
+            compat["boundSymbols"] = static_cast<std::uint64_t>(darwinShims.boundSymbolCount());
+            compat["ctypeCalls"] = darwinShims.ctypeCalls();
+            compat["openalCalls"] = darwinShims.openalCalls();
+            compat["streamCells"] = darwinShims.streamCellCount();
+            compat["personalityBoundaries"] = darwinShims.personalityBoundaries();
+            radek::Json diagnostics = radek::Json::array();
+            for (const auto &diagnostic : darwinShims.diagnostics())
+                diagnostics.push(radek::Json(diagnostic));
+            compat["diagnostics"] = std::move(diagnostics);
+            compat["note"] =
+                "Darwin-only imports with no Android system export are served by explicit "
+                "minimal adapters: real process-stream cells, ASCII C-locale ctype, real "
+                "NSString EAGL keys, a guest errno cell, a state-only OpenAL subset and a "
+                "fail-closed SJLJ personality boundary; none of them is a same-name NDK export";
+            report["darwinCompat"] = std::move(compat);
         }
 
         // Filesystem observability: which directories served the guest's own file

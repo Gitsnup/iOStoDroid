@@ -41,15 +41,12 @@ using GLsizei = int;
 using GLuint = unsigned int;
 using GLbitfield = unsigned int;
 
-constexpr GLenum GL_TEXTURE_2D = 0x0DE1;
 constexpr GLenum GL_ARRAY_BUFFER = 0x8892;
 constexpr GLenum GL_ELEMENT_ARRAY_BUFFER = 0x8893;
 constexpr GLenum GL_FRAMEBUFFER_OES = 0x8D40;
-constexpr GLenum GL_RENDERBUFFER_OES = 0x8D41;
 constexpr GLenum GL_RENDERBUFFER_WIDTH_OES = 0x8D42;
 constexpr GLenum GL_RENDERBUFFER_HEIGHT_OES = 0x8D43;
 constexpr GLenum GL_COLOR_ATTACHMENT0_OES = 0x8CE0;
-constexpr GLenum GL_DEPTH_ATTACHMENT_OES = 0x8D00;
 constexpr GLenum GL_FRAMEBUFFER_COMPLETE_OES = 0x8CD5;
 
 constexpr GLenum GL_VERTEX_ARRAY = 0x8074;

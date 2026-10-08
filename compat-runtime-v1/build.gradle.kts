@@ -19,6 +19,14 @@ android {
                     "-DIOSTODROID_BUILD_COMPAT_RUNTIME=ON",
                     "-DIOSTODROID_FETCH_UNICORN=ON",
                 )
+                // Opt-in compiler cache for CI and repeat local builds; without
+                // IOSTODROID_USE_CCACHE=1 nothing changes for existing environments.
+                if (System.getenv("IOSTODROID_USE_CCACHE") == "1") {
+                    arguments += listOf(
+                        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                    )
+                }
                 // Unicorn is a shared CMake dependency. Declare it as a build target too so AGP
                 // packages libunicorn.so into the AAR; the generated game APK needs it beside
                 // libcompat_runtime_v1.so at runtime.

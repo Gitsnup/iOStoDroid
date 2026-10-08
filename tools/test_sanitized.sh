@@ -40,6 +40,10 @@ IOSTODROID_ANALYZER="$PWD/.local/bin/iostodroid-macho-sanitized" \
   native/src/compat_runtime/objc_runtime.cpp native/src/compat_runtime/objc_shims.cpp \
   native/src/compat_runtime/app_lifecycle.cpp \
   native/src/compat_runtime/audio_session_shims.cpp \
+  native/src/compat_runtime/gles_shims.cpp \
+  native/src/compat_runtime/compiler_rt_shims.cpp \
+  native/src/compat_runtime/virtual_file_system.cpp \
+  native/src/compat_runtime/darwin_compat_shims.cpp \
   native/src/compat_runtime/sjlj_unwind.cpp native/src/compat_runtime/trap_shims.cpp \
   native/tests/compat_runtime.cpp \
   -o .local/bin/compat-runtime-sanitized
@@ -52,6 +56,10 @@ IOSTODROID_ANALYZER="$PWD/.local/bin/iostodroid-macho-sanitized" \
   native/src/compat_runtime/objc_runtime.cpp native/src/compat_runtime/objc_shims.cpp \
   native/src/compat_runtime/app_lifecycle.cpp \
   native/src/compat_runtime/audio_session_shims.cpp \
+  native/src/compat_runtime/gles_shims.cpp \
+  native/src/compat_runtime/compiler_rt_shims.cpp \
+  native/src/compat_runtime/virtual_file_system.cpp \
+  native/src/compat_runtime/darwin_compat_shims.cpp \
   native/src/compat_runtime/sjlj_unwind.cpp native/src/compat_runtime/trap_shims.cpp \
   native/tests/compat_runtime_traps.cpp \
   -o .local/bin/compat-runtime-traps-sanitized
@@ -69,6 +77,10 @@ IOSTODROID_ANALYZER="$PWD/.local/bin/iostodroid-macho-sanitized" \
   native/src/compat_runtime/objc_runtime.cpp native/src/compat_runtime/objc_shims.cpp \
   native/src/compat_runtime/app_lifecycle.cpp \
   native/src/compat_runtime/audio_session_shims.cpp \
+  native/src/compat_runtime/gles_shims.cpp \
+  native/src/compat_runtime/compiler_rt_shims.cpp \
+  native/src/compat_runtime/virtual_file_system.cpp \
+  native/src/compat_runtime/darwin_compat_shims.cpp \
   native/src/compat_runtime/sjlj_unwind.cpp native/src/compat_runtime/trap_shims.cpp \
   native/tests/compat_runtime_lifecycle.cpp \
   -o .local/bin/compat-runtime-lifecycle-sanitized

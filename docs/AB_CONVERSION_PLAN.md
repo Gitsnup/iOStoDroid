@@ -73,7 +73,7 @@ limitation:
       Observed today: the real image boots through `_main` →
       `UIApplicationMain` → its own `AppController`
       `applicationDidFinishLaunching:` → UIKit window/EAGL view creation and
-      stops at the first OpenGL ES import (`_glFrontFace`, 340,309 guest
+      used to stop at the first OpenGL ES import (`_glFrontFace`, 340,309 guest
       instructions). No frame, no touch delivery, and no GL/AL call stream yet;
       the remaining items stay unchecked.
 - [ ] Structural APK validation (manifest parse-back, alignment, signature,

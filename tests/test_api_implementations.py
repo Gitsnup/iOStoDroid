@@ -250,7 +250,7 @@ class ApiImplementationTests(unittest.TestCase):
             strlen = library.iostodroid_compat_strlen
             strlen.argtypes = [ctypes.c_char_p]
             strlen.restype = ctypes.c_size_t
-            self.assertEqual(strlen(b"iostodroid"), 5)
+            self.assertEqual(strlen(b"iostodroid"), 10)
 
             allocate = library.iostodroid_compat_malloc
             allocate.argtypes = [ctypes.c_size_t]

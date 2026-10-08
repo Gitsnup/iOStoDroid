@@ -75,8 +75,13 @@ at `0x6871c`. Inside that method the app created its window and EAGL view
 (`-[UIView layer]` -> `CAEAGLLayer`, `numberWithBool:`,
 `dictionaryWithObjectsAndKeys:`, `-[EAGLContext initWithAPI:]`,
 `setCurrentContext:`, `addSubview:`, `makeKeyAndVisible`) and entered its
-engine's render setup, where the **first OpenGL ES call (`_glFrontFace`, called
-from guest text around `0xAC50C`) stops the attempt** after 340,309 executed
+engine's render setup, where the first OpenGL ES call (`_glFrontFace`, called
+from guest text around `0xAC50C`) used to stop the attempt after 340,309
+executed instructions. With the GLES calls forwarded to the host driver, the
+compiler-runtime helpers implemented and the guest filesystem mounted, the same
+attempt now runs its full bounded budget (2,000,000 instructions) inside the
+app and stops with `INSTRUCTION_LIMIT` instead of a trap; the earlier number is
+kept here as the historical baseline, and
 guest instructions. This is observed execution of the
 app's own startup code, still not a launch, not a rendered frame, and not
 gameplay: no GL entry point is implemented, and the nineteen still-unimplemented
@@ -125,6 +130,79 @@ An earlier analysis exposed only nlist `description`/`n_desc` and did not decode
 The Python-generated implementation database still covers all 254 observed imports with 48 verified implementations and 206 explicitly unimplemented stub handlers (100% resolution-target coverage, **not** implementation coverage); its implementation-database delta is **zero** in this native runtime step. The native registry has host-tested exact callouts for narrow 8-byte `UITouch locationInView:` stret dispatch, retain/copy `_objc_setProperty`, state-only `_AudioSessionInitialize` and `_AudioSessionSetActive`, `_NSSearchPathForDirectoriesInDomains`' selected virtual paths, SJLJ context registration/unregistration plus a fail-closed `__Unwind_SjLj_Resume` exception boundary, and the fail-closed `_objc_enumerationMutation` exception boundary. The latest real loader resolves 39 fixup records across 30 unique symbols; `_UIApplicationMain` is the first unresolved import. Mutation and SJLJ resume still cannot run guest catches or personality/landing-pad logic. These native adapters are not merged into the Python implementation database and are not evidence of executing the IPA. No IPA callsite is rewritten; linked game calls and recompiled game bytes remain zero. The pipeline generates no entry-reachable API replacements because the recovered `start` graph does not resolve its indirect dyld handoff.
 
 The separate `compat-runtime-v1` smoke database now has one `staticEvidence` record containing the top recovered direct-call imports, exact `_main` call/register trace, and host-loader first missing import. It deliberately keeps `apps` and `gamesUnblocked` empty because no on-device smoke was performed; its validator rejects any static record that claims guest execution or a smoke status. The ranked backlog's third family is now C++ ABI/allocation/unwind, based on the observed `__ZdaPv` (61), `__ZdlPv` (59), and `__Znam` (43) direct-call counts. This is a static-evidence and priority delta, not an implementation or game-unblocking delta.
+
+## Strict same-name subset: 181/254 (71.26%) is the honest ceiling for this binary
+
+The question "is the strict same-name NDK subset really implemented — and can it be
+100% for Angry Birds?" has a measurable answer. Re-running the app's own classification
+(catalog + precedence: same-name catalog match first, then compiler-runtime, then
+concrete compat implementation, then semantic target) over the IPA's 254 undefined
+symbols reproduces the on-device figure exactly: **181 direct same-name matches =
+71.26%** — libc 92, GLESv2 27, GLESv1_CM 24, libm 24, libc++_shared 14.
+
+The remaining 73 imports have no same-name export in any Android system library:
+
+- **48 concrete compatibility implementations** (`libioscompat.so`, all host-tested):
+  `UIApplicationMain`, `AudioSessionInitialize`/`AudioSessionSetActive`,
+  `NSSearchPathForDirectoriesInDomains`, `CFConstantStringClassReference`,
+  `objc_msgSend`/`objc_msgSendSuper2`/`objc_msgSend_stret`/`objc_setProperty`/
+  `objc_enumerationMutation`, the OpenAL `al*`/`alc*` entry points, the EAGL
+  `kEAGL*` keys, `__DefaultRuneLocale`/`__maskrune`/`__tolower`/`__toupper`,
+  `__stderrp`/`__stdoutp`/`__stdinp`, `__error`, `__gxx_personality_sj0`,
+  `__divsi3`/`__udivsi3`/`__modsi3`/`__umodsi3`.
+- **17 Objective-C class/metaclass targets** (8 with a reviewed semantic Android
+  target, 9 resolved by the compiled compat registry).
+- **8 compiler-rt/libunwind toolchain symbols** (`_Unwind_SjLj_*`, `__divdi3`,
+  `__fixdfdi`, `__floatdidf`, `__floatdisf`, `__moddi3`).
+
+Audit against AOSP bionic's current symbol maps (`aosp-mirror/platform_bionic`
+`libc/libc.map.txt` with its API 36 version blocks and `libm/libm.map.txt`):
+
+- All 92 libc and 24 libm catalog matches are real exported names (116/116).
+  `ldexp` is exported by **libc.so**, not libm.so; the catalog attribution was
+  corrected (no metric change — the name still matches).
+- `__error`, `__maskrune`, `__stderrp`/`__stdoutp`/`__stdinp`, `__tolower`,
+  `__toupper` are Darwin spellings; Android exports different names (`__errno`,
+  `stderr`/`stdout`/`stdin`, `tolower`/`toupper`), so a same-name link cannot exist.
+- `_Unwind_SjLj_Register`/`Resume`/`Unregister`, `__moddi3` and `__fixdfdi` are
+  absent from bionic entirely.
+- `__divdi3`, `__udivdi3`, `__floatdidf`, `__floatdisf` **are** in bionic libc, but
+  only in the `arm x86` (32-bit) map entries; they do not exist on the arm64 target
+  this converter builds for, so counting them would produce candidates no current
+  device can resolve (the device export check would drop to 181/185).
+- OpenAL, EAGL, AudioToolbox-family and UIKit/Foundation names have no Android
+  provider at all — the catalog deliberately keeps them out so they stay with the
+  compiled compat implementations (asserted by `tests/test_providers.py`).
+
+Catalog upgrades possible from this audit are therefore small and general, not
+Angry-Birds-specific: the `error`/`error_at_line`/`error_message_count`/
+`error_one_per_line`/`error_print_progname` family and `environ` were added to the
+libc set (all present in bionic's map; the `error` family is API 23+). They do not
+change this binary's figure. **100% same-name for this binary is not reachable**:
+71.26% is the honest same-name share, while the reviewed-mapping figure (254/254)
+is the one that is 100%, because every import has exactly one reviewed target kind.
+
+### The 73 non-same-name imports run through the translation layer, not through fake exports
+
+Making these imports *work* is a separate axis from the same-name metric. The
+Darwin-only spellings above are bound by explicit minimal adapters in the compat
+runtime (`darwin_compat::ShimAdapter`, 34 bindings: ASCII ctype sweep, real
+process-stream cells for `__stdinp`/`__stdoutp`/`__stderrp`, a guest errno cell,
+a zeroed `__DefaultRuneLocale` page, real `NSString` EAGL keys, a zeroed
+CoreFoundation class token, a state-only OpenAL subset, and an explicit
+fail-closed `__gxx_personality_sj0` boundary). The Objective-C classes go through
+the ObjC adapter, the compiler-rt/libunwind symbols through the compiler-runtime
+shims, and the rest through the compiled `libioscompat` registry — all registered
+next to the other shims in the host probe and the device JNI.
+
+Measured effect on the tracked fixture: the loader moved from 138 resolved /
+440 trapped / 0 unresolved (with 8 data imports refused — a data symbol could not
+occupy an indirect pointer slot) to **171 resolved / 407 trapped / 0 unresolved**,
+and the boot still executes the full bounded 2,000,000-instruction budget with the
+same ten-event startup chain (last: `-[UIWindow makeKeyAndVisible]`). What changed
+is that the Darwin-only names now *resolve and execute* instead of aborting on a
+trap; none of them was added to the Android catalogs, and the `darwinCompat`
+report block states this in the artifact.
 
 ## Next three shim families to prioritize
 

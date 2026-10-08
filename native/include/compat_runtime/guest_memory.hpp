@@ -53,8 +53,20 @@ enum class GuestCalloutResult {
 
 struct GuestMemoryCallbacks {
     std::function<bool(GuestAddress, void *, std::size_t)> read;
+    // Host-side write (a shim filling a guest buffer): records the touched pages
+    // so an attached CPU engine can upload only those pages before it resumes.
     std::function<bool(GuestAddress, const void *, std::size_t)> write;
+    // Engine-side store relayed back to the host copy: the engine already holds
+    // these bytes, so they must not be queued for upload again.
+    std::function<bool(GuestAddress, const void *, std::size_t)> writeFromGuest;
     std::function<std::vector<GuestRegionView>()> regions;
+    // Forgets pending host writes, used right after an engine adopts the host
+    // copy so the first shim call does not re-upload the whole address space.
+    std::function<void()> clearHostWrites;
+    // Hands every page written from the host since the previous drain to the
+    // visitor. Returns false (leaving the pages queued) when the visitor fails.
+    std::function<bool(const std::function<bool(GuestAddress, const std::uint8_t *, std::size_t)> &)>
+        drainHostWrites;
     std::function<GuestCalloutResult(GuestAddress, CpuRegisterState &, std::string &)> invokeGuestCallout;
 };
 
@@ -63,6 +75,9 @@ class GuestAddressSpace {
     struct Region {
         GuestRegionView view;
         std::vector<std::uint8_t> bytes;
+        // One bit per memory page: host writes that the engine has not seen yet.
+        std::vector<std::uint64_t> dirtyPages;
+        bool dirty = false;
     };
 
     std::map<GuestAddress, Region> regions_;
@@ -76,6 +91,14 @@ class GuestAddressSpace {
 
     Region *findRegion(GuestAddress address, std::size_t size);
     const Region *findRegion(GuestAddress address, std::size_t size) const;
+    // Slow path for an access that starts in one region and ends in an adjacent
+    // one: contiguous guest memory is one address range to the guest, so the
+    // access is split at region boundaries (with per-region permission checks)
+    // instead of being refused.
+    bool readAcross(GuestAddress address, void *destination, std::size_t size,
+                    MemoryPermission required) const;
+    bool writeAcross(GuestAddress address, const void *source, std::size_t size,
+                     bool markHostWrite);
 
   public:
     explicit GuestAddressSpace(std::size_t memoryLimit = 256U * 1024U * 1024U);
@@ -92,6 +115,16 @@ class GuestAddressSpace {
 
     bool read(GuestAddress address, void *destination, std::size_t size) const;
     bool write(GuestAddress address, const void *source, std::size_t size);
+    // Engine relay for guest stores; identical to write() except that the pages
+    // are not queued for upload, because the engine created those bytes.
+    bool writeFromGuest(GuestAddress address, const void *source, std::size_t size);
+
+    // Host-write tracking used by the CPU backend: an executing guest only pays
+    // for the pages a shim actually touched instead of a full address-space copy
+    // after every callout.
+    void markDirty(GuestAddress address, std::size_t size);
+    void clearDirty();
+    bool drainDirtyPages(const std::function<bool(GuestAddress, const std::uint8_t *, std::size_t)> &visit);
     // Loader-only initialization/fixup access; guest read/write permissions are unchanged.
     bool initialize(GuestAddress address, const void *source, std::size_t size);
 

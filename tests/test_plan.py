@@ -1,0 +1,136 @@
+"""Host static-recompilation plan coverage (``iostodroid.plan``).
+
+The plan pass measures the game's own code bytes that the fail-closed host
+lifter translates into portable C. These tests pin the honesty rules: it never
+claims a linked game or device code, it degrades to ``UNAVAILABLE`` instead of
+raising, and the pipeline records it without touching ``conversionProgress``.
+
+The real-run test uses the committed authorized Angry Birds IPA, because the
+game lifter targets classic 32-bit ARM Mach-O slices and that is the input the
+plan exists for.
+"""
+
+import json
+import sys
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from iostodroid.plan import LIMITATIONS, plan_coverage
+from tests import fixtures
+
+ANGRY_BIRDS_IPA = Path(__file__).resolve().parent / "data" / "AngryBirds_v1.0_os30.ipa"
+
+
+def _capstone_available() -> bool:
+    try:
+        import capstone  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+CAPSTONE_AVAILABLE = _capstone_available()
+
+
+def _angry_birds_executable() -> bytes:
+    with zipfile.ZipFile(ANGRY_BIRDS_IPA) as archive:
+        return archive.read("Payload/AngryBirds.app/AngryBirds")
+
+
+class PlanModuleTest(unittest.TestCase):
+    def test_unreadable_input_reports_unavailable_without_raising(self):
+        result = plan_coverage(b"this is not a mach-o image at all")
+        self.assertEqual(result["status"], "UNAVAILABLE")
+        self.assertEqual(result["percent"], 0)
+        self.assertIn("reason", result)
+        self.assertEqual(result["limitations"], list(LIMITATIONS))
+
+    def test_missing_path_reports_unavailable(self):
+        result = plan_coverage(Path(tempfile.gettempdir()) / "definitely-missing-fixture.bin")
+        self.assertEqual(result["status"], "UNAVAILABLE")
+        self.assertEqual(result["percent"], 0)
+
+    def test_64_bit_images_are_out_of_scope_for_the_game_lifter(self):
+        result = plan_coverage(fixtures.macho())
+        self.assertEqual(result["status"], "UNAVAILABLE")
+        self.assertIn("32-bit ARM", result["reason"])
+
+
+@unittest.skipUnless(
+    CAPSTONE_AVAILABLE and ANGRY_BIRDS_IPA.is_file(),
+    "requires capstone and the committed authorized Angry Birds IPA",
+)
+class PlanRealInputTest(unittest.TestCase):
+    """One real blocked game: the plan must measure code and claim nothing else."""
+
+    @classmethod
+    def setUpClass(cls):
+        from iostodroid.pipeline import Pipeline
+
+        cls.temporary = tempfile.TemporaryDirectory()
+        root = Path(cls.temporary.name)
+        cls.report = Pipeline(root / "job").run(ANGRY_BIRDS_IPA, True, analyze_only=True)
+        cls.root = root
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def test_plan_measures_real_code_without_claiming_linkage(self):
+        plan = self.report["staticRecompilationPlan"]
+        self.assertIn(plan["status"], ("COMPUTED", "TRUNCATED"))
+        self.assertGreater(plan["functionsDiscovered"], 100)
+        self.assertGreater(plan["staticallyRecompiledBytes"], 0)
+        self.assertGreater(plan["percent"], 0)
+        self.assertLessEqual(plan["percent"], 100)
+        self.assertFalse(plan["linkedIntoGame"])
+        self.assertFalse(plan["completeGameConversion"])
+        self.assertFalse(plan["countsAsConversionProgress"])
+        self.assertFalse(plan["codeGeneratedOnDevice"])
+        self.assertIn("not gameplay", plan["basis"])
+
+    def test_plan_never_completes_a_conversion(self):
+        # A measured plan is host static-recompilation coverage, not a game APK.
+        self.assertEqual(self.report["state"], "BLOCKED")
+        self.assertEqual(self.report["conversionProgress"]["status"], "NOT_BUILT")
+        self.assertEqual(self.report["conversionProgress"]["percent"], 0)
+        self.assertGreater(self.report["portProgress"]["percent"], 0)
+        self.assertTrue(self.report["portProgress"]["hostPlanOnly"])
+        self.assertFalse(self.report["portProgress"]["completeGameConversion"])
+        self.assertEqual(
+            self.report["portProgress"]["status"], "PARTIAL_HOST_STATIC_RECOMPILATION"
+        )
+
+    def test_plan_is_durable_in_the_saved_report(self):
+        saved = json.loads((self.root / "job" / "report.json").read_text())
+        self.assertEqual(
+            saved["staticRecompilationPlan"]["status"],
+            self.report["staticRecompilationPlan"]["status"],
+        )
+        self.assertEqual(
+            saved["portProgress"]["recompiledTextBytes"],
+            self.report["staticRecompilationPlan"]["staticallyRecompiledBytes"],
+        )
+
+
+class PlanProvenSubsetTest(unittest.TestCase):
+    """The bounded proven subset keeps its own artifact accounting."""
+
+    def test_proven_subset_never_reports_a_host_plan(self):
+        from iostodroid.pipeline import Pipeline
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = fixtures.ipa(root / "fixture.ipa")
+            report = Pipeline(root / "job").run(source, True, analyze_only=True)
+
+        self.assertNotIn("staticRecompilationPlan", report)
+        self.assertNotIn("hostPlanOnly", report["portProgress"])
+
+
+if __name__ == "__main__":
+    unittest.main()

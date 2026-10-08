@@ -45,7 +45,7 @@ calls, and linked recompiled bytes explicitly at zero.
 | Resources | PARTIAL | Icons and bundle resources can be inventoried/read for analysis. Preview shells retain app metadata, icon and static-analysis details as machine-readable metadata; the launcher shows only the shell's started/no-statically recompiled-executable state. Bounded conversions package static bundle resources verbatim under `assets/bundle/` with a hashed inventory; no gameplay assets are statically recompiled |
 | Importer APK | SUPPORTED | Gradle builds the Android library/import/analyzer app for ARM64 devices |
 | Complete-game APK packaging | BOUNDED SUBSET | `iostodroid/gamepack.py` builds signed `complete-game-v1` APKs only for IPAs whose whole executable is statically proven to be one closed-integer routine with zero imports/metadata; anything else fails closed (`build_apk` still refuses the former partial launcher wrapper) |
-| Android game-runtime boot-attempt APK | SUPPORTED (explicitly not playable) | User-triggered on-device builder packs the selected authorized 32-bit ARM Mach-O, bundle resources, `libcompat_runtime_v1.so`, and required shared `libunicorn.so`; both native dependencies are stored/aligned in the APK. The launcher runs guest instructions until the first unimplemented call, then leaves diagnostics on screen without crashing. It is not a conversion, static recompilation, or gameplay proof; `game-runtime-v1` metadata and filename are isolated from the complete-game contract |
+| Android game-runtime boot-attempt APK | SUPPORTED (explicitly not playable) | User-triggered on-device builder packs the selected authorized 32-bit ARM Mach-O, bundle resources, `libcompat_runtime_v1.so`, and required shared `libunicorn.so`; both native dependencies are stored/aligned in the APK. The launcher runs guest instructions until a documented boundary — the first unimplemented import it touches, or its bounded instruction/time budget — then leaves diagnostics on screen without crashing. While the guest runs, the launcher is fullscreen landscape with only the game visible (splash frames shown once each, staying on the last one); the stop screen returns to portrait and shows the log. It is not a conversion, static recompilation, or gameplay proof; `game-runtime-v1` metadata and filename are isolated from the complete-game contract |
 | Android preview shell APK | SUPPORTED (explicitly non-playable) | User-triggered on-device fallback builder signs a shell with the IPA app name and available icon. No iOS executable or statically recompiled game code is included; the launcher says `Preview shell started` and that no statically recompiled executable is included, without converter branding or static-analysis details. `placeholder-info.json` keeps the full analysis summary; separate metadata/filename/provider checks prevent it from satisfying the complete-game host contract |
 | Android bounded conversion APK | SUPPORTED (runtime NOT_TESTED) | For IPAs proven on-device to be one closed-integer routine with zero imports, dependencies, `__text` relocations, fixups, or runtime metadata, the builder statically recompiles the entry into `libconverted.so` (JNI), declares the packaged ARM64 `libioscompat.so` shim runtime as `DT_NEEDED`, preserves and verifies 16 KiB native-library alignment after signing, and signs a launcher APK under the same `complete-game-v1` contract. No IPA callsite rewrites are claimed |
 | Host APK attachment | CONTRACT-ONLY | The app accepts only `complete-game-v1` evidence with source/ABI/API/resource/lifecycle checks; the host CLI and on-device converter produce it for the bounded subset only |
@@ -57,8 +57,13 @@ calls, and linked recompiled bytes explicitly at zero.
 The app may report 100% **symbol classification/triage** when every observed import has been
 categorized as a name candidate, semantic-rewrite candidate, implemented-shim export, compat stub
 handler, or unmapped. That is deliberately separate from direct NDK candidates and actual
-linked-implementation coverage. Direct NDK name-candidate coverage is divided by all distinct
-imports; it cannot reach 100% when imports require Apple-only frameworks or Objective-C APIs.
+linked-implementation coverage. The headline is **reviewed Android mapping coverage**: every import
+gets exactly one mapping kind (same-name NDK/system export, NDK compiler-rt/libunwind toolchain
+symbol, concrete `libioscompat.so` implementation export, or reviewed semantic target), so a fully
+triaged IPA reaches 100% — with the per-kind counts shown next to it and the strict *same-name NDK
+candidate subset* reported separately (that one is divided by all distinct imports and stays smaller,
+because Apple-only frameworks and Objective-C APIs have no same-name Android export). Neither number
+is a rewrite, a link, or generated code.
 Current-device `dlopen`/`dlsym` results are reported with two explicit denominators: exact NDK exports
 verified among the NDK name candidates, and verified exports among all imports. For example,
 167/264 imports is 63%, not 65%; if 172 names were candidates, 167/172 would separately be 97% of
@@ -120,6 +125,16 @@ For a proven entry, `portProgress.percent` is the statically recompiled source-b
 binary) while the overall game remains incomplete; it is not a function/API/resource or gameplay
 score. `conversionProgress.status` remains `NOT_BUILT`. A candidate symbol mapping is never counted
 as generated code, and generated API source is reported separately from zero linked API replacements.
+
+When the bounded prover refuses an input, the host CLI additionally runs the **static-recompilation
+plan** (`report.json` → `staticRecompilationPlan`, plus a `portProgress` figure carrying
+`hostPlanOnly: true` and `status: PARTIAL_HOST_STATIC_RECOMPILATION`): the same fail-closed lifter
+emits portable C for every discovered function of the selected 32-bit ARM slice, and the plan reports
+the covered source bytes, the function counts and the metric in the basis text. The pass needs the
+optional `capstone` package; without it the plan is `UNAVAILABLE` and every other field is untouched.
+The plan is host source-byte coverage of the game's own code: nothing is linked, no APK is assembled,
+no device code exists, and `conversionProgress` still reports `NOT_BUILT` / 0%. The on-device prover
+has no lifter, so the app keeps reporting its own output-only figure and points at the host plan.
 
 ## ABI preference
 

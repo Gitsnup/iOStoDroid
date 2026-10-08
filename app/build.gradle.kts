@@ -18,6 +18,13 @@ android {
             cmake {
                 cppFlags += listOf("-std=c++17", "-Wall", "-Wextra")
                 arguments += listOf("-DIOSTODROID_BUILD_COMPAT_RUNTIME=OFF")
+                // Opt-in compiler cache; machines without ccache are unchanged.
+                if (System.getenv("IOSTODROID_USE_CCACHE") == "1") {
+                    arguments += listOf(
+                        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                    )
+                }
             }
         }
     }

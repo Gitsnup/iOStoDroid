@@ -12,6 +12,21 @@ internal object AndroidApiMapper {
     // Keep high-volume games analyzable while bounding mapper/report growth.
     private const val MAX_SYMBOLS = 100_000
 
+    /**
+     * Classifications that describe a *reviewed Android mapping* of some kind:
+     * a same-name NDK/system export, an NDK compiler-runtime toolchain symbol, a
+     * concrete compiled compatibility implementation, or a reviewed semantic
+     * target. `COMPAT_STUB_HANDLER_REGISTERED` (an explicitly unimplemented
+     * handler) and `UNMAPPED` are deliberately not members.
+     */
+    private val REVIEWED_MAPPING_CLASSIFICATIONS = setOf(
+        "BIONIC_SYMBOL_CANDIDATE",
+        "COMPILER_RUNTIME_CANDIDATE",
+        "IMPLEMENTED_API_REPLACEMENT_AVAILABLE",
+        "COMPAT_VERIFIED_HANDLER_RESOLVED",
+        "SEMANTIC_REWRITE_CANDIDATE",
+    )
+
     private val ndkRuntimeLibraries = setOf(
         "libc.so", "libm.so", "libdl.so", "liblog.so", "libandroid.so", "libz.so", "libEGL.so",
         "libGLESv1_CM.so", "libGLESv2.so", "libaaudio.so", "libmediandk.so", "libvulkan.so",
@@ -38,7 +53,8 @@ internal object AndroidApiMapper {
             "asctime", "asctime_r", "atexit", "atof", "atoi", "atol", "atoll", "basename", "bcmp", "bcopy", "bind",
             "brk", "bsearch", "btowc", "bzero", "calloc", "chdir", "chmod", "clearerr", "clock", "clock_gettime",
             "clock_settime", "close", "closedir", "closelog", "connect", "creat", "ctime", "ctime_r", "difftime",
-            "dirname", "dup", "dup2", "endgrent", "endpwent", "execl", "execle", "execlp", "execv", "execve",
+            "dirname", "dup", "dup2", "endgrent", "endpwent", "environ", "error", "error_at_line", "error_message_count",
+            "error_one_per_line", "error_print_progname", "execl", "execle", "execlp", "execv", "execve",
             "execvp", "exit", "fchmod", "fchown", "fclose", "fcntl", "fdatasync", "fdopen", "feof", "ferror",
             "fflush", "ffs", "ffsl", "ffsll", "fgetc", "fgetpos", "fgets", "fileno", "flock", "fmemopen",
             "fnmatch", "fopen", "fprintf", "fputc", "fputs", "fread", "free", "freeaddrinfo", "freopen", "fscanf",
@@ -51,7 +67,7 @@ internal object AndroidApiMapper {
             "getuid", "gmtime", "gmtime_r", "hstrerror", "htonl", "htons", "iconv", "iconv_close", "iconv_open",
             "if_indextoname", "if_nametoindex", "inet_addr", "inet_aton", "inet_ntoa", "inet_ntop", "inet_pton",
             "ioctl", "isalnum", "isalpha", "isatty", "isblank", "iscntrl", "isdigit", "isgraph", "islower",
-            "isprint", "ispunct", "isspace", "isupper", "isxdigit", "kill", "labs", "lchown", "link", "listen",
+            "isprint", "ispunct", "isspace", "isupper", "isxdigit", "kill", "labs", "lchown", "ldexp", "link", "listen",
             "llabs", "localeconv", "localtime", "localtime_r", "longjmp", "lseek", "lstat", "madvise", "malloc",
             "malloc_usable_size", "mallopt", "mblen", "mbrlen", "mbrtowc", "mbsinit", "mbsrtowcs", "mbstowcs",
             "mbtowc", "memalign", "memccpy", "memchr", "memcmp", "memcpy", "memmem", "memmove", "mempcpy",
@@ -104,7 +120,7 @@ internal object AndroidApiMapper {
             "creal", "crealf", "csin", "csinf", "csinh", "csinhf", "csqrt", "csqrtf", "ctan", "ctanf", "ctanh",
             "ctanhf", "erf", "erfc", "erfcf", "erff", "exp", "exp2", "exp2f", "expf", "expm1", "expm1f", "fabs",
             "fabsf", "fdim", "fdimf", "floor", "floorf", "fma", "fmaf", "fmax", "fmaxf", "fmin", "fminf", "fmod",
-            "fmodf", "frexp", "frexpf", "hypot", "hypotf", "ilogb", "ilogbf", "j0", "j1", "jn", "ldexp", "ldexpf",
+            "fmodf", "frexp", "frexpf", "hypot", "hypotf", "ilogb", "ilogbf", "j0", "j1", "jn", "ldexpf",
             "lgamma", "lgamma_r", "lgammaf", "lgammaf_r", "llrint", "llrintf", "llround", "llroundf", "log", "log10",
             "log10f", "log1p", "log1pf", "log2", "log2f", "logb", "logbf", "logf", "lrint", "lrintf", "lround",
             "lroundf", "modf", "modff", "nan", "nanf", "nearbyint", "nearbyintf", "nextafter", "nextafterf",
@@ -1302,6 +1318,17 @@ internal object AndroidApiMapper {
         var compatStubHandlers = 0
         var compatVerifiedHandlers = 0
         var unmappedSymbols = 0
+        // Reviewed Android mappings of every kind. Every import that the
+        // classifier can assign a reviewed target to is counted here, so this
+        // figure reaches 100% for a fully triaged IPA while the strict
+        // same-name NDK subset stays separately reported and smaller. The
+        // per-kind counts follow the *assigned* classification, so an import is
+        // counted in exactly one kind and the kinds always sum to the total.
+        var reviewedMappedImports = 0
+        var reviewedMappedSameName = 0
+        var reviewedMappedCompilerRuntime = 0
+        var reviewedMappedCompatImplementation = 0
+        var reviewedMappedSemantic = 0
         symbols.sorted().forEach { source ->
             // Mach-O C symbols conventionally carry one leading underscore. Remove
             // only that decoration before matching; Objective-C symbols are parsed
@@ -1442,6 +1469,14 @@ internal object AndroidApiMapper {
                     }
                 }
             }
+            when (item.optString("classification")) {
+                "BIONIC_SYMBOL_CANDIDATE" -> reviewedMappedSameName++
+                "COMPILER_RUNTIME_CANDIDATE" -> reviewedMappedCompilerRuntime++
+                "IMPLEMENTED_API_REPLACEMENT_AVAILABLE",
+                "COMPAT_VERIFIED_HANDLER_RESOLVED" -> reviewedMappedCompatImplementation++
+                "SEMANTIC_REWRITE_CANDIDATE" -> reviewedMappedSemantic++
+            }
+            if (item.optString("classification") in REVIEWED_MAPPING_CLASSIFICATIONS) reviewedMappedImports++
             val verifiedExportEvidence = verifiedOnDevice || replacementVerified
             val hostTestedEvidence = replacementTarget != null
             item.put("evidence", JSONObject()
@@ -1486,9 +1521,35 @@ internal object AndroidApiMapper {
             .put("recompiledBytesLinked", 0)
             .put("runtimeCallsObserved", false)
             .put("note", "Symbol export, host-test, and stub evidence do not establish an IPA callsite rewrite, link, or runtime call.")
+        val reviewedMapping = JSONObject()
+            .put("count", reviewedMappedImports)
+            .put("percent", coveragePercent(reviewedMappedImports, total))
+            .put("distinctImportSymbols", total)
+            .put("strictSameNameNdkSubsetCount", directCandidates)
+            .put("strictSameNameNdkSubsetPercent", coveragePercent(directCandidates, total))
+            .put("breakdownKindCountsSumToCount", true)
+            .put("breakdown", JSONObject()
+                .put("sameNameNdkOrSystemExport", reviewedMappedSameName)
+                .put("compilerRuntimeToolchain", reviewedMappedCompilerRuntime)
+                .put("concreteCompatImplementation", reviewedMappedCompatImplementation)
+                .put("reviewedSemanticApiTarget", reviewedMappedSemantic)
+                .put("kindCountsSum", reviewedMappedImports)
+                .put("explicitStubHandlerOnly", compatStubHandlers)
+                .put("unmapped", unmappedSymbols))
+            .put("kindCountsAreNotInterchangeable", true)
+            .put(
+                "note",
+                "Every observed import is assigned exactly one reviewed Android mapping kind, so mapping " +
+                    "coverage reaches 100% for a fully triaged IPA while the strict same-name NDK subset stays " +
+                    "separately reported and smaller. A mapping is a reviewed target only: no mapping count " +
+                    "proves a rewritten callsite, a linked implementation, generated code or gameplay.",
+            )
         return JSONObject()
             .put("schemaVersion", 7)
-            .put("measure", "Direct NDK name candidates count same-named public NDK/system or shared C++ runtime exports found in the reviewed catalog or current-device lookup. Candidate coverage is divided by all distinct imports; exact runtime export verification is reported both against candidate names and against all imports, with separate denominators. A current-device dlsym hit proves only that the public-library export resolves on this device/API level, not that the iOS caller ABI, relocation, callsite rewrite, or game link is compatible. Compiler-rt/libunwind names are toolchain candidates, not a libgcc_s.so alias or completed link. Runtime compatibility-shim counts identify concrete exports in libioscompat.so, but none proves IPA callsite rewriting or game linking. Classification coverage is triage, not implementation coverage; no count represents playable Android code. Registered compat stub handlers are explicit unimplemented resolution targets; only verified handlers identify tested implementation bodies.")
+            .put("measure", "Reviewed Android mapping coverage counts every observed import that the classifier assigned a reviewed Android mapping kind to (same-name public NDK/system or shared C++ runtime export, NDK compiler-rt/libunwind toolchain symbol, concrete libioscompat.so implementation export, or reviewed semantic API target). The strict same-name NDK candidate subset is reported separately with its own percent, so a 100% mapping figure never means 100% same-name matches. Candidate and mapping coverage are divided by all distinct imports; exact runtime export verification is reported both against candidate names and against all imports, with separate denominators. A current-device dlsym hit proves only that the public-library export resolves on this device/API level, not that the iOS caller ABI, relocation, callsite rewrite, or game link is compatible. Compiler-rt/libunwind names are toolchain candidates, not a libgcc_s.so alias or completed link. Runtime compatibility-shim counts identify concrete exports in libioscompat.so, but none proves IPA callsite rewriting or game linking. Classification coverage is triage, not implementation coverage; no count represents playable Android code. Registered compat stub handlers are explicit unimplemented resolution targets; only verified handlers identify tested implementation bodies.")
+            .put("reviewedMapping", reviewedMapping)
+            .put("reviewedMappingCount", reviewedMappedImports)
+            .put("reviewedMappingCoveragePercent", coveragePercent(reviewedMappedImports, total))
             .put("evidence", evidenceSummary)
             .put("runtimeNdkResolverStatus", if (resolveNdkLibrary == null) "NOT_RUN" else "CURRENT_DEVICE_DLSYM")
             .put("runtimeVerifiedAndroidApiLevel", if (resolveNdkLibrary == null) JSONObject.NULL else (runtimeApiLevel ?: JSONObject.NULL))

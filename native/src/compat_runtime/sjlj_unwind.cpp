@@ -7,7 +7,10 @@
 
 namespace iostodroid::compat_runtime {
 namespace {
-constexpr std::size_t kSjLjContextHeaderSize = 8 * sizeof(std::uint32_t);
+// The adapter links contexts through the first word of the guest's
+// jmp-buf (`prev` in GCC's SjLj_Function_Context); nothing beyond that
+// word is read or written, so the context only has to expose it.
+constexpr std::size_t kSjLjContextHeaderSize = sizeof(GuestAddress);
 }
 
 void SjLjUnwindAdapter::registerFunction(

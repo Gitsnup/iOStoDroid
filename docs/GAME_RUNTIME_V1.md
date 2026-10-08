@@ -2,10 +2,26 @@
 
 A `game-runtime-v1` APK packs a real iOS game executable and its bundle, runs
 the actual guest boot on-device, and shows that boot as a minimal diagnostic
-log. Guest execution stops at the first actually-used unimplemented import,
-but the Android launcher remains open with the stop reason rather than crashing.
+log. Guest execution stops at a documented boundary — the first actually-used
+unimplemented import, or the bounded instruction/time budget when the guest
+stays inside its own code — and the Android launcher remains open with the stop
+reason rather than crashing.
 It is not a conversion, not a static recompilation, and not gameplay; it never
 shows a preview or menu.
+
+## Native GL, not a reimplementation
+
+Guest OpenGL ES 1.1 calls are **forwarded to the platform's own EGL/GLES driver**
+(`libEGL.so`/`libGLESv1_CM.so`/`libGLESv2.so` opened at runtime); nothing is
+rasterized in-process. `renderbufferStorage:fromDrawable:` creates an EGL window
+surface on the launcher's Android surface (or an offscreen pbuffer when no surface
+was supplied), `presentRenderbuffer:` is `eglSwapBuffers`, and every guest pointer
+argument is translated through the mapped guest regions with a range check. A
+surface that arrives after the first offscreen attach makes the GL layer recreate
+its window surface, so late surfaces still receive frames. The report's `gles`
+block states which driver was loaded, whether the drawable was handed to the
+platform, `forwardedCalls`/`refusedCalls`/`framesPresented`, and every refusal as
+a named diagnostic: a rendered frame is guest output, not gameplay evidence.
 
 ## Behavior contract
 
@@ -14,19 +30,45 @@ shows a preview or menu.
    (`assets/bundle/**`), boot metadata (`assets/gameboot.json`), and the
    tested `libcompat_runtime_v1.so` guest-CPU runtime.
 2. The launcher (`dev.iostodroid.gameruntime.GameBootActivity`) runs the boot once
-   through `Java_dev_iostodroid_gameruntime_GameBootActivity_runGameBootAttempt`.
+   through `Java_dev_iostodroid_gameruntime_GameBootActivity_runGameBootAttempt`,
+   passing the app directory it extracts from `assets/bundle/**`. The runtime
+   mounts that directory as the guest's own bundle (read-only) plus writable
+   `/Documents` and `/Library` scratch directories, so the guest reads its real
+   data files; refused accesses are listed in the report's `guestFileSystem`
+   block instead of being invented.
 3. Unimplemented imports are bound to abort-on-call traps. The guest executes
    real instructions from the Mach-O entry point until it calls (or touches
-   data of) the first unimplemented import. Implemented adapters run for real
-   instead of trapping: libSystem memory/string/malloc, the Itanium C++ ABI
-   allocation entry points, the bounded Objective-C runtime, the AudioToolbox
-   session state calls, and the bounded application-lifecycle chain
+   data of) a documented boundary: the first unimplemented import it touches,
+   or the bounded instruction/time budget when the guest stays inside its own
+   code. Implemented adapters run for real
+   instead of trapping: the native OpenGL ES 1.1 forwarding (below), libSystem
+   memory/string/malloc and the file/stdio/math/time shims served by the virtual
+   file system, the ARM EABI compiler-runtime helpers, the bounded Objective-C
+   runtime, the AudioToolbox session state calls, and the bounded
+   application-lifecycle chain
    (`UIApplicationMain` -> delegate instantiation -> `applicationDidFinishLaunching:`
    -> bounded service of the queued background-thread body).
-4. The launcher shows loader/trap/instruction progress as a scrolling boot
-   log. When guest execution stops or setup fails, the launcher keeps the
-   diagnostic screen open; it does not throw an Android crash or show a preview.
-5. Every report keeps `status: "not_runnable"`. Executed instructions are
+4. The launcher is **fullscreen** (`SYSTEM_UI_FLAG_IMMERSIVE_STICKY` plus
+   layout through the display cutout) and runs in **sensor landscape** while the
+   guest boots, showing only the game: the recovered splash frames are shown
+   **once each** (~0.9 s apart) and the sequence then stays on the last frame —
+   it never cycles and touches never advance it. A `SurfaceView` above the
+   splash receives the guest's frames: its surface is handed to the runtime
+   (`setGameSurface` → `ANativeWindow` → EGL window surface) and the guest's
+   `renderbufferStorage:fromDrawable:`/`presentRenderbuffer:` pairs become
+   `eglCreateWindowSurface`/`eglSwapBuffers` on the platform GLES driver, so a
+   frame the guest renders covers the boot screen. The diagnostic panel stays
+   hidden while the guest runs and is revealed, after the launcher switches back
+   to **portrait**, when the attempt stops.
+5. The launcher shows loader/trap/instruction progress in that panel. When guest
+   execution stops or setup fails, the launcher keeps the fullscreen diagnostic
+   screen open; it does not throw an Android crash or show a preview. The stop
+   reason is reported as what it is: a named unimplemented import trap, the
+   bounded `TIME_LIMIT`/`INSTRUCTION_LIMIT` budget with the executed instruction
+   count (explicitly *not* an unimplemented import), a guest exception, a memory
+   or execution fault, or an unavailable CPU backend. A JSON `null` trap name is
+   never printed as an import called `null`.
+6. Every report keeps `status: "not_runnable"`. Executed instructions are
    loader/CPU progress, never evidence of a working game.
 
 ## Artifact names
@@ -85,32 +127,107 @@ signature/package/label/install audits) with game-runtime inputs:
 `GameRuntimeArtifactContract` re-validates name, package, source hash, signer,
 and digest against the report.
 
+## Launcher presentation
+
+- The launcher runs fullscreen in **sensor landscape** (the device can be turned
+  left or right) and shows **only the game**: the recovered splash frames are
+  shown fullscreen, each one exactly once, and the sequence stays on the last
+  frame instead of cycling; the guest's own EGL frames take over as soon as the
+  guest renders. The diagnostics panel stays hidden while the guest runs.
+- When the attempt stops for any reason (unimplemented import, budget,
+  fault, unavailable backend), the launcher switches back to **portrait** and
+  reveals the diagnostic log, so the stop reason is readable without touching
+  anything. The activity declares `configChanges` for orientation so rotating
+  the device never restarts the guest.
+
 ## Angry Birds v1.0 status (tracked fixture)
 
 `tests/data/AngryBirds_v1.0_os30.ipa` (thin ARMv6 Mach-O, 1,822,112 bytes,
 267 bundle files):
 
-- Loader: `LOADED_WITH_TRAPS`, 60 resolved / 518 trapped / 0 unresolved.
-- Boot: entry point reached, **340,309 guest instructions executed**. The
-  runtime enters `_main`, performs the `NSAutoreleasePool +new` setup, enters
-  `UIApplicationMain`, instantiates the image's own `AppController` delegate,
-  wires it into the `UIApplication` singleton, and delivers
-  `applicationDidFinishLaunching:` to the real guest implementation. Inside that
-  method the app builds its UIKit window/EAGL view (including `-[UIView layer]`
-  -> `CAEAGLLayer`, `numberWithBool:`, `dictionaryWithObjectsAndKeys:`,
-  `EAGLContext initWithAPI:`/`setCurrentContext:`, `addSubview:`,
-  `makeKeyAndVisible`) and then enters its engine's render setup, whose first
-  OpenGL ES call (from guest text around `0xAC50C`) stops the attempt.
+- Loader: `LOADED_WITH_TRAPS`, 171 resolved / 407 trapped / 0 unresolved. The
+  Darwin-only imports that Android has no same-name export for are now bound
+  through the translation layer described below (stream cells, ctype sweep,
+  EAGL keys, errno cell, rune locale, CoreFoundation class token, OpenAL).
+- Boot: entry point reached, **2,000,000 guest instructions executed** (the
+  bounded entry budget). The runtime enters `_main`, performs the
+  `NSAutoreleasePool +new` setup, enters `UIApplicationMain`, instantiates the
+  image's own `AppController` delegate, wires it into the `UIApplication`
+  singleton, delivers `applicationDidFinishLaunching:` to the real guest
+  implementation, and keeps running inside the app: it builds its UIKit
+  window/EAGL view (`-[UIView layer]` -> `CAEAGLLayer`, `numberWithBool:`,
+  `dictionaryWithObjectsAndKeys:`, `EAGLContext initWithAPI:` /
+  `setCurrentContext:`, `addSubview:`, `makeKeyAndVisible`), starts its engine
+  render setup (the GLES calls are forwarded to the host driver), and asks for
+  its own bundle data through the guest filesystem.
+- Stop: `INSTRUCTION_LIMIT` — the attempt ends at the bounded budget, not at an
+  unimplemented call: `trappedImport` is empty and `trapCalls` is `0` for this
+  image. When the guest does touch an unimplemented import the attempt still
+  stops there with the trap named, exactly as before.
 - Report: `lifecycle.applicationMainEntered: true`,
-  `applicationMainReturned: false` (the boot stopped inside the nested delegate
-  call), `delegateClassName: "AppController"`, nine recorded startup-chain
-  events, and `trappedImport: "_glFrontFace"` with `trapCalls: 1`.
+  `applicationMainReturned: false` (the boot was still running when the budget
+  ended), `delegateClassName: "AppController"`, ten recorded startup-chain
+  events, and the guest filesystem's refusals are named when no bundle mount is
+  configured.
 - The VFP unit is enabled for the guest (`CPACR` CP10/CP11 access and
   `FPEXC.EN`), because the ARMv6 image uses scalar VFP from its first delegate
   frame on; without it the attempt stopped on a decode fault at `vpush`.
 - The host suite (`tests/test_gameruntime.py`) and CI pin the *shape* of this
-  behavior (entry point reached, one named trapped import, a non-empty startup
-  chain); the manifest from the CI run is uploaded as
+  behavior (entry point reached, a documented stop boundary — a named trapped
+  import or a bounded execution limit — and a non-empty startup chain); the
+  manifest from the CI run is uploaded as
   `angrybirds-gameboot-artifacts`.
-- Remaining honest gap: OpenGL ES (51 `_gl*` imports) is **not** implemented, so
-  the attempt stops at the first GL call and nothing is rendered.
+- Remaining honest gap: on the host the OpenGL ES calls have no driver to
+  forward to, so nothing is rendered there; on Android the same calls are
+  forwarded to the platform GLES/EGL driver (see the GL forwarding section).
+
+## Darwin-only translation layer (`darwin_compat`)
+
+Android ships no system library that exports the Apple-spelled names the old
+Mach-O images import (`__tolower`, `___error`, `__stdoutp`, `__DefaultRuneLocale`,
+`kEAGLColorFormatRGB565`, `_gxx_personality_sj0`, OpenAL's `_alc*`/`_al*`, ...).
+Those imports are **not** added to the Android catalogs — inventing same-name
+NDK exports would be lying about the platform. Instead they get explicit minimal
+adapters in `native/src/compat_runtime/darwin_compat_shims.cpp`
+(`darwin_compat::ShimAdapter`, callout window `0xf0050000`–`0xf0080000`):
+
+- **ctype sweep** (`__tolower`, `__toupper`, `__maskrune`): ASCII/C-locale
+  behavior; bytes above `0x7f` are returned unchanged (no locale tables are
+  reproduced).
+- **stream cells** (`__stdinp`, `__stdoutp`, `__stderrp`): guest cells holding
+  real process-stream handles served by the compat filesystem; guest `fclose`
+  on them is a recorded no-op and never closes the host stream.
+- **errno cell** (`__error`): a single guest cell (per-thread errno is not
+  reproduced — stated in the reported diagnostics).
+- **rune locale** (`__DefaultRuneLocale`): a zeroed guest page; the table layout
+  is not reproduced and `__maskrune` does not read it.
+- **EAGL keys** (`kEAGLColorFormatRGB565`/`RGBA8`,
+  `kEAGLDrawablePropertyColorFormat`/`RetainedBacking`): real
+  `NSString` constant objects created through the Objective-C adapter.
+- **CoreFoundation token** (`__CFConstantStringClassReference`): a zeroed class
+  token; CoreFoundation string classes are not implemented.
+- **OpenAL** (14 `_al*` + 5 `_alc*` entries): state-only bookkeeping (generated
+  buffer/source ids, and per-source int/float/queue state round-tripped through
+  `_alGetSourcei`/`_alGetSourcef`). No audio is produced and the report says so.
+- **`_gxx_personality_sj0`**: an explicit fail-closed boundary — calling it
+  raises the guest exception path instead of pretending to unwind; the C++
+  exception runtime stays trapped.
+
+Each adapter is counted (`boundSymbols`, `ctypeCalls`, `openalCalls`,
+`streamCells`, `personalityBoundaries`) and the set is pinned by
+`native/tests/darwin_compat.cpp` (34 bindings) so a removal fails the suite. The
+host probe and the on-device JNI register the adapter next to the other shims and
+report a `darwinCompat` block.
+
+One loader capability was required for these data imports: a 32-bit Mach-O
+indirect symbol-pointer slot may hold the materialized guest **address of a data
+import**, not only a callout thunk address (`macho_loader.cpp`). Before this, a
+data import that arrived through a pointer slot (instead of an external
+relocation) was refused as unresolved.
+
+### Same-name NDK subset after this layer
+
+The translation layer changes what *runs*, not what *same-name* means: the
+honest same-name subset for this image stays **181/254 = 71.26%**, because these
+imports are served by compat implementations, not by same-name NDK exports. The
+reviewed-mapping figure (254/254) already counts every one of them.

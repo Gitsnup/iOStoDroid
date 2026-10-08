@@ -21,7 +21,9 @@
 // small, documented subset; anything outside it fails closed with a named
 // diagnostic instead of guessing a signature. None of this is a rendered frame,
 // a GPU surface, or gameplay evidence.
+#include "compat_runtime/gles_shims.hpp"
 #include "compat_runtime/objc_shims.hpp"
+#include "compat_runtime/virtual_file_system.hpp"
 
 #include <array>
 #include <chrono>
@@ -1130,9 +1132,41 @@ bool ShimAdapter::lifecycleSelector(CpuRegisterState &registers, GuestAddressSpa
         }
         if (receiverIsKindOf(receiverObject, kBundleClass)) {
             if (selectorName == "bundlePath" || selectorName == "resourcePath")
-                return finish(createGuestString(memory, "/iostodroid-bundle/App.app", true));
-            if (selectorName == "pathForResource:ofType:")
-                return finish(createGuestString(memory, "/iostodroid-bundle/App.app/resource", true));
+                return finish(createGuestString(memory, bundleGuestPath(), true));
+            // Resource lookups must name the file the bundle mount actually
+            // holds; a canned "/resource" path would make every fopen fail.
+            if (selectorName == "pathForResource:ofType:" ||
+                selectorName == "pathForResource:ofType:inDirectory:") {
+                std::string name;
+                std::string type;
+                if (auto *nameObject = objectForGuest(memory, registers.r[2]))
+                    name = nameObject->stringValue;
+                if (auto *typeObject = objectForGuest(memory, registers.r[3]))
+                    type = typeObject->stringValue;
+                if (name.empty())
+                    return finish(0);
+                std::string path = std::string(bundleGuestPath()) + "/";
+                if (selectorName == "pathForResource:ofType:inDirectory:") {
+                    // The fourth selector argument arrives on the guest stack.
+                    GuestAddress extraArgument = 0;
+                    if (registers.r[13] != 0)
+                        (void)memory.read(registers.r[13], &extraArgument,
+                                          sizeof(extraArgument));
+                    std::string directory;
+                    if (auto *directoryObject = objectForGuest(memory, extraArgument))
+                        directory = directoryObject->stringValue;
+                    if (!directory.empty()) {
+                        path += directory;
+                        path += "/";
+                    }
+                }
+                path += name;
+                if (!type.empty()) {
+                    path += ".";
+                    path += type;
+                }
+                return finish(createGuestString(memory, path, true));
+            }
             return false;
         }
         // ---- EAGLContext ---------------------------------------------------
@@ -1142,10 +1176,43 @@ bool ShimAdapter::lifecycleSelector(CpuRegisterState &registers, GuestAddressSpa
                 recordLifecycleEvent(lifecycle, "-[EAGLContext initWithAPI:]");
                 return finish(receiverAddress);
             }
-            if (selectorName == "presentRenderbuffer:")
+            if (selectorName == "presentRenderbuffer:") {
+                const bool presented = gles::forwarderFor(memory).presentDrawable();
+                recordLifecycleEvent(lifecycle,
+                                     presented
+                                         ? "-[EAGLContext presentRenderbuffer:] -> frame presented"
+                                         : "-[EAGLContext presentRenderbuffer:] -> no drawable storage");
                 return finish(1);
-            if (selectorName == "renderbufferStorage:fromDrawable:")
+            }
+            if (selectorName == "renderbufferStorage:fromDrawable:") {
+                // The drawable's rectangle lives in the layer's materialized instance
+                // slots (0..3 = frame); a size the runtime cannot read stays
+                // unattached instead of being guessed.
+                std::uint32_t width = 0;
+                std::uint32_t height = 0;
+                if (auto *drawable = objectForGuest(memory, registers.r[2]);
+                    drawable != nullptr && drawable->ivars.size() >= 4) {
+                    const float rawWidth = floatFromBits(drawable->ivars[2]);
+                    const float rawHeight = floatFromBits(drawable->ivars[3]);
+                    if (rawWidth >= 1.0f && rawHeight >= 1.0f && rawWidth <= 4096.0f &&
+                        rawHeight <= 4096.0f) {
+                        width = static_cast<std::uint32_t>(rawWidth);
+                        height = static_cast<std::uint32_t>(rawHeight);
+                    }
+                }
+                if (width == 0 || height == 0) {
+                    recordLifecycleEvent(lifecycle,
+                                         "-[EAGLContext renderbufferStorage:fromDrawable:] -> "
+                                         "drawable size unavailable");
+                    return finish(1);
+                }
+                gles::forwarderFor(memory).attachDrawable(memory, width, height);
+                recordLifecycleEvent(lifecycle,
+                                     "-[EAGLContext renderbufferStorage:fromDrawable:] -> " +
+                                         std::to_string(width) + "x" +
+                                         std::to_string(height));
                 return finish(1);
+            }
             if (selectorName == "setCurrentContext:") {
                 lifecycle.currentContext = registers.r[2];
                 return finish(0);

@@ -65,7 +65,7 @@ void testLibc() {
     CHECK(iostodroid_compat_memcpy(copiedBytes, sourceBytes, sizeof(sourceBytes)) == copiedBytes);
     CHECK(copiedBytes[0] == 9 && copiedBytes[3] == 6);
 
-    CHECK(iostodroid_compat_strlen("iostodroid") == 5);
+    CHECK(iostodroid_compat_strlen("iostodroid") == 10);
     CHECK(iostodroid_compat_strcmp("abc", "abc") == 0);
     CHECK(iostodroid_compat_strcmp("abc", "abd") < 0);
     CHECK(iostodroid_compat_strncmp("abcd", "abzz", 2) == 0);
@@ -141,16 +141,16 @@ void testStdio() {
                                              : "/tmp/iostodroid_shim_test.txt";
     FILE *stream = iostodroid_compat_fopen(path, "w+");
     CHECK(stream != nullptr);
-    CHECK(iostodroid_compat_fwrite("iostodroid", 1, 5, stream) == 5);
+    CHECK(iostodroid_compat_fwrite("iostodroid", 1, 10, stream) == 10);
     CHECK(iostodroid_compat_fputs("-", stream) >= 0);
     CHECK(iostodroid_compat_fprintf(stream, "%d", 42) == 2);
     CHECK(iostodroid_compat_fflush(stream) == 0);
     CHECK(iostodroid_compat_fseek(stream, 0, SEEK_SET) == 0);
     char read[32] = {};
-    CHECK(iostodroid_compat_fread(read, 1, sizeof(read) - 1, stream) == 8);
+    CHECK(iostodroid_compat_fread(read, 1, sizeof(read) - 1, stream) == 13);
     CHECK(std::string(read) == "iostodroid-42");
     CHECK(iostodroid_compat_feof(stream) != 0);
-    CHECK(iostodroid_compat_ftell(stream) == 8);
+    CHECK(iostodroid_compat_ftell(stream) == 13);
     CHECK(iostodroid_compat_fseek(stream, 0, SEEK_SET) == 0);
     char line[16] = {};
     CHECK(iostodroid_compat_fgets(line, sizeof(line), stream) == line);

@@ -28,6 +28,7 @@ from .ceiling import (
 from .icons import extract as extract_icon, launcher as launcher_icon
 from .ir import Unsupported
 from .llvm_ir import emit as emit_llvm_ir, verify as verify_llvm_ir
+from .plan import plan_coverage
 from .recon import reconstruct
 from .recon.report import blockers as recon_blockers, markdown as recon_markdown, summary as recon_summary
 
@@ -115,6 +116,50 @@ class Pipeline:
             },
         }
         self._last_save = None
+
+    def _record_static_recompilation_plan(self, executable: Path) -> None:
+        """Record how much of this slice the host lifter statically recompiles.
+
+        Only reached when the bounded complete-game prover refused the input, so
+        the proven-entry artifact path never calls it. The plan measures the
+        game's own code bytes that the fail-closed emitter translates into
+        portable C; it never claims a linked game, an APK or device code, and it
+        leaves ``conversionProgress`` at ``NOT_BUILT``.
+        """
+        try:
+            plan = plan_coverage(executable)
+        except Exception as exc:  # pragma: no cover - defensive, plan_coverage never raises
+            plan = {
+                "status": "UNAVAILABLE",
+                "percent": 0,
+                "reason": f"the bundled plan pass failed: {exc}",
+                "countsAsConversionProgress": False,
+            }
+        self.report["staticRecompilationPlan"] = plan
+        if plan.get("status") not in ("COMPUTED", "TRUNCATED") or plan.get("percent", 0) <= 0:
+            self.log(
+                "STATIC_RECOMPILATION_PLAN",
+                f'Host static-recompilation plan: {plan.get("status")} — '
+                f'{plan.get("reason", "no statically recompilable code measured")}',
+            )
+            return
+        port = self.report["portProgress"]
+        port["percent"] = plan["percent"]
+        port["status"] = "PARTIAL_HOST_STATIC_RECOMPILATION"
+        port["metric"] = plan["metric"]
+        port["recompiledFunctions"] = plan["functionsStaticallyRecompiled"]
+        port["totalTextBytes"] = plan["executableTextBytes"]
+        port["recompiledTextBytes"] = plan["staticallyRecompiledBytes"]
+        port["hostPlanOnly"] = True
+        port["completeGameConversion"] = False
+        port["basis"] = plan["basis"]
+        self.log(
+            "STATIC_RECOMPILATION_PLAN",
+            f'Host static-recompilation plan: {plan["percent"]}% of executable __text '
+            f'({plan["functionsStaticallyRecompiled"]}/{plan["functionsDiscovered"]} discovered function(s), '
+            f'{plan["staticallyRecompiledBytes"]}/{plan["executableTextBytes"]} byte(s)) — source bytes only, '
+            "nothing was linked into an APK",
+        )
 
     def _attempt_experimental_shell(self, work: Path, program) -> dict:
         """Try to build the honest experimental shell APK around the artifacts.
@@ -480,6 +525,7 @@ class Pipeline:
                             f'{(self.report.get("conversionCeiling") or {}).get("ceilingReason")} '
                             "(see the Conversion ceiling section of reconstruction.md)"
                         )
+                    self._record_static_recompilation_plan(executable)
                     self.transition("BLOCKED", str(exc))
                     return self.report
                 # Emit a real, self-contained Android function artifact from the

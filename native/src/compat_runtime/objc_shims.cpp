@@ -1228,6 +1228,16 @@ GuestAddress ShimAdapter::createGuestString(GuestAddressSpace &memory,
     }
 }
 
+GuestAddress ShimAdapter::createConstantString(GuestAddressSpace &memory,
+                                              const std::string &value, std::string &reason) {
+    try {
+        return createGuestString(memory, value, false);
+    } catch (const std::exception &error) {
+        reason = std::string("constant string could not be materialized: ") + error.what();
+        return 0;
+    }
+}
+
 GuestAddress ShimAdapter::createGuestStringArray(GuestAddressSpace &memory,
                                                  const std::vector<std::string> &values,
                                                  bool autorelease) {

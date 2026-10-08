@@ -1,19 +1,24 @@
 // Host boot-attempt probe: loads one 32-bit ARM Mach-O main executable, binds
-// unimplemented imports to abort-on-call traps, and executes real guest
-// instructions until the first actually-used missing import.
+// unimplemented imports to abort-on-call traps, forwards the OpenGL ES calls to
+// the host driver, and executes real guest instructions until the first
+// actually-used missing import.
 //
 // This is a measurement tool, not a game: the JSON report keeps status
 // "not_runnable" and carries the executed-instruction count plus the stopping
 // import. Exit code 0 means a report was written (even when blocked); 1 means
 // the probe itself failed (usage or I/O error).
 #include "compat_runtime/audio_session_shims.hpp"
+#include "compat_runtime/compiler_rt_shims.hpp"
 #include "compat_runtime/cpu.hpp"
+#include "compat_runtime/darwin_compat_shims.hpp"
+#include "compat_runtime/gles_shims.hpp"
 #include "compat_runtime/libsystem_shims.hpp"
 #include "compat_runtime/objc_shims.hpp"
 #include "compat_runtime/runner.hpp"
 #include "compat_runtime/shim_registry.hpp"
 #include "compat_runtime/sjlj_unwind.hpp"
 #include "compat_runtime/trap_shims.hpp"
+#include "compat_runtime/virtual_file_system.hpp"
 
 #include "json.hpp"
 
@@ -46,26 +51,151 @@ std::vector<std::uint8_t> readMainBinary(const char *path) {
 } // namespace
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        std::cerr << "usage: iostodroid-gameboot <macho-main-executable>\n";
+    if (argc != 2 && argc != 3) {
+        std::cerr << "usage: iostodroid-gameboot <macho-main-executable> [bundle-payload-directory]\n"
+                     "  The optional second argument is the extracted .app directory the guest's\n"
+                     "  own file reads are served from; without it every guest file access is\n"
+                     "  refused with a named diagnostic instead of inventing file contents.\n";
         return 1;
     }
     try {
         const auto bytes = readMainBinary(argv[1]);
+        // The guest's own bundle reads are served from directories this front end
+        // chose. The bundle mount is read-only; the fabricated NSHomeDirectory
+        // results (Documents/Library/"~") get a writable scratch directory.
+        auto &files = iostodroid::compat_runtime::guestFileSystem();
+        if (argc == 3) {
+            files.mount(iostodroid::compat_runtime::bundleGuestPath(), argv[2], false);
+            std::string scratch = std::string(argv[2]) + "/../iostodroid-home";
+            files.mount("/Documents", scratch + "/Documents", true);
+            files.mount("/Library", scratch + "/Library", true);
+        }
         iostodroid::compat_runtime::ShimRegistry shims;
         iostodroid::compat_runtime::objc::ShimAdapter objcShims;
         iostodroid::compat_runtime::libsystem::ShimAdapter libsystemShims;
         iostodroid::compat_runtime::audio::ShimAdapter audioShims;
         iostodroid::compat_runtime::SjLjUnwindAdapter sjljUnwind;
+        iostodroid::compat_runtime::compiler_rt::ShimAdapter compilerRuntime;
+        iostodroid::compat_runtime::gles::Forwarder glesForwarder;
+        iostodroid::compat_runtime::darwin_compat::ShimAdapter darwinShims(&objcShims);
         objcShims.registerBindings(shims);
         libsystemShims.registerBindings(shims);
         audioShims.registerBindings(shims);
         sjljUnwind.registerBindings(shims);
+        compilerRuntime.registerBindings(shims);
+        glesForwarder.registerBindings(shims);
+        darwinShims.registerBindings(shims);
         iostodroid::compat_runtime::TrapShimAdapter traps;
         const auto cpu = iostodroid::compat_runtime::createArm32CpuBackend();
         iostodroid::compat_runtime::BootAttemptRunner runner(shims, *cpu, traps,
                                                        objcShims.lifecycleHooks());
-        const iostodroid::Json report = runner.run(bytes, true);
+        iostodroid::Json report = runner.run(bytes, true);
+
+        // Compiler-runtime observability: how much of the guest's integer
+        // division/modulo and 64-bit conversion arithmetic ran through the
+        // implemented helpers.
+        {
+            iostodroid::Json helpers = iostodroid::Json::object();
+            helpers["implementedSymbols"] = static_cast<std::uint64_t>(9);
+            helpers["calls"] = compilerRuntime.callCount();
+            helpers["basis"] =
+                "ARM EABI compiler-runtime helpers (__divsi3/__modsi3/__udivsi3/__umodsi3, "
+                "__divdi3/__moddi3, __floatdidf/__floatdisf/__fixdfdi); the C++ exception "
+                "runtime stays fail-closed through traps";
+            report["compilerRuntime"] = std::move(helpers);
+        }
+
+        // Filesystem observability: which directories the guest's own file
+        // reads were served from, and every access the runtime refused.
+        {
+            iostodroid::Json guestFiles = iostodroid::Json::object();
+            iostodroid::Json mounts = iostodroid::Json::array();
+            for (const auto &mount : files.mounts()) {
+                iostodroid::Json entry = iostodroid::Json::object();
+                entry["guestPath"] = mount.guestPrefix;
+                entry["hostDirectory"] = mount.hostDirectory;
+                entry["writable"] = mount.writable;
+                mounts.push(std::move(entry));
+            }
+            guestFiles["mounts"] = std::move(mounts);
+            guestFiles["opens"] = files.openCount();
+            guestFiles["reads"] = files.readCount();
+            guestFiles["bytesRead"] = files.bytesRead();
+            guestFiles["writes"] = files.writeCount();
+            guestFiles["bytesWritten"] = files.bytesWritten();
+            guestFiles["refused"] = files.refusedCount();
+            iostodroid::Json opened = iostodroid::Json::array();
+            for (const auto &path : files.openPaths())
+                opened.push(iostodroid::Json(path));
+            guestFiles["openPaths"] = std::move(opened);
+            iostodroid::Json diagnostics = iostodroid::Json::array();
+            for (const auto &diagnostic : files.diagnostics())
+                diagnostics.push(iostodroid::Json(diagnostic));
+            guestFiles["diagnostics"] = std::move(diagnostics);
+            guestFiles["note"] =
+                "guest file reads are served from the mounted bundle payload; refused "
+                "accesses are listed in diagnostics";
+            report["guestFileSystem"] = std::move(guestFiles);
+        }
+
+        // GL observability: which driver was found, whether its draws are handed to
+        // the real GLES implementation, and every call the runtime had to refuse.
+        {
+            const auto *context = iostodroid::compat_runtime::gles::lastForwarder();
+            const auto driver = context != nullptr
+                                    ? context->driver()
+                                    : iostodroid::compat_runtime::gles::DriverReport{};
+            iostodroid::Json gles = iostodroid::Json::object();
+            gles["hostGlesDefines"] = static_cast<std::uint64_t>(1);
+            gles["driverGlesLibraryLoaded"] = driver.glesLoaded;
+            gles["driverEglLibraryLoaded"] = driver.eglLoaded;
+            gles["driverDetail"] = driver.detail;
+            gles["drawableReady"] = context != nullptr && context->drawableReady();
+            gles["presentingToWindow"] = context != nullptr && context->presentingToWindow();
+            gles["drawableWidth"] =
+                context != nullptr ? static_cast<std::uint64_t>(context->drawableWidth()) : 0;
+            gles["drawableHeight"] =
+                context != nullptr ? static_cast<std::uint64_t>(context->drawableHeight()) : 0;
+            gles["forwardedCalls"] =
+                context != nullptr ? static_cast<std::uint64_t>(context->forwardedCalls()) : 0;
+            gles["refusedCalls"] =
+                context != nullptr ? static_cast<std::uint64_t>(context->refusedCalls()) : 0;
+            gles["framesPresented"] =
+                context != nullptr ? static_cast<std::uint64_t>(context->framesPresented()) : 0;
+            iostodroid::Json diagnostics = iostodroid::Json::array();
+            if (context != nullptr) {
+                for (const auto &diagnostic : context->diagnostics())
+                    diagnostics.push(iostodroid::Json(diagnostic));
+            }
+            gles["diagnostics"] = std::move(diagnostics);
+            gles["note"] =
+                "guest OpenGL ES 1.1 calls are forwarded to the platform GLES/EGL driver; "
+                "refused calls are listed in diagnostics; a rendered frame is guest output, "
+                "not gameplay evidence and not a playable conversion";
+            report["gles"] = std::move(gles);
+        }
+
+        // Darwin-only translation layer: names Android does not ship get an
+        // explicit, individually reported adapter instead of a trap.
+        {
+            iostodroid::Json compat = iostodroid::Json::object();
+            compat["boundSymbols"] = static_cast<std::uint64_t>(darwinShims.boundSymbolCount());
+            compat["ctypeCalls"] = darwinShims.ctypeCalls();
+            compat["openalCalls"] = darwinShims.openalCalls();
+            compat["streamCells"] = darwinShims.streamCellCount();
+            compat["personalityBoundaries"] = darwinShims.personalityBoundaries();
+            iostodroid::Json diagnostics = iostodroid::Json::array();
+            for (const auto &diagnostic : darwinShims.diagnostics())
+                diagnostics.push(iostodroid::Json(diagnostic));
+            compat["diagnostics"] = std::move(diagnostics);
+            compat["note"] =
+                "Darwin-only imports with no Android system export are served by explicit "
+                "minimal adapters: real process-stream cells, ASCII C-locale ctype, real "
+                "NSString EAGL keys, a guest errno cell, a state-only OpenAL subset and a "
+                "fail-closed SJLJ personality boundary; none of them is a same-name NDK export";
+            report["darwinCompat"] = std::move(compat);
+        }
+
         std::cout << report.dump() << "\n";
 
         const auto &fields = report.fields;

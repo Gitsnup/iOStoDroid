@@ -248,8 +248,51 @@ class MainActivity : Activity() {
         else -> if (lightMode) Color.rgb(145, 83, 0) else Color.rgb(245, 203, 116)
     }
     private fun formatBytes(n: Long) = "%.1f MiB".format(n / 1048576.0)
+
+    /**
+     * Headline for import triage: every reviewed Android mapping kind first (each
+     * import gets exactly one), then the strict same-name NDK subset, which is
+     * deliberately smaller. Neither number is implementation or linkage.
+     */
+    private fun mappingCoverageSummary(mapping: JSONObject): String {
+        val total = mapping.optInt("distinctImportSymbols", 0)
+        if (total == 0) return "Android API candidates: N/A (no imports)"
+        val direct = mapping.optInt("mappedNameCandidates", 0)
+        val directPercent = AndroidApiMapper.coveragePercent(direct, total)
+        val reviewed = mapping.optInt("reviewedMappingCount", direct)
+        val reviewedPercent = AndroidApiMapper.coveragePercent(reviewed, total)
+        val breakdown = mapping.optJSONObject("reviewedMapping")?.optJSONObject("breakdown")
+        val kinds = if (breakdown == null) emptyList() else listOf(
+            breakdown.optInt("sameNameNdkOrSystemExport", 0) to "same-name NDK/system exports",
+            breakdown.optInt("concreteCompatImplementation", 0) to "compiled compat implementations",
+            breakdown.optInt("compilerRuntimeToolchain", 0) to "toolchain-runtime candidates",
+            breakdown.optInt("reviewedSemanticApiTarget", 0) to "semantic API targets",
+        ).filter { it.first > 0 }.map { "${it.first} ${it.second}" }
+        return "Reviewed Android mappings: $reviewedPercent% ($reviewed/$total" +
+            (if (kinds.isEmpty()) "" else " = ${kinds.joinToString(" + ")}") + ")" +
+            " · strict same-name NDK subset (smaller by design, its own measure): $directPercent% ($direct/$total)"
+    }
+
+    /**
+     * Which top-level screen is showing, so the system back gesture navigates
+     * inside the app instead of closing it: detail/settings go back to the Game
+     * Library, and only the library itself closes the app.
+     */
+    private enum class Screen { LIBRARY, DETAIL, SETTINGS }
+    private var currentScreen = Screen.LIBRARY
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (currentScreen == Screen.LIBRARY) {
+            super.onBackPressed()
+            return
+        }
+        home()
+    }
+
     private fun home() {
         selected = null; screen()
+        currentScreen = Screen.LIBRARY
         text("IOSTODROID  /  IPA CONVERTER", 11f, accent, true)
         text("IPA to Android", 30f, textColor, true)
         text("Import an IPA to automatically inspect its code and Android compatibility.", 15f, muted)
@@ -294,7 +337,11 @@ class MainActivity : Activity() {
             text(state, 11f, statusColor(state), true, item)
             report.optJSONObject("portProgress")?.let { port ->
                 val percent = port.optDouble("percent", port.optInt("percent", 0).toDouble())
-                text("Android code-byte static recompilation: ${formatPortPercent(percent)}% · scope in the basis · not gameplay", 11f, statusColor("BLOCKED"), true, item)
+                val planPercent = report.optJSONObject("staticRecompilationPlan")
+                    ?.takeIf { it.optString("status", "") in listOf("COMPUTED", "TRUNCATED") }
+                    ?.optDouble("percent", 0.0)
+                val planClause = if (planPercent != null) " · host plan: ${formatPortPercent(planPercent)}% of __text (not linked)" else ""
+                text("Android code-byte static recompilation: ${formatPortPercent(percent)}% · scope in the basis · not gameplay$planClause", 11f, statusColor("BLOCKED"), true, item)
             }
             report.optJSONObject("analysisProgress")?.let { analysis ->
                 val value = analysis.optInt("percent", 0)
@@ -340,7 +387,7 @@ class MainActivity : Activity() {
                 val stubs = mapping.optInt("compatStubHandlerCount", 0)
                 val stubSummary = if (stubs > 0) "$stubs compat stub handlers (unimplemented; not API bodies) · " else ""
                 val summary = if (total == 0) "API symbol triage: N/A (no imported symbols) · $compatSummary$compilerSummary · generated replacements: $generated"
-                    else "Symbol triage: $triage% ($classified/$total) · direct NDK candidates: $coverage% ($mapped/$total) · $runtimeSummary · $compatSummary$compilerSummary · $stubSummary$semantic semantic · $unmapped unmapped · generated replacements: $generated"
+                    else "Symbol triage: $triage% ($classified/$total) · ${mappingCoverageSummary(mapping)} · $runtimeSummary · $compatSummary$compilerSummary · $stubSummary$semantic semantic · $unmapped unmapped · generated replacements: $generated"
                 text(summary, 11f, muted, parent = item)
             }
             report.optJSONObject("hostConversion")?.takeIf { it.optString("status") == "ATTACHED" }?.let { host ->
@@ -361,6 +408,7 @@ class MainActivity : Activity() {
     private fun settingsScreen() {
         if (Jobs.busy) return
         screen()
+        currentScreen = Screen.SETTINGS
         button("← Back") { home() }
         text("Settings", 28f, textColor, true)
         text("Appearance and host analysis target architecture.", 14f, muted)
@@ -448,6 +496,7 @@ class MainActivity : Activity() {
     }
     private fun detail(dir: File) {
         selected = dir; screen()
+        currentScreen = Screen.DETAIL
         val report = try {
             JSONObject(File(dir, "report.json").readText())
         } catch (_: Exception) {
@@ -522,7 +571,7 @@ class MainActivity : Activity() {
                 if (verifiedHandlers > 0) append(" · compat verified handlers: $verifiedHandlers")
             }
             val summary = if (total == 0) "Android API candidates: N/A (no imports)$compatSummary$compilerSummary"
-                else "Symbol triage: $triage% ($classified/$total) · direct NDK name candidates: $coverage% ($mapped/$total)$runtimeSummary$compatSummary$compilerSummary$stubSummary · semantic rewrites: $semantic · unmapped: $unmapped"
+                else "Symbol triage: $triage% ($classified/$total) · ${mappingCoverageSummary(mapping)}$runtimeSummary$compatSummary$compilerSummary$stubSummary · semantic rewrites: $semantic · unmapped: $unmapped"
             text(summary, 16f, textColor, true, mappingCard)
             val generated = report.optJSONObject("hostConversion")?.optInt("generatedApiReplacements", 0) ?: 0
             val triageNote = if (mapping.optString("classificationStatus") == "COMPLETE" && total > 0)
@@ -556,6 +605,37 @@ class MainActivity : Activity() {
             val percent = port.optDouble("percent", port.optInt("percent", 0).toDouble())
             text("Android code-byte static recompilation progress: ${formatPortPercent(percent)}%", 16f, statusColor("BLOCKED"), true, portCard)
             text(port.optString("basis"), 13f, muted, parent = portCard)
+            val plan = report.optJSONObject("staticRecompilationPlan")
+            if (plan != null) {
+                val planStatus = plan.optString("status", "UNAVAILABLE")
+                if (planStatus == "COMPUTED" || planStatus == "TRUNCATED") {
+                    val planPercent = plan.optDouble("percent", plan.optInt("percent", 0).toDouble())
+                    text(
+                        "Host static-recompilation plan: ${formatPortPercent(planPercent)}% of executable __text " +
+                            "(${plan.optInt("functionsStaticallyRecompiled", 0)}/${plan.optInt("functionsDiscovered", 0)} " +
+                            "discovered function(s), ${plan.optInt("staticallyRecompiledBytes", 0)}/" +
+                            "${plan.optInt("executableTextBytes", 0)} byte(s)) — host source bytes only, " +
+                            "not linked into an APK and not device code.",
+                        12f, muted, parent = portCard,
+                    )
+                } else {
+                    val reason = plan.optString("reason", "")
+                    val detail = if (reason.isBlank()) "" else ": $reason"
+                    text(
+                        "Host static-recompilation plan: not measured here ($planStatus$detail). " +
+                            "The device prover only recompiles an executable proven to be one closed-integer routine; " +
+                            "run the host CLI (python3 -m iostodroid analyze …) to compute the wider plan for this IPA.",
+                        12f, muted, parent = portCard,
+                    )
+                }
+            } else if (port.optString("status") == "NO_RUNNABLE_ANDROID_CODE_BUILT") {
+                text(
+                    "The on-device prover statically recompiles an executable only when its whole code is one " +
+                        "proven closed-integer routine, so a full game reports 0% here. Run the host CLI " +
+                        "(python3 -m iostodroid analyze …) for the wider static-recompilation plan of the same IPA.",
+                    12f, muted, parent = portCard,
+                )
+            }
         }
         report.optJSONObject("analysisProgress")?.let { analysis ->
             val analysisCard = card()

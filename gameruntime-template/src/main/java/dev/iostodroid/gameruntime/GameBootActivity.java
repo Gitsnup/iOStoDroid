@@ -1,6 +1,7 @@
 package dev.iostodroid.gameruntime;
 
 import android.app.Activity;
+import android.content.pm.ActivityInfo;
 import android.content.res.AssetManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -9,12 +10,17 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -26,8 +32,11 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -42,10 +51,14 @@ import java.util.zip.Inflater;
  * Launcher of a game-runtime boot-attempt APK (contract "game-runtime-v1").
  *
  * <p>The APK embeds one authorized IPA main executable and its bundle assets.
- * This activity renders the recovered bundle splash screen (supporting standard
- * PNG/JPEG, Apple CgBI PNGs, and sprite-sheet descriptors such as
- * SPLASHES.png + SPLASHES.dat) in a visual viewport while running the real guest
- * boot through libcompat_runtime_v1.so and showing the boot attempt diagnostic log.
+ * This activity runs in fullscreen and plays the recovered bundle splash screen
+ * (supporting standard PNG/JPEG, Apple CgBI PNGs, and sprite-sheet descriptors
+ * such as SPLASHES.png + SPLASHES.dat) as an automatically advancing boot
+ * animation while running the real guest boot through libcompat_runtime_v1.so.
+ * The splash never needs a touch: it advances on its own while the guest boots
+ * and stops on a stable frame when the boot attempt ends. When guest execution
+ * stops or setup fails, the fullscreen diagnostic panel stays open with the
+ * exact stop reason instead of crashing.
  */
 public final class GameBootActivity extends Activity {
     private static final String RUNTIME_LIBRARY = "compat_runtime_v1";
@@ -53,11 +66,18 @@ public final class GameBootActivity extends Activity {
     private static final String METADATA_ASSET = "gameboot.json";
     private static final long MAX_EXECUTABLE_BYTES = 256L * 1024L * 1024L;
     private static final long MAX_METADATA_BYTES = 4L * 1024L * 1024L;
+    /** Asset directory that carries the guest's own bundle payload. */
+    private static final String PAYLOAD_ASSET_ROOT = "bundle";
+    private static final String PAYLOAD_MARKER_PREFIX = ".iostodroid-payload-";
+    private static final long MAX_PAYLOAD_FILE_BYTES = 1024L * 1024L * 1024L;
+    private static final int MAX_PAYLOAD_DEPTH = 24;
     private static final int MAX_SPLASH_IMAGE_BYTES = 16 * 1024 * 1024;
     private static final int MAX_SPLASH_DIMENSION = 4096;
     private static final int MAX_CGBI_INFLATED_BYTES = 16 * 1024 * 1024;
     private static final int DEFAULT_VIEWPORT_WIDTH = 480;
     private static final int DEFAULT_VIEWPORT_HEIGHT = 320;
+    /** Automatic boot-animation interval between recovered splash frames. */
+    private static final long SPLASH_FRAME_INTERVAL_MS = 900L;
     private static final byte[] PNG_SIGNATURE = new byte[] {
         (byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
     };
@@ -69,11 +89,53 @@ public final class GameBootActivity extends Activity {
     private ScrollView scroller;
     private ImageView splashImageView;
     private TextView splashCaptionView;
+    private SurfaceView gameSurfaceView;
+    private LinearLayout overlayView;
     private final List<SplashFrame> activeSplashFrames = new ArrayList<>();
     private int currentSplashIndex = 0;
+    private boolean splashAnimationRunning = false;
+    private boolean bootFinished = false;
     private volatile boolean destroyed = false;
 
-    private static native String runGameBootAttempt(byte[] mainBinary, boolean authorizationConfirmed);
+    private final Runnable splashAdvance = new Runnable() {
+        @Override
+        public void run() {
+            if (destroyed || bootFinished || activeSplashFrames.size() <= 1) {
+                splashAnimationRunning = false;
+                return;
+            }
+            // Every recovered splash frame is shown once and the sequence then
+            // stays on the last frame: the boot screen never cycles back.
+            if (currentSplashIndex >= activeSplashFrames.size() - 1) {
+                splashAnimationRunning = false;
+                return;
+            }
+            showSplashFrame(currentSplashIndex + 1);
+            if (currentSplashIndex < activeSplashFrames.size() - 1) {
+                mainHandler.postDelayed(this, SPLASH_FRAME_INTERVAL_MS);
+            } else {
+                splashAnimationRunning = false;
+            }
+        }
+    };
+
+    private static native String runGameBootAttempt(byte[] mainBinary, String payloadDirectory,
+            boolean authorizationConfirmed);
+
+    /**
+     * Hands the on-screen surface to the runtime so the guest's EAGL drawable can
+     * present to it through EGL; a null surface detaches it again. The native
+     * runtime is absent in unit tests, so publishing is guarded.
+     */
+    private static native void setGameSurface(Surface surface);
+
+    private static void publishGameSurface(Surface surface) {
+        try {
+            setGameSurface(surface);
+        } catch (Throwable ignored) {
+            // No native runtime in this process (unit tests): nothing to attach.
+        }
+    }
 
     /** Descriptor for a single sprite region inside a game splash sprite sheet (e.g. SPLASHES.dat). */
     public static final class SplashSpriteEntry {
@@ -156,13 +218,22 @@ public final class GameBootActivity extends Activity {
     /**
      * Report a terminal boot result without throwing on Android's main thread.
      * A missing import or runtime dependency should leave useful diagnostics on
-     * screen, not turn a handled boot failure into an application crash.
+     * screen, not turn a handled boot failure into an application crash. The
+     * splash animation stops on its current frame so the stop reason is stable.
      */
     private void showTerminalState(final String title, final String detail) {
+        bootFinished = true;
         mainHandler.post(new Runnable() {
             @Override
             public void run() {
                 if (destroyed || titleView == null || logView == null) return;
+                splashAnimationRunning = false;
+                mainHandler.removeCallbacks(splashAdvance);
+                // The attempt is over: turn the device back to portrait and show
+                // the diagnostics the guest produced.
+                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+                if (gameSurfaceView != null) gameSurfaceView.setVisibility(View.GONE);
+                if (overlayView != null) overlayView.setVisibility(View.VISIBLE);
                 titleView.setText(title);
                 titleView.setTextColor(Color.rgb(255, 190, 92));
                 logView.append(detail);
@@ -220,20 +291,62 @@ public final class GameBootActivity extends Activity {
                         .append(loader.optInt("unresolvedSymbolCount", 0)).append(" unresolved)");
             }
             summary.append("\n");
+            long executed = 0;
+            String executionStatus = "";
             if (execution != null) {
-                summary.append("Executed ").append(execution.optLong("instructions", 0)).append(" guest instruction(s); ");
-                summary.append("status ").append(execution.optString("status", "?")).append("\n");
+                executed = execution.optLong("instructions", 0);
+                executionStatus = execution.optString("status", "");
+                summary.append("Executed ").append(executed).append(" guest instruction(s); ");
+                summary.append("status ").append(executionStatus.isEmpty() ? "?" : executionStatus).append("\n");
             }
-            String trapped = report.optString("trappedImport", "");
-            if (!trapped.isEmpty()) summary.append("Stopped at unimplemented import: ").append(trapped).append("\n");
+            // A JSON null must never be printed as the literal import name "null":
+            // that produced a diagnostic claiming a stop at an unnamed import.
+            if (!report.isNull("trappedImport")) {
+                String trapped = report.optString("trappedImport", "");
+                if (!trapped.isEmpty() && !"null".equals(trapped)) {
+                    summary.append("Stopped at unimplemented import: ").append(trapped).append("\n");
+                }
+            } else if ("STOPPED_AT_TRAP".equals(executionStatus)) {
+                summary.append("The guest reached an unimplemented import trap, but the report did not name it.\n");
+            }
             JSONArray trappedSymbols = report.optJSONArray("trappedSymbols");
             if (trappedSymbols != null) summary.append("Trapped imports bound: ").append(trappedSymbols.length()).append("\n");
+            String budgetNote = budgetStopDescription(executed, executionStatus);
+            if (!budgetNote.isEmpty()) summary.append(budgetNote).append("\n");
             String reason = report.optString("reason", "");
             if (!reason.isEmpty()) summary.append(reason);
             return summary.toString();
         } catch (Exception error) {
             return "Unparseable boot report (" + error + "): " + reportText;
         }
+    }
+
+    /**
+     * Human-readable sentence for a bounded-execution stop. The runtime ends a
+     * boot attempt at a fixed instruction/time budget, a memory fault, or an
+     * exception; each of those is a different statement and must not be reported
+     * as if the guest had called an unimplemented import.
+     */
+    private static String budgetStopDescription(long executed, String status) {
+        if ("TIME_LIMIT".equals(status) || "INSTRUCTION_LIMIT".equals(status)) {
+            return "The guest was still executing real instructions when its bounded "
+                    + ("TIME_LIMIT".equals(status) ? "time" : "instruction")
+                    + " budget (" + executed + " instruction(s)) expired. "
+                    + "No unimplemented import was reached during this window.";
+        }
+        if ("MEMORY_FAULT".equals(status)) {
+            return "Guest execution stopped on a guest-visible memory fault.";
+        }
+        if ("GUEST_EXCEPTION_RAISED".equals(status)) {
+            return "Guest execution stopped because the guest raised an Objective-C exception.";
+        }
+        if ("EXECUTION_FAULT".equals(status)) {
+            return "Guest execution stopped on an execution fault reported by the CPU backend.";
+        }
+        if ("BACKEND_UNAVAILABLE".equals(status)) {
+            return "The guest CPU backend was not available on this device.";
+        }
+        return "";
     }
 
     private String bootStatus(String reportText) {
@@ -250,100 +363,174 @@ public final class GameBootActivity extends Activity {
     void displayBootResult(String reportText) {
         String safeReport = reportText != null ? reportText : "{}";
         appendLine(summarizeBoot(safeReport));
-        if ("RETURNED".equals(bootStatus(safeReport))) {
+        String status = bootStatus(safeReport);
+        String trapped = "";
+        try {
+            JSONObject report = new JSONObject(safeReport);
+            if (!report.isNull("trappedImport")) trapped = report.optString("trappedImport", "");
+        } catch (Exception ignored) {
+            trapped = "";
+        }
+        if ("RETURNED".equals(status)) {
             showTerminalState("Guest entry returned", "Guest entry returned without a game lifecycle.");
+        } else if ("TIME_LIMIT".equals(status) || "INSTRUCTION_LIMIT".equals(status)) {
+            showTerminalState(
+                    "Guest boot budget reached",
+                    "Guest execution ran its real startup code and then hit the bounded "
+                            + ("TIME_LIMIT".equals(status) ? "time" : "instruction")
+                            + " budget before reaching an unimplemented import. Nothing crashed.");
+        } else if ("MEMORY_FAULT".equals(status) || "EXECUTION_FAULT".equals(status)) {
+            showTerminalState("Guest boot faulted", "Guest execution stopped on a memory/execution fault.");
+        } else if ("GUEST_EXCEPTION_RAISED".equals(status)) {
+            showTerminalState("Guest boot raised a guest exception", "Guest execution stopped on an Objective-C exception.");
+        } else if ("BACKEND_UNAVAILABLE".equals(status)) {
+            showTerminalState("Guest CPU backend unavailable", "This device build has no working guest CPU backend.");
+        } else if (!trapped.isEmpty()) {
+            showTerminalState("Guest boot stopped", "Guest execution stopped at the unimplemented import " + trapped + ".");
         } else {
             showTerminalState("Guest boot stopped", "Guest execution stopped at a missing or unimplemented runtime call.");
         }
     }
 
+    /**
+     * Fullscreen boot screen. While the guest runs, only the game is visible:
+     * the recovered splash covers the display until the guest's own EGL frames
+     * take over, and the diagnostic panel stays hidden. No viewport tap is needed
+     * or accepted for frame cycling — the splash advances by itself, once per
+     * frame. When the attempt stops, {@link #showTerminalState} switches back to
+     * portrait and reveals the diagnostics.
+     */
+    private void applyFullscreenMode() {
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            WindowManager.LayoutParams attributes = getWindow().getAttributes();
+            attributes.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(attributes);
+        }
+        View decor = getWindow().getDecorView();
+        decor.setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && !destroyed) applyFullscreenMode();
+    }
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        getWindow().setStatusBarColor(Color.rgb(11, 16, 29));
-        getWindow().setNavigationBarColor(Color.rgb(11, 16, 29));
+        applyFullscreenMode();
+        // A guest game runs in landscape; both directions are allowed so the
+        // device can be turned left or right. showTerminalState() returns to
+        // portrait for the diagnostic log.
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.rgb(11, 16, 29));
-        root.setPadding(dp(20), dp(32), dp(20), dp(32));
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.rgb(6, 9, 16));
+
+        splashImageView = new ImageView(this);
+        splashImageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        splashImageView.setContentDescription("Recovered game splash screen");
+        root.addView(splashImageView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+
+        // The guest's frames land on this surface (the runtime attaches the
+        // EAGL drawable to it through EGL). It sits above the splash so the game
+        // covers the boot screen as soon as it renders.
+        gameSurfaceView = new SurfaceView(this);
+        gameSurfaceView.setContentDescription("Guest game surface");
+        gameSurfaceView.setZOrderOnTop(true);
+        gameSurfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override
+            public void surfaceCreated(SurfaceHolder holder) {
+                publishGameSurface(holder.getSurface());
+            }
+
+            @Override
+            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+                publishGameSurface(holder.getSurface());
+            }
+
+            @Override
+            public void surfaceDestroyed(SurfaceHolder holder) {
+                publishGameSurface(null);
+            }
+        });
+        root.addView(gameSurfaceView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER));
+
+        LinearLayout overlay = new LinearLayout(this);
+        overlay.setOrientation(LinearLayout.VERTICAL);
+        overlay.setPadding(dp(14), dp(14), dp(14), dp(14));
 
         titleView = new TextView(this);
         titleView.setText("Game boot attempt");
-        titleView.setTextSize(20);
+        titleView.setTextSize(18);
         titleView.setTextColor(Color.WHITE);
         titleView.setTypeface(null, Typeface.BOLD);
         titleView.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.addView(titleView, new LinearLayout.LayoutParams(
+        titleView.setShadowLayer(6f, 0f, 0f, Color.BLACK);
+        overlay.addView(titleView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        LinearLayout splashCard = new LinearLayout(this);
-        splashCard.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable cardBg = new GradientDrawable();
-        cardBg.setColor(Color.rgb(17, 25, 43));
-        cardBg.setCornerRadius(dp(12));
-        cardBg.setStroke(dp(1), Color.rgb(38, 56, 89));
-        splashCard.setBackground(cardBg);
-        splashCard.setPadding(dp(10), dp(10), dp(10), dp(10));
 
         TextView splashHeader = new TextView(this);
         splashHeader.setText("GAME SPLASH SCREEN VIEWPORT");
-        splashHeader.setTextSize(11);
+        splashHeader.setTextSize(10);
         splashHeader.setTypeface(null, Typeface.BOLD);
-        splashHeader.setTextColor(Color.rgb(122, 184, 255));
-        splashHeader.setPadding(0, 0, 0, dp(6));
-        splashCard.addView(splashHeader);
-
-        FrameLayout viewportContainer = new FrameLayout(this);
-        GradientDrawable viewportBg = new GradientDrawable();
-        viewportBg.setColor(Color.rgb(6, 9, 16));
-        viewportBg.setCornerRadius(dp(8));
-        viewportBg.setStroke(dp(1), Color.rgb(28, 42, 68));
-        viewportContainer.setBackground(viewportBg);
-        viewportContainer.setMinimumHeight(dp(190));
-
-        splashImageView = new ImageView(this);
-        splashImageView.setAdjustViewBounds(true);
-        splashImageView.setMaxHeight(dp(240));
-        splashImageView.setMinimumHeight(dp(180));
-        splashImageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        FrameLayout.LayoutParams imageParams = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER);
-        viewportContainer.addView(splashImageView, imageParams);
-        viewportContainer.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                cycleSplashFrame();
-            }
-        });
-        splashCard.addView(viewportContainer, new LinearLayout.LayoutParams(
+        splashHeader.setTextColor(Color.rgb(170, 208, 255));
+        splashHeader.setGravity(Gravity.CENTER_HORIZONTAL);
+        splashHeader.setShadowLayer(6f, 0f, 0f, Color.BLACK);
+        overlay.addView(splashHeader, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        overlay.addView(new View(this), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f));
 
         splashCaptionView = new TextView(this);
         splashCaptionView.setText("Searching packaged bundle for game splash assets…");
-        splashCaptionView.setTextSize(11);
-        splashCaptionView.setTextColor(Color.rgb(160, 178, 199));
-        splashCaptionView.setPadding(0, dp(6), 0, 0);
-        splashCard.addView(splashCaptionView);
+        splashCaptionView.setTextSize(10);
+        splashCaptionView.setTextColor(Color.rgb(205, 216, 230));
+        splashCaptionView.setShadowLayer(6f, 0f, 0f, Color.BLACK);
+        splashCaptionView.setPadding(0, 0, 0, dp(6));
+        overlay.addView(splashCaptionView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        LinearLayout.LayoutParams splashParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        splashParams.topMargin = dp(12);
-        root.addView(splashCard, splashParams);
+        GradientDrawable logBg = new GradientDrawable();
+        logBg.setColor(Color.argb(225, 11, 16, 29));
+        logBg.setCornerRadius(dp(10));
+        logBg.setStroke(dp(1), Color.rgb(38, 56, 89));
 
         logView = new TextView(this);
-        logView.setTextSize(12);
+        logView.setTextSize(11);
         logView.setTextColor(Color.rgb(92, 227, 181));
         logView.setTypeface(Typeface.MONOSPACE);
+        logView.setPadding(dp(10), dp(10), dp(10), dp(10));
+        logView.setTextIsSelectable(true);
         scroller = new ScrollView(this);
+        scroller.setBackground(logBg);
         scroller.addView(logView, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams scrollerParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f);
-        scrollerParams.topMargin = dp(12);
-        root.addView(scroller, scrollerParams);
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.05f);
+        overlay.addView(scroller, scrollerParams);
+
+        root.addView(overlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        overlayView = overlay;
+        // While the guest runs the user sees only the game; the diagnostics are
+        // revealed by showTerminalState() once the attempt stops.
+        overlayView.setVisibility(View.GONE);
+
         setContentView(root);
 
         preloadSplashFromAssets();
@@ -375,7 +562,7 @@ public final class GameBootActivity extends Activity {
                             public void run() {
                                 if (!destroyed && (activeSplashFrames.isEmpty()
                                         || discovered.size() > activeSplashFrames.size())) {
-                                    installSplashFrames(discovered, activeSplashFrames.isEmpty());
+                                    installSplashFrames(discovered);
                                 }
                             }
                         });
@@ -406,9 +593,10 @@ public final class GameBootActivity extends Activity {
                     return;
                 }
                 appendLine("Executable loaded: " + executable.length + " byte(s). Mapping and binding traps...");
+                final String payloadDirectory = ensurePayloadExtracted(executable);
                 final String reportText;
                 try {
-                    reportText = runGameBootAttempt(executable, true);
+                    reportText = runGameBootAttempt(executable, payloadDirectory, true);
                 } catch (Throwable error) {
                     appendLine("Boot attempt failed inside the runtime: " + error);
                     showTerminalState("Guest boot failed", "The runtime could not complete the boot attempt; diagnostics will remain visible.");
@@ -419,62 +607,171 @@ public final class GameBootActivity extends Activity {
         }, "game-boot").start();
     }
 
+    /**
+     * Extracts the bundled game payload (`assets/bundle/**`) into the app's files
+     * directory so the runtime can serve the guest's own file reads from it, and
+     * returns the app directory — or null when this artifact has no payload.
+     * The writable application directories the runtime mounts are created next to
+     * it. Extraction is versioned by the embedded executable, so a new artifact
+     * never reuses a stale payload directory.
+     */
+    private String ensurePayloadExtracted(byte[] executable) {
+        try {
+            AssetManager assets = getAssets();
+            String[] root = assets.list(PAYLOAD_ASSET_ROOT);
+            if (root == null || root.length == 0) return null;
+            File bundleRoot = new File(getFilesDir(), "bundle");
+            File appDirectory = new File(bundleRoot, "App.app");
+            File home = new File(bundleRoot, "iostodroid-home");
+            File marker = new File(bundleRoot, PAYLOAD_MARKER_PREFIX + payloadVersion(executable));
+            mkdirsOrThrow(new File(home, "Documents"));
+            mkdirsOrThrow(new File(home, "Library"));
+            if (!marker.isFile()) {
+                int files = extractAssetTree(assets, PAYLOAD_ASSET_ROOT, appDirectory, 0);
+                if (files <= 0) return null;
+                if (!marker.exists() && !marker.createNewFile()) {
+                    appendLine("Payload marker could not be written; the payload will be re-extracted.");
+                }
+                appendLine("Game payload extracted: " + files + " file(s) from the APK.");
+            }
+            return appDirectory.isDirectory() ? appDirectory.getAbsolutePath() : null;
+        } catch (Throwable error) {
+            appendLine("Game payload extraction failed: " + error);
+            return null;
+        }
+    }
+
+    private static String payloadVersion(byte[] executable) {
+        CRC32 crc = new CRC32();
+        if (executable != null) crc.update(executable);
+        return (executable != null ? executable.length : 0) + "-" + crc.getValue();
+    }
+
+    private static void mkdirsOrThrow(File directory) throws IOException {
+        if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory())
+            throw new IOException("cannot create " + directory);
+    }
+
+    private int extractAssetTree(AssetManager assets, String assetPath, File target, int depth)
+            throws IOException {
+        if (depth > MAX_PAYLOAD_DEPTH)
+            throw new IOException("payload nesting is too deep at " + assetPath);
+        String[] children = assets.list(assetPath);
+        if (children == null || children.length == 0) return 0;
+        int extracted = 0;
+        for (String child : children) {
+            String childPath = assetPath + "/" + child;
+            String[] grandChildren = assets.list(childPath);
+            if (grandChildren != null && grandChildren.length > 0) {
+                extracted += extractAssetTree(assets, childPath, new File(target, child), depth + 1);
+                continue;
+            }
+            File file = new File(target, child);
+            mkdirsOrThrow(target);
+            try {
+                InputStream input = assets.open(childPath);
+                try {
+                    OutputStream output = new FileOutputStream(file);
+                    try {
+                        byte[] buffer = new byte[64 * 1024];
+                        long total = 0;
+                        int read;
+                        while ((read = input.read(buffer)) > 0) {
+                            total += read;
+                            if (total > MAX_PAYLOAD_FILE_BYTES)
+                                throw new IOException("payload file is too large: " + childPath);
+                            output.write(buffer, 0, read);
+                        }
+                    } finally {
+                        output.close();
+                    }
+                } finally {
+                    input.close();
+                }
+                extracted++;
+            } catch (FileNotFoundException directory) {
+                // An empty directory in the payload: keep the directory itself.
+                mkdirsOrThrow(file);
+            }
+        }
+        return extracted;
+    }
+
     private void preloadSplashFromAssets() {
         try {
             List<SplashFrame> preloaded = discoverSplashFramesFromAssets(getAssets());
             if (!preloaded.isEmpty()) {
-                installSplashFrames(preloaded, true);
+                installSplashFrames(preloaded);
             }
         } catch (Throwable ignored) {
             // Non-fatal; worker thread will also scan resourceInventory.
         }
     }
 
-    private void installSplashFrames(List<SplashFrame> frames, boolean playBootSequence) {
+    /**
+     * Install recovered splash frames and start the automatic boot animation.
+     * The animation is driven only by the launcher: touches never cycle frames,
+     * and the sequence stops on a stable frame when the boot attempt ends.
+     */
+    private void installSplashFrames(List<SplashFrame> frames) {
         if (frames == null || frames.isEmpty() || destroyed) return;
+        boolean wasEmpty = activeSplashFrames.isEmpty();
         activeSplashFrames.clear();
         activeSplashFrames.addAll(frames);
         currentSplashIndex = 0;
         showSplashFrame(0);
-        if (playBootSequence && activeSplashFrames.size() >= 3 && splashImageView != null) {
-            showSplashFrame(1);
-            splashImageView.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    if (!destroyed && activeSplashFrames.size() >= 3) {
-                        showSplashFrame(2);
-                    }
-                }
-            }, 350L);
-            splashImageView.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    if (!destroyed && !activeSplashFrames.isEmpty()) {
-                        showSplashFrame(0);
-                    }
-                }
-            }, 750L);
+        if (wasEmpty && !bootFinished && activeSplashFrames.size() > 1 && !splashAnimationRunning) {
+            splashAnimationRunning = true;
+            mainHandler.postDelayed(splashAdvance, SPLASH_FRAME_INTERVAL_MS);
         }
+    }
+
+    /** Test hook: number of recovered splash frames currently installed. */
+    int installedSplashFrameCount() {
+        return activeSplashFrames.size();
+    }
+
+    /** Test hook: index of the splash frame the boot screen currently shows. */
+    int currentSplashFrameIndex() {
+        return currentSplashIndex;
+    }
+
+    /** Test hook: true while the diagnostic panel is on screen. */
+    boolean diagnosticsOverlayVisible() {
+        return overlayView != null && overlayView.getVisibility() == View.VISIBLE;
+    }
+
+    /**
+     * Test hook: install synthetic frames and run the launcher's once-through
+     * advance rule. Unit tests run without assets, so the launcher has already
+     * reached its terminal state; that flag is cleared here so the boot-screen
+     * advance can be exercised.
+     */
+    void installSyntheticSplashFramesForTest(int count) {
+        bootFinished = false;
+        mainHandler.removeCallbacks(splashAdvance);
+        splashAnimationRunning = false;
+        List<SplashFrame> frames = new ArrayList<>();
+        for (int index = 0; index < count; index++) {
+            frames.add(new SplashFrame("frame " + index, "test",
+                    Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888), 8, 8));
+        }
+        installSplashFrames(frames);
     }
 
     private void showSplashFrame(int index) {
         if (activeSplashFrames.isEmpty() || splashImageView == null || splashCaptionView == null) return;
-        currentSplashIndex = ((index % activeSplashFrames.size()) + activeSplashFrames.size())
-                % activeSplashFrames.size();
+        // Clamped, never wrapped: the last frame stays on screen.
+        currentSplashIndex = Math.max(0, Math.min(index, activeSplashFrames.size() - 1));
         SplashFrame frame = activeSplashFrames.get(currentSplashIndex);
         splashImageView.setImageBitmap(frame.bitmap);
-        String cycleHint = activeSplashFrames.size() > 1
+        String advanceHint = activeSplashFrames.size() > 1
                 ? " · Frame " + (currentSplashIndex + 1) + "/" + activeSplashFrames.size()
-                        + " (tap viewport to cycle)"
+                        + (bootFinished ? " · boot finished" : " · advancing automatically")
                 : "";
         splashCaptionView.setText(
                 "Rendered splash: " + frame.sourcePath + " [" + frame.label + " "
-                        + frame.width + "×" + frame.height + "]" + cycleHint);
-    }
-
-    private void cycleSplashFrame() {
-        if (activeSplashFrames.size() <= 1) return;
-        showSplashFrame(currentSplashIndex + 1);
+                        + frame.width + "×" + frame.height + "]" + advanceHint);
     }
 
     /**
@@ -928,6 +1225,8 @@ public final class GameBootActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        splashAnimationRunning = false;
+        mainHandler.removeCallbacks(splashAdvance);
         super.onDestroy();
     }
 }

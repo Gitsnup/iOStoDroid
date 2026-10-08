@@ -211,6 +211,8 @@ def probe_boot(
         return {"status": "NOT_PROBED", "reason": f"iostodroid-gameboot report was not JSON: {detail[:300]}"}
     loader = report.get("loader") or {}
     execution = report.get("execution") or {}
+    darwin_compat = report.get("darwinCompat") or {}
+    gles = report.get("gles") or {}
     return {
         "status": "PROBED",
         "exitCode": completed.returncode,
@@ -224,6 +226,15 @@ def probe_boot(
         "trapCalls": report.get("trapCalls", 0),
         "trappedImport": report.get("trappedImport"),
         "reason": report.get("reason", ""),
+        # Translation-layer visibility: the Darwin-only adapters are registered
+        # even though none of their names is an Android export.
+        "darwinCompatBoundSymbols": darwin_compat.get("boundSymbols", 0),
+        "darwinCompatStreamCells": darwin_compat.get("streamCells", 0),
+        "darwinCompatOpenalCalls": darwin_compat.get("openalCalls", 0),
+        "darwinCompatPersonalityBoundaries": darwin_compat.get("personalityBoundaries", 0),
+        "glesDriverLoaded": bool(
+            gles.get("driverEglLibraryLoaded") or gles.get("driverGlesLibraryLoaded")
+        ),
         "report": report,
     }
 

@@ -70,13 +70,17 @@ if(IOSTODROID_BUILD_COMPAT_RUNTIME)
         src/compat_runtime/shim_registry.cpp
         src/compat_runtime/macho_loader.cpp
         src/compat_runtime/runner.cpp
+        src/compat_runtime/virtual_file_system.cpp
         src/compat_runtime/cpu.cpp
         src/compat_runtime/objc_runtime.cpp
         src/compat_runtime/objc_shims.cpp
         src/compat_runtime/audio_session_shims.cpp
+        src/compat_runtime/compiler_rt_shims.cpp
         src/compat_runtime/sjlj_unwind.cpp
         src/compat_runtime/trap_shims.cpp
         src/compat_runtime/libsystem_shims.cpp
+        src/compat_runtime/gles_shims.cpp
+        src/compat_runtime/darwin_compat_shims.cpp
         src/compat_runtime/app_lifecycle.cpp
     )
     if(IOSTODROID_FETCH_UNICORN)
@@ -125,7 +129,9 @@ if(IOSTODROID_BUILD_COMPAT_RUNTIME)
                                              src/compat_runtime/gameruntime_jni.cpp)
         target_include_directories(compat_runtime_v1 PRIVATE include)
         target_compile_options(compat_runtime_v1 PRIVATE -Wall -Wextra -Werror)
-        target_link_libraries(compat_runtime_v1 PRIVATE compat_runtime_core)
+        # libandroid provides ANativeWindow_fromSurface, used to attach the
+        # launcher's Surface as the guest's EGL drawable.
+        target_link_libraries(compat_runtime_v1 PRIVATE compat_runtime_core android)
         target_link_options(compat_runtime_v1 PRIVATE "-Wl,-z,max-page-size=16384")
     else()
         # Host boot-attempt probe: loads one 32-bit ARM Mach-O, binds traps,
@@ -157,6 +163,12 @@ if(IOSTODROID_BUILD_COMPAT_RUNTIME)
         endif()
         target_link_libraries(compat-runtime-lifecycle-tests PRIVATE compat_runtime_core)
         add_test(NAME compat-runtime-lifecycle COMMAND compat-runtime-lifecycle-tests)
+
+        add_executable(compat-runtime-darwin-compat-tests tests/darwin_compat.cpp)
+        target_include_directories(compat-runtime-darwin-compat-tests PRIVATE include)
+        target_compile_options(compat-runtime-darwin-compat-tests PRIVATE -Wall -Wextra -Werror)
+        target_link_libraries(compat-runtime-darwin-compat-tests PRIVATE compat_runtime_core)
+        add_test(NAME compat-runtime-darwin-compat COMMAND compat-runtime-darwin-compat-tests)
 
         add_executable(compat-runtime-objc-tests tests/compat_runtime_objc.cpp)
         target_include_directories(compat-runtime-objc-tests PRIVATE include)

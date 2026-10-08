@@ -293,6 +293,14 @@ class ShimAdapter {
 
     /** Guest object address of a registered framework class instance, or 0. */
     GuestAddress guestObjectAddress(GuestAddressSpace &memory, Object *object) const;
+
+    /**
+     * Guest `NSString *` for a constant the runtime itself has to expose (the
+     * EAGL drawable keys). Returns 0 and fills `reason` when the bounded
+     * Foundation subset cannot represent it.
+     */
+    GuestAddress createConstantString(GuestAddressSpace &memory, const std::string &value,
+                                      std::string &reason);
 };
 
 } // namespace iostodroid::compat_runtime::objc

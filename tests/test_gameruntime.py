@@ -227,7 +227,7 @@ class ManifestTests(unittest.TestCase):
 @unittest.skipUnless(ANGRY_BIRDS_IPA.is_file(), "Angry Birds test IPA is not checked out")
 @unittest.skipUnless(gameboot_available(), "radek-gameboot host binary is not built")
 class AngryBirdsBootTests(unittest.TestCase):
-    def test_angry_birds_boots_to_first_unimplemented_call(self):
+    def test_angry_birds_boots_to_a_documented_boundary(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "angrybirds-gameboot"
             manifest = gameruntime.run_gameboot(ANGRY_BIRDS_IPA, True, output)
@@ -244,8 +244,19 @@ class AngryBirdsBootTests(unittest.TestCase):
             self.assertEqual(0, probe["unresolvedSymbols"])
             self.assertTrue(probe["entryPointReached"])
             self.assertGreater(probe["instructions"], 0)
-            self.assertTrue(probe["trappedImport"])
-            self.assertEqual(1, probe["trapCalls"])
+            # The Darwin-only translation layer is registered and reports its
+            # real process-stream cells; none of these names is an Android export.
+            self.assertEqual(34, probe["darwinCompatBoundSymbols"])
+            self.assertEqual(3, probe["darwinCompatStreamCells"])
+            # The bounded boot attempt ends at a documented boundary: either the
+            # first unimplemented import it touches (trap) or one of its
+            # execution limits when the guest stays inside its own code.
+            stopped_at_trap = bool(probe["trappedImport"]) and probe["trapCalls"] == 1
+            stopped_at_limit = (
+                probe["trapCalls"] == 0
+                and probe["executionStatus"] in ("INSTRUCTION_LIMIT", "TIME_LIMIT")
+            )
+            self.assertTrue(stopped_at_trap or stopped_at_limit, probe)
             full = json.loads((output / "gameboot-report.json").read_text())
             self.assertEqual("not_runnable", full["status"])
             self.assertTrue(full["trapMode"])

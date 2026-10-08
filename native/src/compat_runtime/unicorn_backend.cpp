@@ -28,6 +28,11 @@ constexpr std::uint64_t kMaximumTimeLimitMicros = 60000000;
 constexpr std::uint32_t kVfpAccessControlRegister = 0x00F00000U; // CPACR CP10/CP11 full access
 constexpr std::uint32_t kVfpEnableBit = 1U << 30;                // FPEXC.EN
 
+struct MappedRegion {
+    std::size_t size = 0;
+    MemoryPermission permissions = MemoryPermission::None;
+};
+
 struct HookState {
     const GuestMemoryCallbacks *memory = nullptr;
     std::uint64_t instructions = 0;
@@ -37,7 +42,7 @@ struct HookState {
     bool calloutDispatched = false;
     bool guestExceptionRaised = false;
     GuestAddress calloutResumeAddress = 0;
-    std::map<GuestAddress, std::size_t> mappedRegions;
+    std::map<GuestAddress, MappedRegion> mappedRegions;
     bool memoryFault = false;
     bool hasFaultAddress = false;
     GuestAddress faultAddress = 0;
@@ -103,7 +108,7 @@ std::uint32_t unicornPermissions(MemoryPermission permissions) {
 }
 
 bool initializeEngineMemory(uc_engine *engine, const GuestMemoryCallbacks &memory,
-                            std::map<GuestAddress, std::size_t> &mappedRegions,
+                            std::map<GuestAddress, MappedRegion> &mappedRegions,
                             std::string &reason) {
     if (!memory.regions || !memory.read) {
         reason = "ARM32 backend requires guest-region and read callbacks.";
@@ -121,7 +126,7 @@ bool initializeEngineMemory(uc_engine *engine, const GuestMemoryCallbacks &memor
                      uc_strerror(mapped);
             return false;
         }
-        mappedRegions.emplace(region.base, region.size);
+        mappedRegions.emplace(region.base, MappedRegion{region.size, region.permissions});
         if (hasPermission(region.permissions, MemoryPermission::Read)) {
             std::vector<std::uint8_t> bytes(region.size);
             if (!memory.read(region.base, bytes.data(), bytes.size())) {
@@ -135,24 +140,49 @@ bool initializeEngineMemory(uc_engine *engine, const GuestMemoryCallbacks &memor
             }
         }
     }
+    // The engine now owns a byte-identical copy, so nothing is pending upload.
+    if (memory.clearHostWrites)
+        memory.clearHostWrites();
     return true;
 }
 
-bool synchronizeEngineMemory(uc_engine *engine, const GuestMemoryCallbacks &memory,
-                             std::map<GuestAddress, std::size_t> &mappedRegions,
-                             std::string &reason) {
+// Uploads only the pages a shim wrote into the host copy since the previous
+// call. Without this the backend would re-copy the whole address space after
+// every shim call, which dominates boot time (measured: 19.8 s of a 20 s boot
+// in 448 full copies) and makes longer guest runs impossible.
+bool uploadHostWrites(uc_engine *engine, const GuestMemoryCallbacks &memory, std::string &reason) {
+    if (!memory.drainHostWrites)
+        return true;
+    const auto uploaded = memory.drainHostWrites(
+        [engine](GuestAddress address, const std::uint8_t *bytes, std::size_t size) {
+            return uc_mem_write(engine, address, bytes, size) == UC_ERR_OK;
+        });
+    if (!uploaded) {
+        reason = "could not upload a host-written guest page into the ARM32 backend.";
+        return false;
+    }
+    return true;
+}
+
+// Reconciles the engine mapping table with the host address space. Regions the
+// engine already holds keep their contents: guest stores arrive through the
+// write hook and host stores through uploadHostWrites(). Only newly mapped
+// regions are copied in, and permissions are only re-applied when they changed.
+bool synchronizeEngineMappings(uc_engine *engine, const GuestMemoryCallbacks &memory,
+                               std::map<GuestAddress, MappedRegion> &mappedRegions,
+                               std::string &reason) {
     if (!memory.regions || !memory.read) {
         reason = "ARM32 backend requires guest-region and read callbacks.";
         return false;
     }
     const auto regions = memory.regions();
-    std::map<GuestAddress, std::size_t> currentRegions;
+    std::map<GuestAddress, MappedRegion> currentRegions;
     for (const auto &region : regions) {
         if (region.base % kPageSize != 0 || region.size == 0 || region.size % kPageSize != 0) {
             reason = "ARM32 backend requires page-aligned guest regions.";
             return false;
         }
-        currentRegions.emplace(region.base, region.size);
+        currentRegions.emplace(region.base, MappedRegion{region.size, region.permissions});
     }
 
     for (auto current = mappedRegions.begin(); current != mappedRegions.end();) {
@@ -160,7 +190,7 @@ bool synchronizeEngineMemory(uc_engine *engine, const GuestMemoryCallbacks &memo
             ++current;
             continue;
         }
-        const auto unmapped = uc_mem_unmap(engine, current->first, current->second);
+        const auto unmapped = uc_mem_unmap(engine, current->first, current->second.size);
         if (unmapped != UC_ERR_OK) {
             reason = std::string("could not unmap a released guest region: ") +
                      uc_strerror(unmapped);
@@ -179,11 +209,27 @@ bool synchronizeEngineMemory(uc_engine *engine, const GuestMemoryCallbacks &memo
                          uc_strerror(mapped);
                 return false;
             }
-            mappedRegions.emplace(region.base, region.size);
-        } else if (knownRegion->second != region.size) {
+            mappedRegions.emplace(region.base, MappedRegion{region.size, region.permissions});
+            if (hasPermission(region.permissions, MemoryPermission::Read)) {
+                std::vector<std::uint8_t> bytes(region.size);
+                if (!memory.read(region.base, bytes.data(), bytes.size())) {
+                    reason = "guest memory callback refused to read a mapped region.";
+                    return false;
+                }
+                const auto copied = uc_mem_write(engine, region.base, bytes.data(), bytes.size());
+                if (copied != UC_ERR_OK) {
+                    reason = std::string("could not initialize a guest region: ") +
+                             uc_strerror(copied);
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (knownRegion->second.size != region.size) {
             reason = "guest region size changed without unmapping the previous region.";
             return false;
-        } else {
+        }
+        if (knownRegion->second.permissions != region.permissions) {
             const auto protectedRegion = uc_mem_protect(engine, region.base, region.size,
                                                         unicornPermissions(region.permissions));
             if (protectedRegion != UC_ERR_OK) {
@@ -191,18 +237,7 @@ bool synchronizeEngineMemory(uc_engine *engine, const GuestMemoryCallbacks &memo
                          uc_strerror(protectedRegion);
                 return false;
             }
-        }
-        if (!hasPermission(region.permissions, MemoryPermission::Read))
-            continue;
-        std::vector<std::uint8_t> bytes(region.size);
-        if (!memory.read(region.base, bytes.data(), bytes.size())) {
-            reason = "guest memory callback refused to synchronize a region.";
-            return false;
-        }
-        const auto copied = uc_mem_write(engine, region.base, bytes.data(), bytes.size());
-        if (copied != UC_ERR_OK) {
-            reason = std::string("could not synchronize a guest region: ") + uc_strerror(copied);
-            return false;
+            knownRegion->second.permissions = region.permissions;
         }
     }
     return true;
@@ -268,7 +303,8 @@ void codeHook(uc_engine *engine, std::uint64_t address, std::uint32_t, void *use
         (void)uc_emu_stop(engine);
         return;
     }
-    if (!synchronizeEngineMemory(engine, *state.memory, state.mappedRegions, state.message)) {
+    if (!synchronizeEngineMappings(engine, *state.memory, state.mappedRegions, state.message) ||
+        !uploadHostWrites(engine, *state.memory, state.message)) {
         state.memoryFault = true;
         (void)uc_emu_stop(engine);
         return;
@@ -292,10 +328,20 @@ void memoryWriteHook(uc_engine *engine, uc_mem_type, std::uint64_t address, int 
         bytes[static_cast<std::size_t>(index)] = static_cast<std::uint8_t>(bits & 0xff);
         bits >>= 8;
     }
-    if (!state.memory->write(static_cast<GuestAddress>(address), bytes.data(),
-                             static_cast<std::size_t>(size))) {
+    const auto &relay = state.memory->writeFromGuest ? state.memory->writeFromGuest
+                                                     : state.memory->write;
+    if (!relay(static_cast<GuestAddress>(address), bytes.data(),
+               static_cast<std::size_t>(size))) {
         state.memoryFault = true;
-        state.message = "guest memory callback rejected a guest write.";
+        if (address <= std::numeric_limits<GuestAddress>::max()) {
+            state.hasFaultAddress = true;
+            state.faultAddress = static_cast<GuestAddress>(address);
+        }
+        state.message = "guest memory access failed at 0x";
+        constexpr char digits[] = "0123456789abcdef";
+        for (int shift = 28; shift >= 0; shift -= 4)
+            state.message.push_back(digits[(address >> shift) & 0xf]);
+        state.message += " (" + std::to_string(size) + " byte(s)).";
         (void)uc_emu_stop(engine);
     }
 }
@@ -463,7 +509,10 @@ class UnicornArm32Backend final : public CpuBackend {
                 break;
             }
             if (!hooks.calloutDispatched) {
-                if (std::chrono::steady_clock::now() >= deadline) {
+                if (hooks.instructions >= function.instructionLimit) {
+                    hooks.instructionLimitHit = true;
+                    hooks.message = "guest function reached its instruction limit.";
+                } else if (std::chrono::steady_clock::now() >= deadline) {
                     hooks.timeLimitHit = true;
                     hooks.message = "guest function reached its time limit.";
                 } else {

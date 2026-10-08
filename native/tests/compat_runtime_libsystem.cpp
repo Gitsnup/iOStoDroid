@@ -220,13 +220,18 @@ void testUnregisteredSymbolsStillFailClosed() {
     CHECK(!harness.registry.resolve("_printf").has_value());
     CHECK(!harness.registry.resolve("_pthread_create").has_value());
     CHECK(harness.registry.resolve("_memcpy").has_value());
+    // The stdio/file entry points the guest filesystem serves are registered;
+    // what stays unregistered above keeps failing closed.
+    CHECK(harness.registry.resolve("_fopen").has_value());
+    CHECK(harness.registry.resolve("_fread").has_value());
+    CHECK(harness.registry.resolve("_fclose").has_value());
     const auto snapshot = harness.registry.snapshot();
     std::size_t registered = 0;
     for (const auto &binding : snapshot) {
         if (binding.library == "libSystem.B.dylib")
             ++registered;
     }
-    CHECK(registered == 24);
+    CHECK(registered == 44);
 }
 
 } // namespace

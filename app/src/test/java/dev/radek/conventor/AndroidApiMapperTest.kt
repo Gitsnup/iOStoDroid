@@ -334,6 +334,51 @@ class AndroidApiMapperTest {
         assertFalse(item.getBoolean("codeGenerated"))
     }
 
+    @Test fun reviewedAndroidMappingCoverageCountsEveryMappingKindButNeverImplementation() {
+        // One direct same-name export, one compiled compatibility implementation,
+        // one reviewed semantic target and one explicit unimplemented stub handler.
+        val imports = JSONArray()
+            .put(JSONObject().put("name", "_malloc"))
+            .put(JSONObject().put("name", "_mach_absolute_time"))
+            .put(JSONObject().put("name", "_OBJC_CLASS_" + '$' + "_CADisplayLink"))
+            .put(JSONObject().put("name", "_CustomStubOnlySymbol"))
+        val slice = JSONObject().put("imports", imports)
+        val nodes = JSONArray().put(JSONObject().put("analysis", JSONObject()
+            .put("slices", JSONArray().put(slice))))
+
+        val mapping = AndroidApiMapper.analyze(
+            nodes,
+            resolveCompatHandler = { symbol ->
+                if (symbol == "_CustomStubOnlySymbol") "stubbed:CustomStubOnlySymbol" else null
+            },
+        )
+
+        assertEquals(4, mapping.getInt("distinctImportSymbols"))
+        // Three of four imports have a reviewed mapping of some kind; the explicit
+        // stub handler is a resolution target, not an Android mapping.
+        assertEquals(3, mapping.getInt("reviewedMappingCount"))
+        assertEquals(75, mapping.getInt("reviewedMappingCoveragePercent"))
+        val reviewed = mapping.getJSONObject("reviewedMapping")
+        assertEquals(3, reviewed.getInt("count"))
+        assertEquals(75, reviewed.getInt("percent"))
+        assertEquals(1, reviewed.getInt("strictSameNameNdkSubsetCount"))
+        assertEquals(25, reviewed.getInt("strictSameNameNdkSubsetPercent"))
+        assertTrue(reviewed.getBoolean("kindCountsAreNotInterchangeable"))
+        val breakdown = reviewed.getJSONObject("breakdown")
+        // Exactly one kind per import, and the kinds sum to the mapping count.
+        assertEquals(1, breakdown.getInt("sameNameNdkOrSystemExport"))
+        assertEquals(0, breakdown.getInt("compilerRuntimeToolchain"))
+        assertEquals(1, breakdown.getInt("concreteCompatImplementation"))
+        assertEquals(1, breakdown.getInt("reviewedSemanticApiTarget"))
+        assertEquals(3, breakdown.getInt("kindCountsSum"))
+        assertEquals(1, breakdown.getInt("explicitStubHandlerOnly"))
+        assertEquals(0, breakdown.getInt("unmapped"))
+        // No mapping count may be read as rewritten or linked code.
+        assertEquals(0, mapping.getInt("linkedImplementationCoveragePercent"))
+        assertEquals(0, mapping.getInt("generatedApiImplementationCount"))
+        assertTrue(mapping.getString("measure").contains("strict same-name NDK candidate subset"))
+    }
+
     @Test fun emptyImportSetDoesNotClaimPerfectCoverage() {
         val mapping = AndroidApiMapper.analyze(JSONArray())
         assertEquals(0, mapping.getInt("candidateCoveragePercent"))

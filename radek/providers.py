@@ -321,7 +321,8 @@ BIONIC_SYMBOL_CANDIDATES = frozenset(
     eglInitialize eglMakeCurrent eglPresentationTimeANDROID eglQueryAPI eglQueryContext eglQueryString eglQuerySurface
     eglQuerySurfacePointerANGLE eglReleaseTexImage eglReleaseThread eglSetDamageRegionKHR eglSignalSyncKHR
     eglSurfaceAttrib eglSwapBuffers eglSwapBuffersWithDamageKHR eglSwapInterval eglTerminate eglWaitClient eglWaitGL
-    eglWaitNative eglWaitSyncKHR endgrent endpwent erf erfc erfcf erff execl execle execlp execv execve execvp exit
+    eglWaitNative eglWaitSyncKHR endgrent endpwent environ error error_at_line error_message_count error_one_per_line
+    error_print_progname erf erfc erfcf erff execl execle execlp execv execve execvp exit
     exp exp2 exp2f expf expm1 expm1f fabs fabsf fchmod fchown fclose fcntl fdatasync fdim fdimf fdopen feof ferror
     fflush ffs ffsl ffsll fgetc fgetpos fgets fileno flock floor floorf fma fmaf fmax fmaxf fmemopen fmin fminf fmod
     fmodf fnmatch fopen fprintf fputc fputs fread free freeaddrinfo freopen frexp frexpf fscanf fseek fseeko fsetpos

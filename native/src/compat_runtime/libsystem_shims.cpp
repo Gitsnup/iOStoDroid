@@ -1,6 +1,12 @@
 #include "compat_runtime/libsystem_shims.hpp"
 
+#include "compat_runtime/virtual_file_system.hpp"
+
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -107,6 +113,35 @@ int compareBytes(std::uint8_t left, std::uint8_t right) {
     if (left == right)
         return 0;
     return left < right ? -1 : 1;
+}
+
+// ---- guest floating-point ABI helpers (s0..s15 / d0..d7) ----
+
+float singleArgument(const CpuRegisterState &registers, int index) {
+    const auto bits = static_cast<std::uint32_t>(registers.d[static_cast<std::size_t>(index / 2)] >>
+                                                  ((index % 2) ? 32 : 0));
+    float value = 0.0f;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+double doubleArgument(const CpuRegisterState &registers, int index) {
+    double value = 0.0;
+    const auto bits = registers.d[static_cast<std::size_t>(index)];
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+void setSingleResult(CpuRegisterState &registers, float value) {
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    registers.d[0] = (registers.d[0] & ~std::uint64_t{0xFFFFFFFFULL}) | bits;
+}
+
+void setDoubleResult(CpuRegisterState &registers, double value) {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    registers.d[0] = bits;
 }
 
 bool fail(GuestAddressSpace &, std::string &reason, const std::string &detail) {
@@ -596,6 +631,226 @@ void ShimAdapter::registerBindings(ShimRegistry &registry) {
     // operator new/delete pair gets real, trackable storage instead of a trap.
     // A size that overflows the 32-bit request or a delete of a pointer the
     // heap does not own fails closed.
+    // ---- stdio / file I/O served by the mounted guest filesystem ----------
+    // A path the runtime cannot serve yields a NULL FILE the way a missing file
+    // does, so the guest keeps its own error handling; the refusal itself is
+    // recorded in the report's guestFileSystem diagnostics.
+    registerFunction(registry, "_fopen", "libsystem-fopen",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) {
+                         std::string path;
+                         std::string mode;
+                         if (!readCString(memory, registers.r[0], path))
+                             return fail(memory, reason, "fopen could not read the guest path");
+                         if (!readCString(memory, registers.r[1], mode))
+                             return fail(memory, reason, "fopen could not read the guest mode");
+                         std::string detail;
+                         registers.r[0] = guestFileSystem().open(path, mode, detail);
+                         return true;
+                     });
+    registerFunction(registry, "_fclose", "libsystem-fclose",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         registers.r[0] =
+                             guestFileSystem().close(registers.r[0]) ? 0U : 0xFFFFFFFFU;
+                         return true;
+                     });
+    registerFunction(registry, "_fread", "libsystem-fread",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) {
+                         const std::size_t elementSize = registers.r[1];
+                         const std::size_t elementCount = registers.r[2];
+                         if (elementSize == 0 || elementCount == 0) {
+                             registers.r[0] = 0;
+                             return true;
+                         }
+                         const std::size_t requested = elementSize * elementCount;
+                         std::vector<std::uint8_t> buffer(requested);
+                         std::string detail;
+                         const auto read = guestFileSystem().read(registers.r[3], buffer.data(),
+                                                                  requested, detail);
+                         if (read != 0 &&
+                             !writeGuest(memory, registers.r[0], buffer.data(), read))
+                             return fail(memory, reason,
+                                         "fread could not write the guest destination buffer");
+                         registers.r[0] = static_cast<std::uint32_t>(read / elementSize);
+                         return true;
+                     });
+    registerFunction(registry, "_fwrite", "libsystem-fwrite",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) {
+                         const std::size_t elementSize = registers.r[1];
+                         const std::size_t elementCount = registers.r[2];
+                         if (elementSize == 0 || elementCount == 0) {
+                             registers.r[0] = 0;
+                             return true;
+                         }
+                         const std::size_t requested = elementSize * elementCount;
+                         std::vector<std::uint8_t> buffer(requested);
+                         if (!readGuest(memory, registers.r[0], buffer.data(), requested))
+                             return fail(memory, reason,
+                                         "fwrite could not read the guest source buffer");
+                         std::string detail;
+                         const auto written = guestFileSystem().write(registers.r[3], buffer.data(),
+                                                                      requested, detail);
+                         registers.r[0] = static_cast<std::uint32_t>(written / elementSize);
+                         return true;
+                     });
+    registerFunction(registry, "_fseek", "libsystem-fseek",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         std::string detail;
+                         const bool ok = guestFileSystem().seek(
+                             registers.r[0], static_cast<long>(registers.r[1]),
+                             static_cast<int>(registers.r[2]), detail);
+                         registers.r[0] = ok ? 0U : 0xFFFFFFFFU;
+                         return true;
+                     });
+    registerFunction(registry, "_ftell", "libsystem-ftell",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         std::string detail;
+                         const auto position = guestFileSystem().tell(registers.r[0], detail);
+                         registers.r[0] = position < 0 ? 0xFFFFFFFFU
+                                                       : static_cast<std::uint32_t>(position);
+                         return true;
+                     });
+    registerFunction(registry, "_feof", "libsystem-feof",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         registers.r[0] = guestFileSystem().eof(registers.r[0]) ? 1U : 0U;
+                         return true;
+                     });
+    registerFunction(registry, "_ferror", "libsystem-ferror",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         registers.r[0] = guestFileSystem().failed(registers.r[0]) ? 1U : 0U;
+                         return true;
+                     });
+    registerFunction(registry, "_fflush", "libsystem-fflush",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         if (registers.r[0] == 0) {
+                             registers.r[0] = 0;
+                             return true;
+                         }
+                         std::string detail;
+                         registers.r[0] =
+                             guestFileSystem().flush(registers.r[0], detail) ? 0U : 0xFFFFFFFFU;
+                         return true;
+                     });
+    registerFunction(registry, "_fgets", "libsystem-fgets",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) {
+                         const std::size_t size = registers.r[1];
+                         if (size == 0) {
+                             registers.r[0] = 0;
+                             return true;
+                         }
+                         std::vector<std::uint8_t> buffer(size);
+                         std::string detail;
+                         const auto read = guestFileSystem().read(registers.r[2], buffer.data(),
+                                                                  size - 1, detail);
+                         if (read == 0) {
+                             registers.r[0] = 0;
+                             return true;
+                         }
+                         std::size_t length = 0;
+                         while (length < read && buffer[length] != '\n')
+                             ++length;
+                         if (length < read)
+                             ++length; // include the newline like stdio does
+                         buffer[length] = 0;
+                         if (!writeGuest(memory, registers.r[0], buffer.data(), length + 1))
+                             return fail(memory, reason,
+                                         "fgets could not write the guest destination buffer");
+                         return true;
+                     });
+    registerFunction(registry, "_remove", "libsystem-remove",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) {
+                         std::string path;
+                         if (!readCString(memory, registers.r[0], path))
+                             return fail(memory, reason, "remove could not read the guest path");
+                         std::string hostPath;
+                         bool writable = false;
+                         if (!guestFileSystem().mounted() ||
+                             !guestFileSystem().resolve(path, hostPath, writable) || !writable) {
+                             registers.r[0] = 0xFFFFFFFFU;
+                             return true;
+                         }
+                         registers.r[0] = std::remove(hostPath.c_str()) == 0 ? 0U : 0xFFFFFFFFU;
+                         return true;
+                     });
+
+    // ---- time --------------------------------------------------------------
+    registerFunction(registry, "_gettimeofday", "libsystem-gettimeofday",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) {
+                         // 32-bit Darwin struct timeval is two 32-bit words.
+                         std::array<std::uint32_t, 2> value{};
+                         const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
+                                                 std::chrono::system_clock::now()
+                                                     .time_since_epoch())
+                                                 .count();
+                         value[0] = static_cast<std::uint32_t>(micros / 1000000);
+                         value[1] = static_cast<std::uint32_t>(micros % 1000000);
+                         if (registers.r[0] != 0 &&
+                             !writeGuest(memory, registers.r[0],
+                                         reinterpret_cast<const std::uint8_t *>(value.data()),
+                                         sizeof(value)))
+                             return fail(memory, reason,
+                                         "gettimeofday could not write the guest timeval");
+                         registers.r[0] = 0;
+                         return true;
+                     });
+    registerFunction(registry, "_time", "libsystem-time",
+                     [](CpuRegisterState &registers, GuestAddressSpace &memory,
+                        std::string &reason) {
+                         const auto seconds = static_cast<std::uint32_t>(
+                             std::chrono::duration_cast<std::chrono::seconds>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count());
+                         if (registers.r[0] != 0 &&
+                             !writeGuest(memory, registers.r[0],
+                                         reinterpret_cast<const std::uint8_t *>(&seconds),
+                                         sizeof(seconds)))
+                             return fail(memory, reason, "time could not write the guest time_t");
+                         registers.r[0] = seconds;
+                         return true;
+                     });
+
+    // ---- math (scalar VFP arguments) ---------------------------------------
+    registerFunction(registry, "_sin", "libsystem-sin",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         setDoubleResult(registers, std::sin(doubleArgument(registers, 0)));
+                         return true;
+                     });
+    registerFunction(registry, "_cos", "libsystem-cos",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         setDoubleResult(registers, std::cos(doubleArgument(registers, 0)));
+                         return true;
+                     });
+    registerFunction(registry, "_pow", "libsystem-pow",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         setDoubleResult(registers, std::pow(doubleArgument(registers, 0),
+                                                             doubleArgument(registers, 1)));
+                         return true;
+                     });
+    registerFunction(registry, "_sqrt", "libsystem-sqrt",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         setDoubleResult(registers, std::sqrt(doubleArgument(registers, 0)));
+                         return true;
+                     });
+    registerFunction(registry, "_floorf", "libsystem-floorf",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         setSingleResult(registers, std::floor(singleArgument(registers, 0)));
+                         return true;
+                     });
+    registerFunction(registry, "_ceilf", "libsystem-ceilf",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         setSingleResult(registers, std::ceil(singleArgument(registers, 0)));
+                         return true;
+                     });
+    registerFunction(registry, "_fabs", "libsystem-fabs",
+                     [](CpuRegisterState &registers, GuestAddressSpace &, std::string &) {
+                         setDoubleResult(registers, std::fabs(doubleArgument(registers, 0)));
+                         return true;
+                     });
     registerFunction(registry, "__Znwm", "libsystem-cxx-operator-new",
                      [this](CpuRegisterState &registers, GuestAddressSpace &memory,
                             std::string &reason) {

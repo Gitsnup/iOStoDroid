@@ -8,6 +8,7 @@
 namespace radek::compat_runtime {
 namespace {
 constexpr std::uint64_t kGuestAddressSpaceSize = std::uint64_t{1} << 32;
+constexpr std::size_t kDirtyPageBytes = 4096;
 
 bool isPowerOfTwo(std::size_t value) { return value != 0 && (value & (value - 1)) == 0; }
 
@@ -155,11 +156,55 @@ GuestAddress GuestAddressSpace::allocateHeap(std::size_t size, std::size_t align
     return static_cast<GuestAddress>(address);
 }
 
+bool GuestAddressSpace::readAcross(GuestAddress address, void *destination, std::size_t size,
+                                   MemoryPermission required) const {
+    auto *cursor = static_cast<std::uint8_t *>(destination);
+    std::size_t remaining = size;
+    GuestAddress current = address;
+    while (remaining > 0) {
+        const auto *region = findRegion(current, 1);
+        if (!region || !hasPermission(region->view.permissions, required))
+            return false;
+        const auto offset = static_cast<std::size_t>(current - region->view.base);
+        const auto available = region->bytes.size() - offset;
+        const auto chunk = std::min(available, remaining);
+        std::memcpy(cursor, region->bytes.data() + offset, chunk);
+        cursor += chunk;
+        remaining -= chunk;
+        current = static_cast<GuestAddress>(current + chunk);
+    }
+    return true;
+}
+
+bool GuestAddressSpace::writeAcross(GuestAddress address, const void *source, std::size_t size,
+                                    bool markHostWrite) {
+    const auto *cursor = static_cast<const std::uint8_t *>(source);
+    std::size_t remaining = size;
+    GuestAddress current = address;
+    while (remaining > 0) {
+        auto *region = findRegion(current, 1);
+        if (!region || !hasPermission(region->view.permissions, MemoryPermission::Write))
+            return false;
+        const auto offset = static_cast<std::size_t>(current - region->view.base);
+        const auto available = region->bytes.size() - offset;
+        const auto chunk = std::min(available, remaining);
+        std::memcpy(region->bytes.data() + offset, cursor, chunk);
+        if (markHostWrite)
+            markDirty(current, chunk);
+        cursor += chunk;
+        remaining -= chunk;
+        current = static_cast<GuestAddress>(current + chunk);
+    }
+    return true;
+}
+
 bool GuestAddressSpace::read(GuestAddress address, void *destination, std::size_t size) const {
     if ((!destination && size != 0) || size == 0)
         return size == 0;
     const auto *region = findRegion(address, size);
-    if (!region || !hasPermission(region->view.permissions, MemoryPermission::Read))
+    if (!region)
+        return readAcross(address, destination, size, MemoryPermission::Read);
+    if (!hasPermission(region->view.permissions, MemoryPermission::Read))
         return false;
     const auto offset = static_cast<std::size_t>(address - region->view.base);
     std::memcpy(destination, region->bytes.data() + offset, size);
@@ -170,10 +215,75 @@ bool GuestAddressSpace::write(GuestAddress address, const void *source, std::siz
     if ((!source && size != 0) || size == 0)
         return size == 0;
     auto *region = findRegion(address, size);
-    if (!region || !hasPermission(region->view.permissions, MemoryPermission::Write))
+    if (!region)
+        return writeAcross(address, source, size, true);
+    if (!hasPermission(region->view.permissions, MemoryPermission::Write))
         return false;
     const auto offset = static_cast<std::size_t>(address - region->view.base);
     std::memcpy(region->bytes.data() + offset, source, size);
+    markDirty(address, size);
+    return true;
+}
+
+bool GuestAddressSpace::writeFromGuest(GuestAddress address, const void *source, std::size_t size) {
+    if ((!source && size != 0) || size == 0)
+        return size == 0;
+    auto *region = findRegion(address, size);
+    if (!region)
+        return writeAcross(address, source, size, false);
+    if (!hasPermission(region->view.permissions, MemoryPermission::Write))
+        return false;
+    const auto offset = static_cast<std::size_t>(address - region->view.base);
+    std::memcpy(region->bytes.data() + offset, source, size);
+    return true;
+}
+
+void GuestAddressSpace::markDirty(GuestAddress address, std::size_t size) {
+    if (size == 0)
+        return;
+    auto *region = findRegion(address, size);
+    if (!region)
+        return;
+    const auto offset = static_cast<std::size_t>(address - region->view.base);
+    if (offset >= region->bytes.size() || size > region->bytes.size() - offset)
+        return;
+    const auto firstPage = offset / kDirtyPageBytes;
+    const auto lastPage = (offset + size - 1) / kDirtyPageBytes;
+    if (region->dirtyPages.size() < lastPage + 1)
+        region->dirtyPages.resize(lastPage + 1, 0);
+    for (auto page = firstPage; page <= lastPage; ++page)
+        region->dirtyPages[page / 64] |= std::uint64_t{1} << (page % 64);
+    region->dirty = true;
+}
+
+void GuestAddressSpace::clearDirty() {
+    for (auto &entry : regions_) {
+        std::fill(entry.second.dirtyPages.begin(), entry.second.dirtyPages.end(), 0);
+        entry.second.dirty = false;
+    }
+}
+
+bool GuestAddressSpace::drainDirtyPages(
+    const std::function<bool(GuestAddress, const std::uint8_t *, std::size_t)> &visit) {
+    for (auto &entry : regions_) {
+        auto &region = entry.second;
+        if (!region.dirty)
+            continue;
+        std::vector<std::uint64_t> pages = region.dirtyPages;
+        for (std::size_t page = 0; page < pages.size(); ++page) {
+            if ((pages[page / 64] & (std::uint64_t{1} << (page % 64))) == 0)
+                continue;
+            const auto offset = page * kDirtyPageBytes;
+            if (offset >= region.bytes.size())
+                continue;
+            const auto bytes = std::min(kDirtyPageBytes, region.bytes.size() - offset);
+            if (!visit(region.view.base + static_cast<GuestAddress>(offset),
+                       region.bytes.data() + offset, bytes))
+                return false;
+        }
+        std::fill(region.dirtyPages.begin(), region.dirtyPages.end(), 0);
+        region.dirty = false;
+    }
     return true;
 }
 
@@ -185,6 +295,7 @@ bool GuestAddressSpace::initialize(GuestAddress address, const void *source, std
         return false;
     const auto offset = static_cast<std::size_t>(address - region->view.base);
     std::memcpy(region->bytes.data() + offset, source, size);
+    markDirty(address, size);
     return true;
 }
 
@@ -193,6 +304,10 @@ void *GuestAddressSpace::guestToHost(GuestAddress address, std::size_t size,
     auto *region = findRegion(address, size);
     if (!region || !hasPermission(region->view.permissions, required))
         return nullptr;
+    // A writable host view may be written in place, so the pages are queued for
+    // the engine even though the shim might only read through this pointer.
+    if (hasPermission(required, MemoryPermission::Write))
+        markDirty(address, size);
     return region->bytes.data() + static_cast<std::size_t>(address - region->view.base);
 }
 
@@ -242,7 +357,14 @@ GuestMemoryCallbacks GuestAddressSpace::callbacks() {
         [this](GuestAddress address, const void *source, std::size_t size) {
             return write(address, source, size);
         },
+        [this](GuestAddress address, const void *source, std::size_t size) {
+            return writeFromGuest(address, source, size);
+        },
         [this]() { return regions(); },
+        [this]() { clearDirty(); },
+        [this](const std::function<bool(GuestAddress, const std::uint8_t *, std::size_t)> &visit) {
+            return drainDirtyPages(visit);
+        },
         {},
     };
 }

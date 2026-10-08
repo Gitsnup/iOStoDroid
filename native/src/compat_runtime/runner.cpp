@@ -46,12 +46,15 @@ void appendImportArrays(radek::Json &report, const radek::Json &loader) {
     report["unresolvedSymbols"] = unresolved == loader.fields.end() ? radek::Json::array() : unresolved->second;
 }
 
-// Maps a fresh 64 KiB boot stack and lays out a minimal Darwin-style
+// Maps a fresh 8 MiB boot stack and lays out a minimal Darwin-style
 // argv/envp frame so the Mach-O entry point can dereference SP for argc the
 // way real process startup does. Returns false when the stack cannot be
 // mapped or written; the caller must treat that as a failed boot setup.
 bool prepareBootStack(GuestAddressSpace &addressSpace, CpuRegisterState &registers) {
-    constexpr std::size_t stackSize = 64 * 1024;
+    // Real iOS main-thread stacks are ~1 MiB and game engines nest deeply on
+    // top of that; a 64 KiB probe stack overflows into whatever is mapped
+    // below it and then faults on a runtime page boundary.
+    constexpr std::size_t stackSize = 8U * 1024U * 1024U;
     // Frame (all offsets from the 16-aligned SP, matching dyld's layout of
     // argc followed by argv pointers, envp pointers, then strings):
     //   SP+0:  argc = 1
@@ -163,9 +166,9 @@ radek::Json GuestRunner::runMainBinary(const std::vector<std::uint8_t> &mainBina
     auto registers = load.initialRegisters;
     try {
         if (registers.r[13] == 0) {
-            const auto stack = addressSpace.mapAny(64 * 1024,
+            const auto stack = addressSpace.mapAny(8U * 1024U * 1024U,
                 MemoryPermission::Read | MemoryPermission::Write, "guest-stack");
-            registers.r[13] = stack + 64 * 1024;
+            registers.r[13] = stack + 8U * 1024U * 1024U;
         }
 
         const auto bindings = shims_.snapshot();

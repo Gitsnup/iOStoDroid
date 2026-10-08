@@ -18,6 +18,15 @@ android {
             cmake {
                 cppFlags += listOf("-std=c++17", "-Wall", "-Wextra")
                 arguments += listOf("-DRADEK_BUILD_COMPAT_RUNTIME=OFF")
+                // Opt-in compiler cache for CI and repeat local builds. It is only
+                // requested through an environment variable so machines without
+                // ccache keep working exactly as before.
+                if (System.getenv("RADEK_USE_CCACHE") == "1") {
+                    arguments += listOf(
+                        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                    )
+                }
             }
         }
     }

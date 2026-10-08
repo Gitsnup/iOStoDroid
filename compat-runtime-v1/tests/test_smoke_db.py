@@ -19,11 +19,11 @@ class BuildScopeTests(unittest.TestCase):
         runtime_gradle = (root / "compat-runtime-v1" / "build.gradle.kts").read_text(encoding="utf-8")
         cmake = (root / "native" / "CMakeLists.txt").read_text(encoding="utf-8")
 
-        self.assertIn("-DRADEK_BUILD_COMPAT_RUNTIME=OFF", converter_gradle)
-        self.assertIn('option(RADEK_BUILD_COMPAT_RUNTIME "Build and test compat-runtime-v1" OFF)', cmake)
-        self.assertIn('option(RADEK_FETCH_UNICORN "Fetch the pinned Unicorn ARM32 backend" OFF)', cmake)
-        self.assertIn('"-DRADEK_BUILD_COMPAT_RUNTIME=ON"', runtime_gradle)
-        self.assertIn('"-DRADEK_FETCH_UNICORN=ON"', runtime_gradle)
+        self.assertIn("-DIOSTODROID_BUILD_COMPAT_RUNTIME=OFF", converter_gradle)
+        self.assertIn('option(IOSTODROID_BUILD_COMPAT_RUNTIME "Build and test compat-runtime-v1" OFF)', cmake)
+        self.assertIn('option(IOSTODROID_FETCH_UNICORN "Fetch the pinned Unicorn ARM32 backend" OFF)', cmake)
+        self.assertIn('"-DIOSTODROID_BUILD_COMPAT_RUNTIME=ON"', runtime_gradle)
+        self.assertIn('"-DIOSTODROID_FETCH_UNICORN=ON"', runtime_gradle)
         self.assertIn('targets += listOf("compat_runtime_v1", "unicorn")', runtime_gradle)
 
 

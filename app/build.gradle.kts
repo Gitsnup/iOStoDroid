@@ -4,11 +4,11 @@ import java.util.zip.ZipFile
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 
 android {
-    namespace = "dev.radek.conventor"
+    namespace = "dev.iostodroid.conventor"
     compileSdk = 35
     ndkVersion = "27.2.12479018"
     defaultConfig {
-        applicationId = "dev.radek.conventor"
+        applicationId = "dev.iostodroid.conventor"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -17,7 +17,7 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags += listOf("-std=c++17", "-Wall", "-Wextra")
-                arguments += listOf("-DRADEK_BUILD_COMPAT_RUNTIME=OFF")
+                arguments += listOf("-DIOSTODROID_BUILD_COMPAT_RUNTIME=OFF")
             }
         }
     }
@@ -94,9 +94,9 @@ fun registerTemplateEmbedTask(module: String, assetDirectory: String, iconFileNa
     }
 }
 
-val embedPlaceholderTemplate = registerTemplateEmbedTask(":placeholder-template", "placeholder-template", "generated_placeholder_icon.png", "Ldev/radek/generated/GeneratedPlaceholderActivity;")
-val embedConvertedTemplate = registerTemplateEmbedTask(":converted-template", "converted-template", "generated_converted_icon.png", "Ldev/radek/generated/MainActivity;")
-val embedGameruntimeTemplate = registerTemplateEmbedTask(":gameruntime-template", "gameruntime-template", "generated_gameruntime_icon.png", "Ldev/radek/gameruntime/GameBootActivity;")
+val embedPlaceholderTemplate = registerTemplateEmbedTask(":placeholder-template", "placeholder-template", "generated_placeholder_icon.png", "Ldev/iostodroid/generated/GeneratedPlaceholderActivity;")
+val embedConvertedTemplate = registerTemplateEmbedTask(":converted-template", "converted-template", "generated_converted_icon.png", "Ldev/iostodroid/generated/MainActivity;")
+val embedGameruntimeTemplate = registerTemplateEmbedTask(":gameruntime-template", "gameruntime-template", "generated_gameruntime_icon.png", "Ldev/iostodroid/gameruntime/GameBootActivity;")
 
 // Surface full assertion messages and test stdout in the CI console; the default
 // logging prints only the exception class and source line, which hides values.

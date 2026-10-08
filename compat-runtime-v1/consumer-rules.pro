@@ -1,1 +1,1 @@
--keep class dev.radek.compat.runtime.RuntimeBridge { *; }
+-keep class dev.iostodroid.compat.runtime.RuntimeBridge { *; }

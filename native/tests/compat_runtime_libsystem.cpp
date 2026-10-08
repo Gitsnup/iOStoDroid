@@ -20,7 +20,7 @@
     } while (false)
 
 namespace {
-using namespace radek::compat_runtime;
+using namespace iostodroid::compat_runtime;
 
 constexpr GuestAddress kDataBase = 0x10000;
 constexpr GuestAddress kTextBase = 0x20000;

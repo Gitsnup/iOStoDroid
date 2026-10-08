@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 namespace {
 constexpr std::uint32_t kPageSize = 4096;
 constexpr GuestAddress kReturnSentinel = 0xeffff000;
@@ -518,4 +518,4 @@ std::unique_ptr<CpuBackend> createUnicornArm32Backend() {
     return std::make_unique<UnicornArm32Backend>();
 }
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

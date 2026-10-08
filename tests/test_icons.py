@@ -7,9 +7,9 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from radek import icons
-from radek.archive import discover_app, extract_ipa, read_plist
-from radek.pngcodec import Image, decode, encode
+from iostodroid import icons
+from iostodroid.archive import discover_app, extract_ipa, read_plist
+from iostodroid.pngcodec import Image, decode, encode
 
 from .carbuild import Builder, car_header, csi, facet, key, key_format
 from .test_pngcodec import build as png_build

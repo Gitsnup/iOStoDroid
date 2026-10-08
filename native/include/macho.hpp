@@ -1,6 +1,6 @@
 #pragma once
 #include "json.hpp"
-namespace radek {
+namespace iostodroid {
 /**
  * Parse a Mach-O image. The default produces the full symbol/reconstruction
  * inventory used by the host tools. Device import analysis can disable large

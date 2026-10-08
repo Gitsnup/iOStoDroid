@@ -22,7 +22,7 @@
     } while (false)
 
 namespace {
-using namespace radek::compat_runtime;
+using namespace iostodroid::compat_runtime;
 
 void putU32(std::vector<std::uint8_t> &bytes, std::size_t offset, std::uint32_t value) {
     for (unsigned index = 0; index < 4; ++index)
@@ -540,7 +540,7 @@ void testObjectiveCShimsResolveThroughLoaderAndReturn() {
     bind.push_back(0x00); // DONE
 
     ShimRegistry registry;
-    radek::compat_runtime::objc::ShimAdapter objcShims;
+    iostodroid::compat_runtime::objc::ShimAdapter objcShims;
     auto *rootClass = objcShims.runtime().findClass("NSObject");
     CHECK(rootClass != nullptr);
     rootClass->ivarNames.push_back("_property");
@@ -618,9 +618,9 @@ void testObjectiveCShimsResolveThroughLoaderAndReturn() {
 
     const auto probeSelector = objcShims.runtime().selector("shimSuperProbe");
     objcShims.runtime().addMethod(rootClass, probeSelector,
-                                  [](const radek::compat_runtime::objc::Receiver &,
-                                     const radek::compat_runtime::objc::Arguments &) {
-                                      return radek::compat_runtime::objc::Value{91};
+                                  [](const iostodroid::compat_runtime::objc::Receiver &,
+                                     const iostodroid::compat_runtime::objc::Arguments &) {
+                                      return iostodroid::compat_runtime::objc::Value{91};
                                   });
     const std::string probeName = "shimSuperProbe";
     CHECK(memory.write(0x3100, probeName.c_str(), probeName.size() + 1));
@@ -674,11 +674,11 @@ void testObjectiveCShimsResolveThroughLoaderAndReturn() {
 
     const auto copySelector = objcShims.runtime().selector("copy");
     objcShims.runtime().addMethod(rootClass, copySelector,
-        [&objcShims](const radek::compat_runtime::objc::Receiver &receiver,
-                     const radek::compat_runtime::objc::Arguments &) {
+        [&objcShims](const iostodroid::compat_runtime::objc::Receiver &receiver,
+                     const iostodroid::compat_runtime::objc::Arguments &) {
             auto *copy = objcShims.runtime().allocate(receiver.object->isa);
             copy->ivars = receiver.object->ivars;
-            return reinterpret_cast<radek::compat_runtime::objc::Value>(copy);
+            return reinterpret_cast<iostodroid::compat_runtime::objc::Value>(copy);
         });
     propertyFlags = {{0, 1}};
     CHECK(memory.write(propertyStack, propertyFlags.data(), sizeof(propertyFlags)));
@@ -793,7 +793,7 @@ void testAudioSessionInitializeAndSetActiveResolveAndReturnStatus() {
     const auto bytes = makeMachO(options);
 
     ShimRegistry registry;
-    radek::compat_runtime::audio::ShimAdapter audioShims;
+    iostodroid::compat_runtime::audio::ShimAdapter audioShims;
     audioShims.registerBindings(registry);
     const auto binding = registry.resolve("_AudioSessionInitialize");
     CHECK(binding.has_value());
@@ -853,7 +853,7 @@ void testAudioSessionInitializeAndSetActiveResolveAndReturnStatus() {
     setActiveOptions.indirectSymbolName = "_AudioSessionSetActive";
     const auto setActiveBytes = makeMachO(setActiveOptions);
     ShimRegistry setActiveRegistry;
-    radek::compat_runtime::audio::ShimAdapter setActiveAudioShims;
+    iostodroid::compat_runtime::audio::ShimAdapter setActiveAudioShims;
     setActiveAudioShims.registerBindings(setActiveRegistry);
     GuestAddressSpace setActiveMemory;
     const auto setActiveLoad = MachOLoader().load(setActiveBytes, setActiveMemory,
@@ -867,12 +867,12 @@ void testAudioSessionInitializeAndSetActiveResolveAndReturnStatus() {
           "audio-session-set-active-state-only");
 
     auto cpu = createArm32CpuBackend();
-#ifdef RADEK_TEST_REQUIRE_UNICORN
+#ifdef IOSTODROID_TEST_REQUIRE_UNICORN
     CHECK(cpu->available());
 #endif
     if (cpu->available()) {
         ShimRegistry runnerRegistry;
-        radek::compat_runtime::audio::ShimAdapter runnerAudioShims;
+        iostodroid::compat_runtime::audio::ShimAdapter runnerAudioShims;
         runnerAudioShims.registerBindings(runnerRegistry);
         GuestRunner runner(runnerRegistry, *cpu);
         const auto run = runner.runMainBinary(bytes, true);
@@ -882,7 +882,7 @@ void testAudioSessionInitializeAndSetActiveResolveAndReturnStatus() {
         CHECK(run.fields.at("execution").fields.at("entryPointReached").value == "true");
 
         ShimRegistry activeRunnerRegistry;
-        radek::compat_runtime::audio::ShimAdapter activeRunnerAudioShims;
+        iostodroid::compat_runtime::audio::ShimAdapter activeRunnerAudioShims;
         activeRunnerAudioShims.registerBindings(activeRunnerRegistry);
         GuestRunner activeRunner(activeRunnerRegistry, *cpu);
         const auto activeRun = activeRunner.runMainBinary(setActiveBytes, true);
@@ -895,7 +895,7 @@ void testAudioSessionInitializeAndSetActiveResolveAndReturnStatus() {
 
 void testFoundationSearchPathsReturnGuestNSStringArray() {
     ShimRegistry registry;
-    radek::compat_runtime::objc::ShimAdapter objcShims;
+    iostodroid::compat_runtime::objc::ShimAdapter objcShims;
     objcShims.registerBindings(registry);
     const auto searchPaths = registry.resolve("_NSSearchPathForDirectoriesInDomains");
     const auto messageSend = registry.resolve("_objc_msgSend");
@@ -1097,7 +1097,7 @@ void testSjLjResumeBoundaryStopsGuestExecution() {
     SjLjUnwindAdapter unwind;
     unwind.registerBindings(registry);
     auto cpu = createArm32CpuBackend();
-#ifdef RADEK_TEST_REQUIRE_UNICORN
+#ifdef IOSTODROID_TEST_REQUIRE_UNICORN
     CHECK(cpu->available());
 #endif
     if (!cpu->available())
@@ -1125,7 +1125,7 @@ void testObjectiveCMutationExceptionBoundaryIsReported() {
     const auto bytes = makeMachO(options);
 
     ShimRegistry registry;
-    radek::compat_runtime::objc::ShimAdapter objcShims;
+    iostodroid::compat_runtime::objc::ShimAdapter objcShims;
     objcShims.registerBindings(registry);
     const auto binding = registry.resolve("_objc_enumerationMutation");
     CHECK(binding.has_value() && binding->invokeException);
@@ -1142,12 +1142,12 @@ void testObjectiveCMutationExceptionBoundaryIsReported() {
     CHECK(reason.find("guest catch/unwind is unsupported") != std::string::npos);
 
     auto cpu = createArm32CpuBackend();
-#ifdef RADEK_TEST_REQUIRE_UNICORN
+#ifdef IOSTODROID_TEST_REQUIRE_UNICORN
     CHECK(cpu->available());
 #endif
     if (cpu->available()) {
         ShimRegistry runnerRegistry;
-        radek::compat_runtime::objc::ShimAdapter runnerObjcShims;
+        iostodroid::compat_runtime::objc::ShimAdapter runnerObjcShims;
         runnerObjcShims.registerBindings(runnerRegistry);
         GuestRunner runner(runnerRegistry, *cpu);
         const auto run = runner.runMainBinary(bytes, true);
@@ -1177,7 +1177,7 @@ void testImageObjectiveCMetadataDispatchesGuestMethods() {
     options.includeObjectiveCMetadata = true;
     const auto bytes = makeMachO(options);
     ShimRegistry registry;
-    radek::compat_runtime::objc::ShimAdapter objcShims;
+    iostodroid::compat_runtime::objc::ShimAdapter objcShims;
     objcShims.registerBindings(registry);
     GuestAddressSpace memory;
     const auto loaded = MachOLoader().load(bytes, memory, registry);
@@ -1351,7 +1351,7 @@ void testImageObjectiveCMetadataDispatchesGuestMethods() {
     CHECK(registers.r[13] == continuationStackPointer);
     const auto copyContinuationAddress = registers.r[14];
     const auto copyContinuation = registry.resolve(
-        "_radek_objc_setProperty_copy_continuation");
+        "_iostodroid_objc_setProperty_copy_continuation");
     CHECK(copyContinuation.has_value() && copyContinuation->invoke);
     CHECK(copyContinuationAddress == copyContinuation->guestAddress);
 
@@ -1376,7 +1376,7 @@ void testImageObjectiveCMetadataDispatchesGuestMethods() {
     CHECK(copiedPropertySlot == copiedValue);
 
     auto cpu = createArm32CpuBackend();
-#ifdef RADEK_TEST_REQUIRE_UNICORN
+#ifdef IOSTODROID_TEST_REQUIRE_UNICORN
     CHECK(cpu->available());
 #endif
     if (cpu->available()) {
@@ -1461,7 +1461,7 @@ void testImageObjectiveCMetadataDispatchesGuestMethods() {
         CHECK(!memory.contains(cpuPropertyReceiver, sizeof(std::uint32_t)));
 
         ShimRegistry runnerShims;
-        radek::compat_runtime::objc::ShimAdapter runnerObjcShims;
+        iostodroid::compat_runtime::objc::ShimAdapter runnerObjcShims;
         runnerObjcShims.registerBindings(runnerShims);
         GuestRunner runner(runnerShims, *cpu);
         const auto run = runner.runMainBinary(bytes, true);
@@ -1701,7 +1701,7 @@ void testRunnerReportsFirstMissingImport() {
     const auto unauthorized = GuestRunner(shims, *cpu).runMainBinary(bytes, false);
     CHECK(unauthorized.fields.at("status").value == "not_runnable");
     CHECK(unauthorized.fields.at("authorizationConfirmed").value == "false");
-    CHECK(unauthorized.fields.at("firstMissingImport").kind == radek::Json::Null);
+    CHECK(unauthorized.fields.at("firstMissingImport").kind == iostodroid::Json::Null);
 }
 
 void testRunnerReportsTimeLimitWithoutClaimingCompatibility() {

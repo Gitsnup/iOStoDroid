@@ -1,7 +1,7 @@
 import struct
 import unittest
-from radek.ir import *
-from radek.llvm_ir import emit as emit_llvm, verify as verify_llvm
+from iostodroid.ir import *
+from iostodroid.llvm_ir import emit as emit_llvm, verify as verify_llvm
 
 
 class IRTests(unittest.TestCase):
@@ -218,7 +218,7 @@ class IRTests(unittest.TestCase):
         code = struct.pack("<III", 0x52800500, 0x11000800, 0xD65F03C0)
         text = emit_llvm(lift(code, "arm64"))
         self.assertIn('target triple = "aarch64-unknown-linux-android"', text)
-        self.assertIn("define i32 @radek_lifted()", text)
+        self.assertIn("define i32 @iostodroid_lifted()", text)
         self.assertIn("%v0 = add i32 0, 40", text)
         self.assertIn("%v1 = add i32 %v0, 2", text)
         self.assertIn("ret i32 %v1", text)

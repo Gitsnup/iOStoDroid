@@ -10,7 +10,7 @@ out.mkdir(parents=True, exist_ok=True)
 compiler = os.environ.get("CXX", "g++")
 flags = ["-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(root / "native/include")]
 api_source = root / "native/src/apple_time_compat.cpp"
-shim_source = root / "native/src/radek_ios_shims.cpp"
+shim_source = root / "native/src/iostodroid_ios_shims.cpp"
 display_link_source = root / "native/src/cad_display_link_compat.cpp"
 subprocess.run(
     [
@@ -20,7 +20,7 @@ subprocess.run(
         str(root / "native/src/trivial.cpp"),
         str(root / "native/src/main.cpp"),
         "-o",
-        str(out / "radek-macho"),
+        str(out / "iostodroid-macho"),
     ],
     check=True,
 )
@@ -88,7 +88,7 @@ subprocess.run(
     [
         compiler,
         *flags,
-        str(root / "native/tests/radek_ios_shims.cpp"),
+        str(root / "native/tests/iostodroid_ios_shims.cpp"),
         str(shim_source),
         "-o",
         str(out / "ios-shims-tests"),

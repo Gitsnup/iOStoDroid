@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace radek::compat_runtime::objc {
+namespace iostodroid::compat_runtime::objc {
 
 using Selector = std::uint32_t;
 using Value = std::uintptr_t;
@@ -102,4 +102,4 @@ class AutoreleasePool {
     static Object *add(Object *object);
 };
 
-} // namespace radek::compat_runtime::objc
+} // namespace iostodroid::compat_runtime::objc

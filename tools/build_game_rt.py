@@ -8,7 +8,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from radek.game import codegen
+from iostodroid.game import codegen
 
 BUILD = os.path.join(ROOT, "build", "game_rt")
 IPA = os.path.join(ROOT, "tests", "data", "AngryBirds_v1.0_os30.ipa")
@@ -20,7 +20,7 @@ def main() -> int:
     rep = codegen.generate(IPA, BUILD)
     print("codegen:", rep)
     for hdr in ("cpu.h", "rt_core.h", "rt_host.c", "rt_core.c"):
-        shutil.copy(os.path.join(ROOT, "radek", "game", "rt", hdr),
+        shutil.copy(os.path.join(ROOT, "iostodroid", "game", "rt", hdr),
                     os.path.join(BUILD, hdr))
     cmd = ["gcc", opt, "-o", os.path.join(BUILD, "rt_run"),
            os.path.join(BUILD, "rt_host.c"),

@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 
 GuestAddress TrapShimAdapter::bind(ShimRegistry &registry, const std::string &symbol,
                                    const std::string &library) {
@@ -102,4 +102,4 @@ std::vector<std::string> TrapShimAdapter::symbols() const {
     return result;
 }
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

@@ -7,8 +7,8 @@ import subprocess
 import tempfile
 import unittest
 
-from radek.c_backend import emit
-from radek.ir import Unsupported, lift
+from iostodroid.c_backend import emit
+from iostodroid.ir import Unsupported, lift
 
 
 class CBackendTests(unittest.TestCase):
@@ -80,7 +80,7 @@ class CBackendTests(unittest.TestCase):
                     capture_output=True,
                     text=True,
                 )
-                native_entry = ctypes.CDLL(str(library)).radek_recompiled_entry
+                native_entry = ctypes.CDLL(str(library)).iostodroid_recompiled_entry
                 native_entry.restype = ctypes.c_uint32
                 self.assertEqual(native_entry(), expected)
 
@@ -89,7 +89,7 @@ class CBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(Unsupported, "function name"):
             emit(program, "bad();system")
 
-        from radek.ir import Block, Instruction, Op, Program
+        from iostodroid.ir import Block, Instruction, Op, Program
 
         unsupported = Program("arm64", [Block(0, [Instruction(Op.CALL, 0)])], b"", 4)
         with self.assertRaisesRegex(Unsupported, "no verified lowering"):

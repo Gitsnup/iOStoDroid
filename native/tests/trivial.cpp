@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-using radek::proveArm64IntegerLeaf;
+using iostodroid::proveArm64IntegerLeaf;
 
 namespace {
 std::vector<uint8_t> words(std::initializer_list<uint32_t> instructions) {
@@ -111,7 +111,7 @@ void testEmptyInputRejected() {
 
 void testRecompileTrivialRejectsGarbage() {
     std::vector<uint8_t> garbage = {0x00, 0x01, 0x02, 0x03};
-    radek::Json result = radek::recompileTrivial(garbage);
+    iostodroid::Json result = iostodroid::recompileTrivial(garbage);
     assert(result.fields.at("status").value == "UNSUPPORTED");
 }
 
@@ -259,8 +259,8 @@ std::vector<uint8_t> imageWithBindImport() {
 
 void testCompactImportInventoryRetainsDylibOrdinal() {
     const auto image = imageWithBindImport();
-    const auto full = radek::analyze(image);
-    const auto compact = radek::analyze(image, false);
+    const auto full = iostodroid::analyze(image);
+    const auto compact = iostodroid::analyze(image, false);
     for (const auto *result : {&full, &compact}) {
         const auto &slice = result->fields.at("slices").items.front();
         assert(slice.fields.at("dependencies").items.size() == 1);
@@ -302,28 +302,28 @@ std::vector<uint8_t> imageWithSymbolCount(uint32_t count) {
 }
 
 void testTextRelocationsRejectConversion() {
-    const auto unrelocated = radek::recompileTrivial(imageWithTextRelocations(0));
+    const auto unrelocated = iostodroid::recompileTrivial(imageWithTextRelocations(0));
     assert(unrelocated.fields.at("status").value == "PROVEN");
 
-    const auto relocated = radek::recompileTrivial(imageWithTextRelocations(1));
+    const auto relocated = iostodroid::recompileTrivial(imageWithTextRelocations(1));
     assert(relocated.fields.at("status").value == "UNSUPPORTED");
     assert(relocated.fields.at("reason").value.find("relocations in the proven __text section") != std::string::npos);
 }
 
 void testCompactImportInventoryIsBoundedAndMarkedTruncated() {
     constexpr uint32_t kImports = 100001;
-    const auto compact = radek::analyze(imageWithImportCount(kImports), false);
+    const auto compact = iostodroid::analyze(imageWithImportCount(kImports), false);
     const auto &slice = compact.fields.at("slices").items.front();
     assert(slice.fields.at("symbolCount").value == std::to_string(kImports));
     assert(slice.fields.at("imports").items.size() == 100000);
-    assert(slice.fields.at("importsTruncated").kind == radek::Json::Bool);
+    assert(slice.fields.at("importsTruncated").kind == iostodroid::Json::Bool);
     assert(slice.fields.at("importsTruncated").value == "true");
 }
 
 void testSymbolTablesAboveFormerLimitAreParsed() {
     constexpr uint32_t kSymbols = 100001;
     const auto image = imageWithSymbolCount(kSymbols);
-    const auto full = radek::analyze(image);
+    const auto full = iostodroid::analyze(image);
     const auto &slice = full.fields.at("slices").items.front();
     assert(slice.fields.at("symbols").items.size() == kSymbols);
     assert(slice.fields.at("symbolCount").value == std::to_string(kSymbols));
@@ -333,7 +333,7 @@ void testSymbolTablesAboveFormerLimitAreParsed() {
     // The Android importer uses the compact path: it still counts and scans the
     // entire table and retains the one undefined import, but does not retain
     // 100,000 local symbol objects in JNI JSON.
-    const auto compact = radek::analyze(image, false);
+    const auto compact = iostodroid::analyze(image, false);
     const auto &compactSlice = compact.fields.at("slices").items.front();
     assert(compactSlice.fields.at("symbolCount").value == std::to_string(kSymbols));
     assert(compactSlice.fields.at("symbols").items.empty());

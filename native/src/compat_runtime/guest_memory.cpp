@@ -5,7 +5,7 @@
 #include <limits>
 #include <stdexcept>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 namespace {
 constexpr std::uint64_t kGuestAddressSpaceSize = std::uint64_t{1} << 32;
 
@@ -247,4 +247,4 @@ GuestMemoryCallbacks GuestAddressSpace::callbacks() {
     };
 }
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

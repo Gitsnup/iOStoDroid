@@ -1,10 +1,10 @@
 plugins { id("com.android.application") }
 
 android {
-    namespace = "dev.radek.placeholder"
+    namespace = "dev.iostodroid.placeholder"
     compileSdk = 35
     defaultConfig {
-        applicationId = "dev.radek.placeholder"
+        applicationId = "dev.iostodroid.placeholder"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

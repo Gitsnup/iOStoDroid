@@ -6,7 +6,7 @@
 int main(int argc, char **argv) {
     try {
         if (argc < 2 || argc > 3)
-            throw std::runtime_error("usage: radek-macho executable [analyze|trivial]");
+            throw std::runtime_error("usage: iostodroid-macho executable [analyze|trivial]");
         std::ifstream f(argv[1], std::ios::binary | std::ios::ate);
         if (!f)
             throw std::runtime_error("cannot open executable");
@@ -20,7 +20,7 @@ int main(int argc, char **argv) {
         const bool trivial = argc == 3 && std::strcmp(argv[2], "trivial") == 0;
         if (argc == 3 && !trivial)
             throw std::runtime_error("unknown mode (expected: trivial)");
-        std::cout << (trivial ? radek::recompileTrivial(b) : radek::analyze(b)).dump() << '\n';
+        std::cout << (trivial ? iostodroid::recompileTrivial(b) : iostodroid::analyze(b)).dump() << '\n';
         return 0;
     } catch (const std::exception &e) {
         std::cerr << e.what() << '\n';

@@ -15,7 +15,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace radek {
+namespace iostodroid {
 namespace {
 
 std::string base64Encode(const uint8_t *data, size_t size) {
@@ -373,4 +373,4 @@ Json recompileTrivial(const std::vector<uint8_t> &data) {
     }
     return result;
 }
-} // namespace radek
+} // namespace iostodroid

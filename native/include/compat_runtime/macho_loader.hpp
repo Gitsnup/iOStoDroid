@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 
 struct MachOLoadReport {
     bool mapped = false;
@@ -24,19 +24,19 @@ struct MachOLoadReport {
     CpuRegisterState initialRegisters;
     std::uint32_t segmentCount = 0;
     std::uint32_t rebasesApplied = 0;
-    std::vector<radek::Json> resolvedSymbols;
-    std::vector<radek::Json> unresolvedSymbols;
+    std::vector<iostodroid::Json> resolvedSymbols;
+    std::vector<iostodroid::Json> unresolvedSymbols;
     // Imports bound to abort-on-call traps by loadWithTraps. They have no
     // implementation; the slot holds a trap address so execution can proceed
     // until the import is actually used. Empty for load().
-    std::vector<radek::Json> trappedSymbols;
+    std::vector<iostodroid::Json> trappedSymbols;
     // Undefined symbols with no loader binding location (nlist-only). Seen by
     // loadWithTraps only; load() keeps them in unresolvedSymbols.
-    std::vector<radek::Json> unboundNlistSymbols;
+    std::vector<iostodroid::Json> unboundNlistSymbols;
     std::optional<std::string> firstMissingImport;
 
     bool imageMapped() const noexcept;
-    radek::Json toJson() const;
+    iostodroid::Json toJson() const;
 };
 
 /** Bounded loader for thin or FAT 32-bit little-endian ARM Mach-O executables. */
@@ -62,4 +62,4 @@ class MachOLoader {
                                   GuestAddress slide = 0) const;
 };
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

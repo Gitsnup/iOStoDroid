@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace radek::compat_runtime::objc {
+namespace iostodroid::compat_runtime::objc {
 
 Object::Object(Class *objectClass, std::size_t instanceSlots)
     : isa(objectClass), ivars(instanceSlots, 0) {
@@ -241,4 +241,4 @@ Object *AutoreleasePool::add(Object *object) {
 
 Object *autorelease(Object *object) { return AutoreleasePool::add(object); }
 
-} // namespace radek::compat_runtime::objc
+} // namespace iostodroid::compat_runtime::objc

@@ -23,7 +23,7 @@
     } while (false)
 
 namespace {
-using namespace radek::compat_runtime;
+using namespace iostodroid::compat_runtime;
 
 void putU32(std::vector<std::uint8_t> &bytes, std::size_t offset, std::uint32_t value) {
     for (unsigned index = 0; index < 4; ++index)
@@ -227,7 +227,7 @@ void checkBootAttemptRunner(const std::vector<std::uint8_t> &bytes) {
         const auto empty = runner.run({}, true);
         CHECK(empty.fields.at("reason").value == "IPA main executable is empty.");
     }
-#ifdef RADEK_TEST_REQUIRE_UNICORN
+#ifdef IOSTODROID_TEST_REQUIRE_UNICORN
     {
         ShimRegistry registry;
         TrapShimAdapter traps;

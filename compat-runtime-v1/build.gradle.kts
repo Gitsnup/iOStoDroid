@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.radek.compat.runtime"
+    namespace = "dev.iostodroid.compat.runtime"
     compileSdk = 35
     ndkVersion = "27.2.12479018"
 
@@ -16,8 +16,8 @@ android {
             cmake {
                 cppFlags += listOf("-std=c++17", "-Wall", "-Wextra")
                 arguments += listOf(
-                    "-DRADEK_BUILD_COMPAT_RUNTIME=ON",
-                    "-DRADEK_FETCH_UNICORN=ON",
+                    "-DIOSTODROID_BUILD_COMPAT_RUNTIME=ON",
+                    "-DIOSTODROID_FETCH_UNICORN=ON",
                 )
                 // Unicorn is a shared CMake dependency. Declare it as a build target too so AGP
                 // packages libunicorn.so into the AAR; the generated game APK needs it beside

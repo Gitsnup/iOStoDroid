@@ -6,8 +6,8 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from radek.analysis import analyze, analyzer_path
-from radek.archive import InputError
+from iostodroid.analysis import analyze, analyzer_path
+from iostodroid.archive import InputError
 from .fixtures import macho, fat
 
 

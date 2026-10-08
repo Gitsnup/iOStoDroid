@@ -21,12 +21,12 @@ bash tools/test_sanitized.sh
 ```
 
 The Android importer APK is `app/build/outputs/apk/debug/app-debug.apk`; CI copies it to
-`RadekiOSConventor-debug.apk`. There are no developer-local files to check in.
+`iOStoDroid-debug.apk`. There are no developer-local files to check in.
 
-The host's `radek validate` command needs Android build-tools 35.0.0 (`aapt2`, `zipalign`, and
+The host's `iostodroid validate` command needs Android build-tools 35.0.0 (`aapt2`, `zipalign`, and
 `apksigner`) to validate an already-built importer or future complete-game APK. It does not build a
-game APK. With the same toolchain installed, `radek convert` additionally assembles the labelled
-`experimental-shell.apk` around isolated statically recompiled artifacts, and `radek validate-shell` checks
+game APK. With the same toolchain installed, `iostodroid convert` additionally assembles the labelled
+`experimental-shell.apk` around isolated statically recompiled artifacts, and `iostodroid validate-shell` checks
 its `experimental-shell-v1` contract (disclosure, DEX, metadata, signature).
 
 ## Import and inspect on Android
@@ -72,13 +72,13 @@ Build the native analyzer, then inspect an authorized IPA:
 
 ```sh
 python3 tools/build_native.py
-python3 -m radek analyze authorized.ipa --authorized --output workspace/analysis
+python3 -m iostodroid analyze authorized.ipa --authorized --output workspace/analysis
 ```
 
 The workspace must not already exist. Reports and logs persist; extracted workspaces are removed.
 The host reconstructs code metadata and may prove one narrow closed-integer entry leaf. When that
 proof succeeds, it writes a raw Android instruction blob, portable C, a minimal loadable ARM shared
-object exporting `radek_recompiled_entry`, and supplementary `leaf-experiment.ll`. It statically
+object exporting `iostodroid_recompiled_entry`, and supplementary `leaf-experiment.ll`. It statically
 checks the ELF architecture, symbol size/hash, and lack of undefined symbols; C is compiled and run
 against representative IR cases in the unit tests. No Android device load test is performed.
 
@@ -113,9 +113,9 @@ unsupported entry-reachable APIs remain blockers, and no general playable conver
 Validate the Android importer after building it:
 
 ```sh
-python3 -m radek validate app/build/outputs/apk/debug/app-debug.apk \
-  --package dev.radek.conventor \
-  --entry dev.radek.conventor.MainActivity \
+python3 -m iostodroid validate app/build/outputs/apk/debug/app-debug.apk \
+  --package dev.iostodroid.conventor \
+  --entry dev.iostodroid.conventor.MainActivity \
   --converter-app
 ```
 
@@ -140,7 +140,7 @@ CI publishes no imported-IPA preview APK.
 
 `.github/workflows/build.yml` runs native/Python/Android tests, builds and validates the importer,
 converts both `tests/data/hello-test.ipa` and the longer `tests/data/simple.ipa` end to end, validates
-the resulting bounded conversion APKs, and uploads `RadekiOSConventor-debug.apk` plus validation,
+the resulting bounded conversion APKs, and uploads `iOStoDroid-debug.apk` plus validation,
 test and diagnostic conversion artifacts. CI does not publish a synthetic or unproven game APK. No
 iOS executable is run by tests, and there is no device runtime smoke test at present.
 

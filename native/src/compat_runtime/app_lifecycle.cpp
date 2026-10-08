@@ -34,7 +34,7 @@
 #include <utility>
 #include <vector>
 
-namespace radek::compat_runtime::objc {
+namespace iostodroid::compat_runtime::objc {
 namespace {
 
 constexpr std::uint32_t kFrameDidFinishLaunching = 1;
@@ -647,7 +647,7 @@ bool ShimAdapter::lifecycleThreadMessage(CpuRegisterState &registers, GuestAddre
     if (selectorName == "setThreadPriority:" || selectorName == "setName:")
         return finish(0);
     if (selectorName == "name")
-        return finish(createGuestString(memory, "radek-guest-thread", true));
+        return finish(createGuestString(memory, "iostodroid-guest-thread", true));
     if (selectorName == "sleepForTimeInterval:") {
         // The bounded main-loop service: after the configured number of sleeps
         // the runtime cancels the guest thread it is running, so the guest loop
@@ -1130,9 +1130,9 @@ bool ShimAdapter::lifecycleSelector(CpuRegisterState &registers, GuestAddressSpa
         }
         if (receiverIsKindOf(receiverObject, kBundleClass)) {
             if (selectorName == "bundlePath" || selectorName == "resourcePath")
-                return finish(createGuestString(memory, "/radek-bundle/App.app", true));
+                return finish(createGuestString(memory, "/iostodroid-bundle/App.app", true));
             if (selectorName == "pathForResource:ofType:")
-                return finish(createGuestString(memory, "/radek-bundle/App.app/resource", true));
+                return finish(createGuestString(memory, "/iostodroid-bundle/App.app/resource", true));
             return false;
         }
         // ---- EAGLContext ---------------------------------------------------
@@ -1193,9 +1193,9 @@ BootLifecycleHooks ShimAdapter::lifecycleHooks() {
                                           GuestAddress &entryPoint, std::string &reason) {
         return prepareQueuedMainThreadEntry(memory, registers, entryPoint, reason);
     };
-    hooks.describe = [this](GuestAddressSpace &memory, radek::Json &report) {
+    hooks.describe = [this](GuestAddressSpace &memory, iostodroid::Json &report) {
         const auto outcome = lifecycleOutcome(memory);
-        radek::Json lifecycle = radek::Json::object();
+        iostodroid::Json lifecycle = iostodroid::Json::object();
         lifecycle["applicationMainEntered"] = outcome.applicationMainEntered;
         lifecycle["applicationMainReturned"] = outcome.applicationMainReturned;
         lifecycle["delegateClassName"] = outcome.delegateClassName;
@@ -1204,9 +1204,9 @@ BootLifecycleHooks ShimAdapter::lifecycleHooks() {
         lifecycle["mainThreadFramesLimit"] =
             static_cast<std::uint64_t>(outcome.mainThreadFramesLimit);
         lifecycle["mainThreadQueueExhausted"] = outcome.mainThreadQueueExhausted;
-        radek::Json events = radek::Json::array();
+        iostodroid::Json events = iostodroid::Json::array();
         for (const auto &event : outcome.events)
-            events.push(radek::Json(event));
+            events.push(iostodroid::Json(event));
         lifecycle["events"] = std::move(events);
         lifecycle["note"] =
             "bounded startup-chain trace: lifecycle messages delivered to real guest code, "
@@ -1216,4 +1216,4 @@ BootLifecycleHooks ShimAdapter::lifecycleHooks() {
     return hooks;
 }
 
-} // namespace radek::compat_runtime::objc
+} // namespace iostodroid::compat_runtime::objc

@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from radek.api_implementations import _SUPPORTED, generate, reachable_imports
+from iostodroid.api_implementations import _SUPPORTED, generate, reachable_imports
 
 
 class MachTimebaseInfo(ctypes.Structure):
@@ -93,8 +93,8 @@ class ApiImplementationTests(unittest.TestCase):
             self.assertTrue(all(item["reachableFromEntry"] for item in report["replacements"]))
             source_dir = output / "api-replacements"
             source = (source_dir / "api-replacements.cpp").read_text()
-            self.assertIn("#define RADEK_API_REPLACEMENTS_ONLY 1", source)
-            self.assertIn("#define RADEK_API_CFAbsoluteTimeGetCurrent 1", source)
+            self.assertIn("#define IOSTODROID_API_REPLACEMENTS_ONLY 1", source)
+            self.assertIn("#define IOSTODROID_API_CFAbsoluteTimeGetCurrent 1", source)
             self.assertTrue((source_dir / "apple_time_compat.h").is_file())
             self.assertIn("CLOCK_REALTIME", source)
             self.assertIn("extern \"C\" uint64_t mach_absolute_time", source)
@@ -247,31 +247,31 @@ class ApiImplementationTests(unittest.TestCase):
                 text=True,
             )
             library = ctypes.CDLL(str(library_path))
-            strlen = library.radek_compat_strlen
+            strlen = library.iostodroid_compat_strlen
             strlen.argtypes = [ctypes.c_char_p]
             strlen.restype = ctypes.c_size_t
-            self.assertEqual(strlen(b"radek"), 5)
+            self.assertEqual(strlen(b"iostodroid"), 5)
 
-            allocate = library.radek_compat_malloc
+            allocate = library.iostodroid_compat_malloc
             allocate.argtypes = [ctypes.c_size_t]
             allocate.restype = ctypes.c_void_p
             block = allocate(128)
             self.assertNotEqual(block, None)
-            library.radek_compat_free(ctypes.c_void_p(block))
+            library.iostodroid_compat_free(ctypes.c_void_p(block))
 
-            create = library.radek_compat_CFStringCreateWithCString
+            create = library.iostodroid_compat_CFStringCreateWithCString
             create.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
             create.restype = ctypes.c_void_p
             text = create(None, b"hello", 0x08000100)
             self.assertNotEqual(text, None)
-            length = library.radek_compat_CFStringGetLength
+            length = library.iostodroid_compat_CFStringGetLength
             length.argtypes = [ctypes.c_void_p]
             length.restype = ctypes.c_long
             self.assertEqual(length(ctypes.c_void_p(text)), 5)
-            library.radek_compat_CFRelease(ctypes.c_void_p(text))
+            library.iostodroid_compat_CFRelease(ctypes.c_void_p(text))
 
     def test_android_mapper_table_matches_the_host_compiled_compatibility_table(self):
-        kotlin_path = Path(__file__).parents[1] / "app/src/main/java/dev/radek/conventor/AndroidApiMapper.kt"
+        kotlin_path = Path(__file__).parents[1] / "app/src/main/java/dev/iostodroid/conventor/AndroidApiMapper.kt"
         source = kotlin_path.read_text(encoding="utf-8")
         start = source.index("private val implementedApiReplacements = mapOf(")
         end = source.index("\n    )", start)
@@ -287,16 +287,16 @@ class ApiImplementationTests(unittest.TestCase):
                 self.assertIn(implementation, test_sources)
 
     def test_shim_table_matches_the_native_header_macro(self):
-        """The Python table must equal RADEK_IOS_SHIM_TABLE in the C++ header.
+        """The Python table must equal IOSTODROID_IOS_SHIM_TABLE in the C++ header.
 
         native/src/ioscompat_registry.cpp and native/src/jni.cpp expand that
         macro, so any drift would make the host generator, the on-device
         registry and the JNI resolver disagree about what is implemented.
         """
-        from radek.api_implementations import _FAMILY, _SUPPORTED
+        from iostodroid.api_implementations import _FAMILY, _SUPPORTED
 
-        header = (Path(__file__).resolve().parent.parent / "native/include/radek_ios_shims.h").read_text()
-        start = header.index("#define RADEK_IOS_SHIM_TABLE(X)")
+        header = (Path(__file__).resolve().parent.parent / "native/include/iostodroid_ios_shims.h").read_text()
+        start = header.index("#define IOSTODROID_IOS_SHIM_TABLE(X)")
         block = header[start:]
         block = block[: block.index("\n#endif")].replace("\\\n", "\n")
         rows = re.findall(r'^\s*X\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)', block, re.M)
@@ -304,8 +304,8 @@ class ApiImplementationTests(unittest.TestCase):
         for darwin, android in rows:
             with self.subTest(darwin=darwin):
                 self.assertEqual(_SUPPORTED[darwin][0], android)
-                self.assertEqual(_SUPPORTED[darwin][1], "RADEK_API_" + android)
-                expected = "cf" if android[len("radek_compat_"):].startswith("CF") else "libc"
+                self.assertEqual(_SUPPORTED[darwin][1], "IOSTODROID_API_" + android)
+                expected = "cf" if android[len("iostodroid_compat_"):].startswith("CF") else "libc"
                 self.assertEqual(_FAMILY[darwin], expected)
         # Every non-time entry of the Python table must come from the macro.
         macro_symbols = {darwin for darwin, _ in rows}

@@ -7,7 +7,7 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_set>
-namespace radek {
+namespace iostodroid {
 namespace {
 constexpr size_t kBaseAnalysisBudget = 40000000;
 constexpr size_t kMaximumAnalysisBudget = 800000000;
@@ -936,4 +936,4 @@ Json analyze(const std::vector<uint8_t> &data, bool includeSymbolDetails) {
         result["slices"].push(thin(Reader{data, 0, data.size(), false, r.budget}, includeSymbolDetails));
     return result;
 }
-} // namespace radek
+} // namespace iostodroid

@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 
 /**
  * Abort-on-call traps for Darwin imports that have no tested adapter.
@@ -64,4 +64,4 @@ class TrapShimAdapter {
     std::vector<std::string> symbols() const;
 };
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

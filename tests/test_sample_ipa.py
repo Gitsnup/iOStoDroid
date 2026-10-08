@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from radek.pipeline import Pipeline
+from iostodroid.pipeline import Pipeline
 from tests.fixtures import ipa, macho
 
 _TOOL = Path(__file__).resolve().parent.parent / "tools" / "make_sample_ipa.py"

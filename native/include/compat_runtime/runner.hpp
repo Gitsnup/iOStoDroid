@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 
 /** Loads one authorized IPA main executable and reports its first runtime blocker. */
 class GuestRunner {
@@ -23,7 +23,7 @@ class GuestRunner {
                 std::size_t memoryLimit = 256U * 1024U * 1024U)
         : shims_(shims), cpu_(cpu), memoryLimit_(memoryLimit) {}
 
-    radek::Json runMainBinary(const std::vector<std::uint8_t> &mainBinary,
+    iostodroid::Json runMainBinary(const std::vector<std::uint8_t> &mainBinary,
                               bool authorizationConfirmed) const;
 };
 
@@ -41,7 +41,7 @@ struct BootLifecycleHooks {
         prepareMainThreadEntry;
     std::function<void(GuestAddressSpace &, std::uint32_t frames)> setMainThreadServiceLimit;
     std::function<void(GuestAddressSpace &)> finishMainThreadEntry;
-    std::function<void(GuestAddressSpace &, radek::Json &report)> describe;
+    std::function<void(GuestAddressSpace &, iostodroid::Json &report)> describe;
 };
 
 /**
@@ -94,8 +94,8 @@ class BootAttemptRunner {
         mainThreadTimeLimitMicros_ = timeLimitMicros;
     }
 
-    radek::Json run(const std::vector<std::uint8_t> &mainBinary,
+    iostodroid::Json run(const std::vector<std::uint8_t> &mainBinary,
                     bool authorizationConfirmed);
 };
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

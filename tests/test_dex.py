@@ -2,12 +2,12 @@ import hashlib
 import struct
 import unittest
 import zlib
-from radek.dex import classes
-from radek.archive import InputError
+from iostodroid.dex import classes
+from iostodroid.archive import InputError
 
 
 def dex():
-    descriptor = b"Ldev/radek/generated/MainActivity;"
+    descriptor = b"Ldev/iostodroid/generated/MainActivity;"
     data = bytearray(152) + bytes([len(descriptor)]) + descriptor + b"\x00"
     data[:8] = b"dex\n035\x00"
     struct.pack_into("<III", data, 32, len(data), 112, 0x12345678)
@@ -22,7 +22,7 @@ def dex():
 
 class DexTests(unittest.TestCase):
     def test_class_identity_structure_fixture(self):
-        self.assertEqual(classes(dex()), {"Ldev/radek/generated/MainActivity;"})
+        self.assertEqual(classes(dex()), {"Ldev/iostodroid/generated/MainActivity;"})
 
     def test_modified_dex_rejected(self):
         data = dex()

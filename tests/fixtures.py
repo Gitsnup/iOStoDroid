@@ -4,7 +4,7 @@ import plistlib
 import struct
 import zipfile
 from pathlib import Path
-from radek.resources import fallback_icon
+from iostodroid.resources import fallback_icon
 
 
 def macho(

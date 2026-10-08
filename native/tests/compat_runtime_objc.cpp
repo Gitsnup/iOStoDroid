@@ -10,7 +10,7 @@
     } while (false)
 
 namespace {
-using namespace radek::compat_runtime::objc;
+using namespace iostodroid::compat_runtime::objc;
 
 struct TrackedObject final : Object {
     explicit TrackedObject(Class *klass, int &destroyed) : Object(klass), destroyed_(destroyed) {}
@@ -74,7 +74,7 @@ void testClassesSelectorsAndDispatch() {
         missingThrew = true;
     }
     CHECK(missingThrew);
-    radek::compat_runtime::objc::release(object);
+    iostodroid::compat_runtime::objc::release(object);
 }
 
 void testRetainReleaseAndAutoreleasePools() {

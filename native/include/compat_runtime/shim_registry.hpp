@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 
 struct ShimBinding {
     std::string darwinSymbol;
@@ -60,4 +60,4 @@ class ShimRegistry {
     std::size_t size() const;
 };
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 
 // Full ARM user-mode register state. The integer bank is what the shim
 // callouts see; the VFP bank travels with it because the guest ABI makes
@@ -20,4 +20,4 @@ struct CpuRegisterState {
     std::uint32_t fpscr = 0;
 };
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

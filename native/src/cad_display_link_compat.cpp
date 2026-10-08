@@ -8,8 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
-struct radek_CADisplayLink {
-    radek_CADisplayLinkCallback callback = nullptr;
+struct iostodroid_CADisplayLink {
+    iostodroid_CADisplayLinkCallback callback = nullptr;
     void *context = nullptr;
     std::atomic<bool> paused{false};
     std::atomic<bool> invalidated{false};
@@ -22,16 +22,16 @@ struct radek_CADisplayLink {
 
 namespace {
 std::mutex g_linksMutex;
-std::unordered_map<radek_CADisplayLinkRef, std::shared_ptr<radek_CADisplayLink>> g_links;
+std::unordered_map<iostodroid_CADisplayLinkRef, std::shared_ptr<iostodroid_CADisplayLink>> g_links;
 
-std::shared_ptr<radek_CADisplayLink> findLink(radek_CADisplayLinkRef handle) {
+std::shared_ptr<iostodroid_CADisplayLink> findLink(iostodroid_CADisplayLinkRef handle) {
     if (handle == nullptr) return {};
     std::lock_guard<std::mutex> lock(g_linksMutex);
     const auto found = g_links.find(handle);
-    return found == g_links.end() ? std::shared_ptr<radek_CADisplayLink>{} : found->second;
+    return found == g_links.end() ? std::shared_ptr<iostodroid_CADisplayLink>{} : found->second;
 }
 
-bool shouldDeliver(radek_CADisplayLink &link,
+bool shouldDeliver(iostodroid_CADisplayLink &link,
                    int64_t frameTimeNanos,
                    int64_t frameIntervalNanos,
                    double &timestamp,
@@ -68,10 +68,10 @@ bool shouldDeliver(radek_CADisplayLink &link,
 }
 } // namespace
 
-extern "C" radek_CADisplayLinkRef radek_compat_CADisplayLinkCreate(
-    radek_CADisplayLinkCallback callback, void *context) {
+extern "C" iostodroid_CADisplayLinkRef iostodroid_compat_CADisplayLinkCreate(
+    iostodroid_CADisplayLinkCallback callback, void *context) {
     if (callback == nullptr) return nullptr;
-    auto link = std::make_shared<radek_CADisplayLink>();
+    auto link = std::make_shared<iostodroid_CADisplayLink>();
     link->callback = callback;
     link->context = context;
     const auto handle = link.get();
@@ -80,15 +80,15 @@ extern "C" radek_CADisplayLinkRef radek_compat_CADisplayLinkCreate(
     return handle;
 }
 
-extern "C" void radek_compat_CADisplayLinkInvalidate(radek_CADisplayLinkRef displayLink) {
+extern "C" void iostodroid_compat_CADisplayLinkInvalidate(iostodroid_CADisplayLinkRef displayLink) {
     const auto link = findLink(displayLink);
     if (!link) return;
     link->invalidated.store(true, std::memory_order_release);
 }
 
-extern "C" void radek_compat_CADisplayLinkRelease(radek_CADisplayLinkRef displayLink) {
+extern "C" void iostodroid_compat_CADisplayLinkRelease(iostodroid_CADisplayLinkRef displayLink) {
     if (displayLink == nullptr) return;
-    std::shared_ptr<radek_CADisplayLink> link;
+    std::shared_ptr<iostodroid_CADisplayLink> link;
     {
         std::lock_guard<std::mutex> lock(g_linksMutex);
         const auto found = g_links.find(displayLink);
@@ -99,7 +99,7 @@ extern "C" void radek_compat_CADisplayLinkRelease(radek_CADisplayLinkRef display
     link->invalidated.store(true, std::memory_order_release);
 }
 
-extern "C" void radek_compat_CADisplayLinkSetPaused(radek_CADisplayLinkRef displayLink,
+extern "C" void iostodroid_compat_CADisplayLinkSetPaused(iostodroid_CADisplayLinkRef displayLink,
                                                       uint8_t paused) {
     const auto link = findLink(displayLink);
     if (!link || link->invalidated.load(std::memory_order_acquire)) return;
@@ -111,13 +111,13 @@ extern "C" void radek_compat_CADisplayLinkSetPaused(radek_CADisplayLinkRef displ
     }
 }
 
-extern "C" uint8_t radek_compat_CADisplayLinkIsPaused(radek_CADisplayLinkRef displayLink) {
+extern "C" uint8_t iostodroid_compat_CADisplayLinkIsPaused(iostodroid_CADisplayLinkRef displayLink) {
     const auto link = findLink(displayLink);
     return !link || link->paused.load(std::memory_order_acquire) ? 1 : 0;
 }
 
-extern "C" int radek_compat_CADisplayLinkSetPreferredFramesPerSecond(
-    radek_CADisplayLinkRef displayLink, int framesPerSecond) {
+extern "C" int iostodroid_compat_CADisplayLinkSetPreferredFramesPerSecond(
+    iostodroid_CADisplayLinkRef displayLink, int framesPerSecond) {
     if (framesPerSecond < 0 || framesPerSecond > 240) return 0;
     const auto link = findLink(displayLink);
     if (!link || link->invalidated.load(std::memory_order_acquire)) return 0;
@@ -125,27 +125,27 @@ extern "C" int radek_compat_CADisplayLinkSetPreferredFramesPerSecond(
     return 1;
 }
 
-extern "C" int radek_compat_CADisplayLinkGetPreferredFramesPerSecond(
-    radek_CADisplayLinkRef displayLink) {
+extern "C" int iostodroid_compat_CADisplayLinkGetPreferredFramesPerSecond(
+    iostodroid_CADisplayLinkRef displayLink) {
     const auto link = findLink(displayLink);
     return link ? link->preferredFramesPerSecond.load(std::memory_order_acquire) : 0;
 }
 
-extern "C" double radek_compat_CADisplayLinkGetTimestamp(radek_CADisplayLinkRef displayLink) {
+extern "C" double iostodroid_compat_CADisplayLinkGetTimestamp(iostodroid_CADisplayLinkRef displayLink) {
     const auto link = findLink(displayLink);
     if (!link) return 0.0;
     std::lock_guard<std::mutex> lock(link->timingMutex);
     return link->timestamp;
 }
 
-extern "C" double radek_compat_CADisplayLinkGetDuration(radek_CADisplayLinkRef displayLink) {
+extern "C" double iostodroid_compat_CADisplayLinkGetDuration(iostodroid_CADisplayLinkRef displayLink) {
     const auto link = findLink(displayLink);
     if (!link) return 0.0;
     std::lock_guard<std::mutex> lock(link->timingMutex);
     return link->duration;
 }
 
-extern "C" size_t radek_compat_CADisplayLinkActiveCount(void) {
+extern "C" size_t iostodroid_compat_CADisplayLinkActiveCount(void) {
     std::lock_guard<std::mutex> lock(g_linksMutex);
     size_t active = 0;
     for (const auto &entry : g_links) {
@@ -154,12 +154,12 @@ extern "C" size_t radek_compat_CADisplayLinkActiveCount(void) {
     return active;
 }
 
-extern "C" void radek_compat_CADisplayLinkDispatchFrame(int64_t frameTimeNanos,
+extern "C" void iostodroid_compat_CADisplayLinkDispatchFrame(int64_t frameTimeNanos,
                                                           int64_t frameIntervalNanos) {
     if (frameTimeNanos <= 0) return;
     if (frameIntervalNanos < 0) frameIntervalNanos = 0;
 
-    std::vector<std::shared_ptr<radek_CADisplayLink>> snapshot;
+    std::vector<std::shared_ptr<iostodroid_CADisplayLink>> snapshot;
     {
         std::lock_guard<std::mutex> lock(g_linksMutex);
         snapshot.reserve(g_links.size());
@@ -185,9 +185,9 @@ extern "C" void radek_compat_CADisplayLinkDispatchFrame(int64_t frameTimeNanos,
 #include <jni.h>
 
 extern "C" JNIEXPORT void JNICALL
-Java_dev_radek_generated_FrameClockBridge_nativeDispatchFrame(JNIEnv *, jclass, jlong frameTimeNanos,
+Java_dev_iostodroid_generated_FrameClockBridge_nativeDispatchFrame(JNIEnv *, jclass, jlong frameTimeNanos,
                                                                jlong frameIntervalNanos) {
-    radek_compat_CADisplayLinkDispatchFrame(static_cast<int64_t>(frameTimeNanos),
+    iostodroid_compat_CADisplayLinkDispatchFrame(static_cast<int64_t>(frameTimeNanos),
                                             static_cast<int64_t>(frameIntervalNanos));
 }
 #endif

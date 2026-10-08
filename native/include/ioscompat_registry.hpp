@@ -20,7 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace radek_compat {
+namespace iostodroid_compat {
 
 enum class Kind : int {
     Verified = 1,
@@ -55,7 +55,7 @@ std::size_t stubCount();
 std::uint64_t stubCallTotal();
 std::uint64_t stubCallCount(const char *darwinSymbol);
 
-} // namespace radek_compat
+} // namespace iostodroid_compat
 
 // dlsym-visible C ABI (implemented in ioscompat_registry.cpp). Classification
 // strings are "verified" (real implementation) or "stubbed" (explicit
@@ -64,14 +64,14 @@ std::uint64_t stubCallCount(const char *darwinSymbol);
 extern "C" {
 #endif
 
-const char *radek_compat_classify(const char *darwin_symbol);
-void (*radek_compat_resolve(const char *darwin_symbol))(void);
-int radek_compat_register_stub(const char *darwin_symbol);
-unsigned long radek_compat_entry_count(void);
-int radek_compat_entry_at(unsigned long index, const char **darwin_symbol, const char **android_symbol,
+const char *iostodroid_compat_classify(const char *darwin_symbol);
+void (*iostodroid_compat_resolve(const char *darwin_symbol))(void);
+int iostodroid_compat_register_stub(const char *darwin_symbol);
+unsigned long iostodroid_compat_entry_count(void);
+int iostodroid_compat_entry_at(unsigned long index, const char **darwin_symbol, const char **android_symbol,
                           int *kind, void (**handler)(void));
-unsigned long long radek_compat_stub_call_total(void);
-unsigned long long radek_compat_stub_call_count(const char *darwin_symbol);
+unsigned long long iostodroid_compat_stub_call_total(void);
+unsigned long long iostodroid_compat_stub_call_count(const char *darwin_symbol);
 
 #ifdef __cplusplus
 } // extern "C"

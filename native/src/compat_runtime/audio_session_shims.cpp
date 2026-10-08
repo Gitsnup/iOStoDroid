@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace radek::compat_runtime::audio {
+namespace iostodroid::compat_runtime::audio {
 namespace {
 constexpr std::uint32_t kAudioSessionNotInitialized = 0x21696e69U; // '!ini'
 }
@@ -77,4 +77,4 @@ std::optional<bool> ShimAdapter::activeState() const {
     return activeState_;
 }
 
-} // namespace radek::compat_runtime::audio
+} // namespace iostodroid::compat_runtime::audio

@@ -34,7 +34,7 @@
     } while (false)
 
 namespace {
-using namespace radek::compat_runtime;
+using namespace iostodroid::compat_runtime;
 
 constexpr GuestAddress kDataBase = 0x10000;
 constexpr GuestAddress kCodeBase = 0x20000;
@@ -167,7 +167,7 @@ void runUiApplicationMain(Fixture &fixture, const objc::LifecycleOutcome &before
     CHECK(result == GuestCalloutResult::Transferred);
     CHECK((registers.r[15] & ~GuestAddress{1}) == kDidFinishImplementation);
     CHECK((registers.r[14] & ~GuestAddress{1}) ==
-          (fixture.callout("_radek_lifecycle_continuation") & ~GuestAddress{1}));
+          (fixture.callout("_iostodroid_lifecycle_continuation") & ~GuestAddress{1}));
     CHECK(registers.r[0] != 0); // the delegate instance
 
     const auto outcome = fixture.objc.lifecycleOutcome(fixture.memory);
@@ -180,7 +180,7 @@ void runUiApplicationMain(Fixture &fixture, const objc::LifecycleOutcome &before
     CpuRegisterState returning = registers;
     returning.r[0] = 0;
     std::string continuationReason;
-    CHECK(fixture.registry.invokeCallout(fixture.callout("_radek_lifecycle_continuation"),
+    CHECK(fixture.registry.invokeCallout(fixture.callout("_iostodroid_lifecycle_continuation"),
                                         returning, fixture.memory, continuationReason) ==
           GuestCalloutResult::Returned);
     CHECK(returning.r[14] == 0x12345678);
@@ -263,10 +263,10 @@ int main() {
             CHECK(result == GuestCalloutResult::Transferred);
             CHECK((registers.r[15] & ~GuestAddress{1}) == kUpdateImplementation);
             CHECK((registers.r[14] & ~GuestAddress{1}) ==
-                  (fixture.callout("_radek_lifecycle_continuation") & ~GuestAddress{1}));
+                  (fixture.callout("_iostodroid_lifecycle_continuation") & ~GuestAddress{1}));
             CpuRegisterState returning = registers;
             std::string continuationReason;
-            CHECK(fixture.registry.invokeCallout(fixture.callout("_radek_lifecycle_continuation"),
+            CHECK(fixture.registry.invokeCallout(fixture.callout("_iostodroid_lifecycle_continuation"),
                                                 returning, fixture.memory, continuationReason) ==
                   GuestCalloutResult::Returned);
             const auto outcome = fixture.objc.lifecycleOutcome(fixture.memory);

@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 
 void ShimRegistry::registerBinding(ShimBinding binding) {
     const bool dataBinding = static_cast<bool>(binding.resolveGuestAddress);
@@ -141,4 +141,4 @@ std::size_t ShimRegistry::size() const {
     return bindings_.size();
 }
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

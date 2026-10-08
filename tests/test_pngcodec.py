@@ -4,8 +4,8 @@ import struct
 import unittest
 import zlib
 
-from radek.archive import InputError
-from radek.pngcodec import (
+from iostodroid.archive import InputError
+from iostodroid.pngcodec import (
     Image,
     PngError,
     chunks,

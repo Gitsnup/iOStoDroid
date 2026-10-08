@@ -11,8 +11,8 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from radek.ceiling import CONTRACT, GATES, assess, finalize_apk
-from radek.pipeline import Pipeline
+from iostodroid.ceiling import CONTRACT, GATES, assess, finalize_apk
+from iostodroid.pipeline import Pipeline
 from .fixtures import ipa, macho, fat
 
 DATA = Path(__file__).resolve().parent / "data"

@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from radek.pipeline import Pipeline
-from radek.analysis import _macho_import_ordinal
-from radek import pipeline as pipeline_module
+from iostodroid.pipeline import Pipeline
+from iostodroid.analysis import _macho_import_ordinal
+from iostodroid import pipeline as pipeline_module
 from .fixtures import ipa, macho, fat
 
 
@@ -106,7 +106,7 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(api_generation["replacements"][0]["linkedIntoGame"])
         self.assertTrue((self.root / "job/api-replacements/api-replacements.cpp").is_file())
         generated = (self.root / "job/api-replacements/api-replacements.cpp").read_text()
-        self.assertIn("#define RADEK_API_CFAbsoluteTimeGetCurrent 1", generated)
+        self.assertIn("#define IOSTODROID_API_CFAbsoluteTimeGetCurrent 1", generated)
 
     def test_unused_framework_dependency_needs_no_stub(self):
         result = self.run_fixture(
@@ -222,7 +222,7 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(result["apiImplementationGeneration"]["codeGenerated"])
         # Convert never emits a game APK. The only package that may exist is the
         # labelled experimental shell, and only if it passes its own contract.
-        from radek.apk import validate_experimental_shell
+        from iostodroid.apk import validate_experimental_shell
 
         for apk in (self.root / "job").glob("*.apk"):
             self.assertEqual(apk.name, "experimental-shell.apk")

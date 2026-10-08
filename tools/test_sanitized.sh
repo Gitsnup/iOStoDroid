@@ -5,8 +5,8 @@ mkdir -p .local/bin
 "${CXX:-g++}" -std=c++17 -g -O1 -Wall -Wextra -Werror \
   -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie \
   -I native/include native/src/macho.cpp native/src/trivial.cpp native/src/main.cpp \
-  -o .local/bin/radek-macho-sanitized
-RADEK_ANALYZER="$PWD/.local/bin/radek-macho-sanitized" \
+  -o .local/bin/iostodroid-macho-sanitized
+IOSTODROID_ANALYZER="$PWD/.local/bin/iostodroid-macho-sanitized" \
   python3 -m unittest tests.test_macho tests.test_pipeline -v
 "${CXX:-g++}" -std=c++17 -g -O1 -Wall -Wextra -Werror \
   -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie \
@@ -20,11 +20,11 @@ RADEK_ANALYZER="$PWD/.local/bin/radek-macho-sanitized" \
 "${CXX:-g++}" -std=c++17 -g -O1 -pthread -Wall -Wextra -Werror \
   -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie \
   -I native/include native/tests/ioscompat_registry.cpp native/src/ioscompat_registry.cpp \
-  native/src/apple_time_compat.cpp native/src/radek_ios_shims.cpp -o .local/bin/ioscompat-registry-sanitized
+  native/src/apple_time_compat.cpp native/src/iostodroid_ios_shims.cpp -o .local/bin/ioscompat-registry-sanitized
 .local/bin/ioscompat-registry-sanitized
 "${CXX:-g++}" -std=c++17 -g -O1 -pthread -Wall -Wextra -Werror \
   -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie \
-  -I native/include native/tests/radek_ios_shims.cpp native/src/radek_ios_shims.cpp \
+  -I native/include native/tests/iostodroid_ios_shims.cpp native/src/iostodroid_ios_shims.cpp \
   -o .local/bin/ios-shims-sanitized
 .local/bin/ios-shims-sanitized
 "${CXX:-g++}" -std=c++17 -g -O1 -pthread -Wall -Wextra -Werror \

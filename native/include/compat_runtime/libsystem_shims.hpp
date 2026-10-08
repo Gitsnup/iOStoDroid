@@ -8,7 +8,7 @@
 #include <mutex>
 #include <string>
 
-namespace radek::compat_runtime::libsystem {
+namespace iostodroid::compat_runtime::libsystem {
 
 /**
  * Bounded libSystem (C runtime) adapters for guest code.
@@ -65,4 +65,4 @@ class ShimAdapter {
     std::size_t heapBytes() const;
 };
 
-} // namespace radek::compat_runtime::libsystem
+} // namespace iostodroid::compat_runtime::libsystem

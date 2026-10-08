@@ -4,7 +4,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from radek.game import lsda, macho
+from iostodroid.game import lsda, macho
 
 DATA = Path(__file__).resolve().parent / "data" / "AngryBirds_v1.0_os30.ipa"
 

@@ -1,6 +1,6 @@
 #include "ioscompat_registry.hpp"
 #include "macho.hpp"
-#include "radek_ios_shims.h"
+#include "iostodroid_ios_shims.h"
 #include "trivial.hpp"
 #include <jni.h>
 #include <dlfcn.h>
@@ -139,14 +139,14 @@ struct ApiReplacement {
     const char *androidSymbol;
 };
 
-#define RADEK_API_REPLACEMENT_ROW(darwin, android) {darwin, #android},
+#define IOSTODROID_API_REPLACEMENT_ROW(darwin, android) {darwin, #android},
 
 constexpr ApiReplacement kImplementedApiReplacements[] = {
     {"_CFAbsoluteTimeGetCurrent", "CFAbsoluteTimeGetCurrent"},
     {"_CACurrentMediaTime", "CACurrentMediaTime"},
     {"_mach_absolute_time", "mach_absolute_time"},
     {"_mach_timebase_info", "mach_timebase_info"},
-    RADEK_IOS_SHIM_TABLE(RADEK_API_REPLACEMENT_ROW)
+    IOSTODROID_IOS_SHIM_TABLE(IOSTODROID_API_REPLACEMENT_ROW)
 };
 
 const char *findImplementedApiReplacement(const char *darwinSymbol) {
@@ -186,7 +186,7 @@ namespace {
 constexpr jsize kMaxExecutableBytes = 256 * 1024 * 1024;
 } // namespace
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_analyze(JNIEnv *env, jobject,
+extern "C" JNIEXPORT jstring JNICALL Java_dev_iostodroid_conventor_NativeBridge_analyze(JNIEnv *env, jobject,
                                                                                    jbyteArray input) {
     try {
         auto n = env->GetArrayLength(input);
@@ -199,14 +199,14 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_analy
         env->GetByteArrayRegion(input, 0, n, reinterpret_cast<jbyte *>(b.data()));
         if (env->ExceptionCheck())
             return nullptr;
-        return env->NewStringUTF(radek::analyze(b).dump().c_str());
+        return env->NewStringUTF(iostodroid::analyze(b).dump().c_str());
     } catch (const std::exception &e) {
         env->ThrowNew(env->FindClass("java/io/IOException"), e.what());
         return nullptr;
     }
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_analyzeCompact(JNIEnv *env, jobject,
+extern "C" JNIEXPORT jstring JNICALL Java_dev_iostodroid_conventor_NativeBridge_analyzeCompact(JNIEnv *env, jobject,
                                                                                    jbyteArray input) {
     try {
         auto n = env->GetArrayLength(input);
@@ -219,14 +219,14 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_analy
         env->GetByteArrayRegion(input, 0, n, reinterpret_cast<jbyte *>(b.data()));
         if (env->ExceptionCheck())
             return nullptr;
-        return env->NewStringUTF(radek::analyze(b, false).dump().c_str());
+        return env->NewStringUTF(iostodroid::analyze(b, false).dump().c_str());
     } catch (const std::exception &e) {
         env->ThrowNew(env->FindClass("java/io/IOException"), e.what());
         return nullptr;
     }
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_recompileTrivial(
+extern "C" JNIEXPORT jstring JNICALL Java_dev_iostodroid_conventor_NativeBridge_recompileTrivial(
     JNIEnv *env, jobject, jbyteArray input) {
     try {
         auto n = env->GetArrayLength(input);
@@ -239,14 +239,14 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_recom
         env->GetByteArrayRegion(input, 0, n, reinterpret_cast<jbyte *>(b.data()));
         if (env->ExceptionCheck())
             return nullptr;
-        return env->NewStringUTF(radek::recompileTrivial(b).dump().c_str());
+        return env->NewStringUTF(iostodroid::recompileTrivial(b).dump().c_str());
     } catch (const std::exception &e) {
         env->ThrowNew(env->FindClass("java/io/IOException"), e.what());
         return nullptr;
     }
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_findAndroidLibrary(
+extern "C" JNIEXPORT jstring JNICALL Java_dev_iostodroid_conventor_NativeBridge_findAndroidLibrary(
     JNIEnv *env, jobject, jstring symbol) {
     if (!symbol) return nullptr;
     const char *name = env->GetStringUTFChars(symbol, nullptr);
@@ -256,7 +256,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_findA
     return library ? env->NewStringUTF(library) : nullptr;
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_findImplementedApiReplacement(
+extern "C" JNIEXPORT jstring JNICALL Java_dev_iostodroid_conventor_NativeBridge_findImplementedApiReplacement(
     JNIEnv *env, jobject, jstring symbol) {
     if (!symbol) return nullptr;
     const char *name = env->GetStringUTFChars(symbol, nullptr);
@@ -274,40 +274,40 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_findI
 // of the tested implementation bodies; "stubbed:<trampoline>" identifies an
 // explicitly unimplemented resolution handler and nothing else.
 
-extern "C" JNIEXPORT jboolean JNICALL Java_dev_radek_conventor_NativeBridge_compatRegisterStub(
+extern "C" JNIEXPORT jboolean JNICALL Java_dev_iostodroid_conventor_NativeBridge_compatRegisterStub(
     JNIEnv *env, jobject, jstring symbol) {
     if (!symbol) return JNI_FALSE;
     const char *name = env->GetStringUTFChars(symbol, nullptr);
     if (!name) return JNI_FALSE; // JNI has already raised an exception.
-    const bool registered = radek_compat::registerStub(name);
+    const bool registered = iostodroid_compat::registerStub(name);
     env->ReleaseStringUTFChars(symbol, name);
     return registered ? JNI_TRUE : JNI_FALSE;
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_compatClassify(JNIEnv *env, jobject,
+extern "C" JNIEXPORT jstring JNICALL Java_dev_iostodroid_conventor_NativeBridge_compatClassify(JNIEnv *env, jobject,
                                                                                             jstring symbol) {
     if (!symbol) return nullptr;
     const char *name = env->GetStringUTFChars(symbol, nullptr);
     if (!name) return nullptr; // JNI has already raised an exception.
-    const radek_compat::Record *record = radek_compat::lookup(name);
+    const iostodroid_compat::Record *record = iostodroid_compat::lookup(name);
     std::string result;
     if (record) {
-        result = record->kind == radek_compat::Kind::Verified ? "verified:" : "stubbed:";
+        result = record->kind == iostodroid_compat::Kind::Verified ? "verified:" : "stubbed:";
         result += record->androidSymbol;
     }
     env->ReleaseStringUTFChars(symbol, name);
     return result.empty() ? nullptr : env->NewStringUTF(result.c_str());
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_radek_conventor_NativeBridge_compatSummary(JNIEnv *env, jobject) {
+extern "C" JNIEXPORT jstring JNICALL Java_dev_iostodroid_conventor_NativeBridge_compatSummary(JNIEnv *env, jobject) {
     std::string json = "{\"verifiedCount\":";
-    json += std::to_string(radek_compat::verifiedCount());
+    json += std::to_string(iostodroid_compat::verifiedCount());
     json += ",\"stubCount\":";
-    json += std::to_string(radek_compat::stubCount());
+    json += std::to_string(iostodroid_compat::stubCount());
     json += ",\"stubPoolSize\":";
-    json += std::to_string(radek_compat::kStubPoolSize);
+    json += std::to_string(iostodroid_compat::kStubPoolSize);
     json += ",\"stubCallTotal\":";
-    json += std::to_string(radek_compat::stubCallTotal());
+    json += std::to_string(iostodroid_compat::stubCallTotal());
     json += "}";
     return env->NewStringUTF(json.c_str());
 }

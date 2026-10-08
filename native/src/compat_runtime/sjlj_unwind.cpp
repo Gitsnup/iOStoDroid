@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 namespace {
 constexpr std::size_t kSjLjContextHeaderSize = 8 * sizeof(std::uint32_t);
 }
@@ -138,4 +138,4 @@ void SjLjUnwindAdapter::registerBindings(ShimRegistry &registry) {
     registered_ = true;
 }
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

@@ -3,9 +3,9 @@
 import struct
 import unittest
 
-from radek import assetcatalog
-from radek.archive import InputError
-from radek.pngcodec import Image, encode
+from iostodroid import assetcatalog
+from iostodroid.archive import InputError
+from iostodroid.pngcodec import Image, encode
 
 from .carbuild import Builder, car_header, csi, facet, key, key_format
 
@@ -71,7 +71,7 @@ class AssetCatalogTests(unittest.TestCase):
         self.assertEqual(best.name, "AppIcon")
         self.assertEqual(best.scale, 3.0)
         self.assertEqual(best.width, 60)  # point size recorded by the catalog
-        from radek.pngcodec import decode
+        from iostodroid.pngcodec import decode
 
         self.assertEqual(decode(best.decoded).width, 180)  # @3x pixel size
         self.assertEqual(best.decoded, icon(180, 180, value=210))
@@ -100,7 +100,7 @@ class AssetCatalogTests(unittest.TestCase):
         result = assetcatalog.parse(data)
         raw = [r for r in result.renditions if r.pixel_format == "ARGB"][0]
         self.assertEqual(raw.encoding, "png")
-        from radek.pngcodec import decode
+        from iostodroid.pngcodec import decode
 
         image = decode(raw.decoded)
         self.assertEqual(image.pixels[:4], bytes((200, 40, 80, 255)))

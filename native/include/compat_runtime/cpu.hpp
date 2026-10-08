@@ -6,7 +6,7 @@
 #include <memory>
 #include <string>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 
 struct GuestFunction {
     GuestAddress entryPoint = 0;
@@ -65,4 +65,4 @@ class CpuBackend {
 
 std::unique_ptr<CpuBackend> createArm32CpuBackend();
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

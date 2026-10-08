@@ -25,7 +25,7 @@ int main() {
     CHECK(mediaAfter > mediaBefore);
     CHECK(ticksAfter > ticksBefore);
 
-    radek_mach_timebase_info_data_t timebase{};
+    iostodroid_mach_timebase_info_data_t timebase{};
     CHECK(mach_timebase_info(&timebase) == 0);
     CHECK(timebase.numer == 1 && timebase.denom == 1);
     CHECK(mach_timebase_info(nullptr) == 4);

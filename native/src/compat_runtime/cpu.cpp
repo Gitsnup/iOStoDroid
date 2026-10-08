@@ -2,7 +2,7 @@
 
 #include <memory>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 namespace {
 class UnavailableArm32Backend final : public CpuBackend {
   public:
@@ -27,16 +27,16 @@ class UnavailableArm32Backend final : public CpuBackend {
 };
 } // namespace
 
-#ifdef RADEK_HAVE_UNICORN
+#ifdef IOSTODROID_HAVE_UNICORN
 std::unique_ptr<CpuBackend> createUnicornArm32Backend();
 #endif
 
 std::unique_ptr<CpuBackend> createArm32CpuBackend() {
-#ifdef RADEK_HAVE_UNICORN
+#ifdef IOSTODROID_HAVE_UNICORN
     return createUnicornArm32Backend();
 #else
     return std::make_unique<UnavailableArm32Backend>();
 #endif
 }
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

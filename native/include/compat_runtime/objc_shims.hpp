@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace radek::compat_runtime::objc {
+namespace iostodroid::compat_runtime::objc {
 
 /**
  * Bounded result of the application-lifecycle ("startup chain") adapters.
@@ -295,4 +295,4 @@ class ShimAdapter {
     GuestAddress guestObjectAddress(GuestAddressSpace &memory, Object *object) const;
 };
 
-} // namespace radek::compat_runtime::objc
+} // namespace iostodroid::compat_runtime::objc

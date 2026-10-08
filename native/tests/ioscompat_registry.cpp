@@ -1,6 +1,6 @@
 #include "ioscompat_registry.hpp"
 #include "apple_time_compat.h"
-#include "radek_ios_shims.h"
+#include "iostodroid_ios_shims.h"
 
 #include <cstdint>
 #include <cstring>
@@ -11,8 +11,8 @@
 
 // Counting expansion of the shared table, so this test never hard-codes a
 // number that silently drifts when a shim is added.
-#define RADEK_COUNT_ONE(darwin, android) +1
-constexpr std::size_t kRadekIosShimTableSize = 0 RADEK_IOS_SHIM_TABLE(RADEK_COUNT_ONE);
+#define IOSTODROID_COUNT_ONE(darwin, android) +1
+constexpr std::size_t kIostodroidIosShimTableSize = 0 IOSTODROID_IOS_SHIM_TABLE(IOSTODROID_COUNT_ONE);
 
 #define CHECK(expression)                                                                                   \
     do {                                                                                                     \
@@ -21,9 +21,9 @@ constexpr std::size_t kRadekIosShimTableSize = 0 RADEK_IOS_SHIM_TABLE(RADEK_COUN
     } while (false)
 
 int main() {
-    using radek_compat::Kind;
-    using radek_compat::lookup;
-    using radek_compat::registerStub;
+    using iostodroid_compat::Kind;
+    using iostodroid_compat::lookup;
+    using iostodroid_compat::registerStub;
 
     // The four tested time shims are present and classified as verified.
     for (const char *name :
@@ -32,7 +32,7 @@ int main() {
         CHECK(record != nullptr);
         CHECK(record->kind == Kind::Verified);
         CHECK(record->handler != nullptr);
-        CHECK(std::strcmp(radek_compat_classify(name), "verified") == 0);
+        CHECK(std::strcmp(iostodroid_compat_classify(name), "verified") == 0);
     }
 
     // The verified handler addresses are the real implementation bodies.
@@ -47,7 +47,7 @@ int main() {
     CHECK(lookup("_glDrawArrays")->kind == Kind::Verified);
     // Unknown symbols are not classified until explicitly registered.
     CHECK(lookup("_UnknownPrivateGameSymbol") == nullptr);
-    CHECK(radek_compat_classify("_UnknownPrivateGameSymbol") == nullptr);
+    CHECK(iostodroid_compat_classify("_UnknownPrivateGameSymbol") == nullptr);
 
     // Dynamic runtime hook registration for an unmapped Darwin import.
     CHECK(registerStub("_UnknownPrivateGameSymbol"));
@@ -55,8 +55,8 @@ int main() {
     CHECK(stub != nullptr);
     CHECK(stub->kind == Kind::Stub);
     CHECK(stub->handler != nullptr);
-    CHECK(std::strcmp(radek_compat_classify("_UnknownPrivateGameSymbol"), "stubbed") == 0);
-    CHECK(std::string(stub->androidSymbol).rfind("radek_compat_stub_", 0) == 0);
+    CHECK(std::strcmp(iostodroid_compat_classify("_UnknownPrivateGameSymbol"), "stubbed") == 0);
+    CHECK(std::string(stub->androidSymbol).rfind("iostodroid_compat_stub_", 0) == 0);
 
     // Idempotent registration: same symbol keeps its first record.
     void (*firstHandler)() = stub->handler;
@@ -64,16 +64,16 @@ int main() {
     CHECK(lookup("_UnknownPrivateGameSymbol")->handler == firstHandler);
 
     // Stubbed classification never satisfies verified lookups.
-    CHECK(radek_compat_resolve("_UnknownPrivateGameSymbol") != nullptr);
-    CHECK(radek_compat_stub_call_count("_UnknownPrivateGameSymbol") == 0);
-    CHECK(radek_compat_stub_call_count("_CFAbsoluteTimeGetCurrent") == 0);
+    CHECK(iostodroid_compat_resolve("_UnknownPrivateGameSymbol") != nullptr);
+    CHECK(iostodroid_compat_stub_call_count("_UnknownPrivateGameSymbol") == 0);
+    CHECK(iostodroid_compat_stub_call_count("_CFAbsoluteTimeGetCurrent") == 0);
 
     // Invoking the stub trampoline is safe, observable, and returns zero.
     std::int64_t (*invocation)() = reinterpret_cast<std::int64_t (*)()>(stub->handler);
     CHECK(invocation() == 0);
     CHECK(invocation() == 0);
-    CHECK(radek_compat_stub_call_count("_UnknownPrivateGameSymbol") == 2);
-    CHECK(radek_compat_stub_call_total() >= 2);
+    CHECK(iostodroid_compat_stub_call_count("_UnknownPrivateGameSymbol") == 2);
+    CHECK(iostodroid_compat_stub_call_total() >= 2);
 
     // Invalid names are rejected by both registration and lookup.
     CHECK(!registerStub(""));
@@ -83,33 +83,33 @@ int main() {
     CHECK(lookup(nullptr) == nullptr);
 
     // Bulk registration and enumeration stay consistent.
-    const unsigned long before = radek_compat_entry_count();
+    const unsigned long before = iostodroid_compat_entry_count();
     std::vector<std::string> batch;
     for (int index = 0; index < 64; ++index) {
-        batch.push_back("_radek_bulk_symbol_" + std::to_string(index));
+        batch.push_back("_iostodroid_bulk_symbol_" + std::to_string(index));
         CHECK(registerStub(batch.back().c_str()));
     }
-    CHECK(radek_compat_entry_count() == before + 64);
+    CHECK(iostodroid_compat_entry_count() == before + 64);
     bool sawBulk = false;
-    for (unsigned long index = 0; index < radek_compat_entry_count(); ++index) {
+    for (unsigned long index = 0; index < iostodroid_compat_entry_count(); ++index) {
         const char *darwin = nullptr;
         const char *android = nullptr;
         int kind = 0;
         void (*handler)() = nullptr;
-        CHECK(radek_compat_entry_at(index, &darwin, &android, &kind, &handler) == 0);
+        CHECK(iostodroid_compat_entry_at(index, &darwin, &android, &kind, &handler) == 0);
         CHECK(darwin && android && handler);
         CHECK(kind == static_cast<int>(Kind::Verified) || kind == static_cast<int>(Kind::Stub));
-        if (std::strcmp(darwin, "_radek_bulk_symbol_3") == 0) {
+        if (std::strcmp(darwin, "_iostodroid_bulk_symbol_3") == 0) {
             sawBulk = true;
             CHECK(kind == static_cast<int>(Kind::Stub));
         }
     }
     CHECK(sawBulk);
-    CHECK(radek_compat_entry_at(radek_compat_entry_count(), nullptr, nullptr, nullptr, nullptr) == -1);
+    CHECK(iostodroid_compat_entry_at(iostodroid_compat_entry_count(), nullptr, nullptr, nullptr, nullptr) == -1);
     // The four time shims plus every entry of the shared iOS shim table.
-    constexpr std::size_t kExpectedVerifiedCount = 4 + kRadekIosShimTableSize;
-    CHECK(radek_compat::verifiedCount() == kExpectedVerifiedCount);
-    CHECK(radek_compat::stubCount() == radek_compat_entry_count() - kExpectedVerifiedCount);
+    constexpr std::size_t kExpectedVerifiedCount = 4 + kIostodroidIosShimTableSize;
+    CHECK(iostodroid_compat::verifiedCount() == kExpectedVerifiedCount);
+    CHECK(iostodroid_compat::stubCount() == iostodroid_compat_entry_count() - kExpectedVerifiedCount);
 
     // Concurrent registration and lookup must not corrupt the registry.
     std::vector<std::thread> workers;
@@ -117,7 +117,7 @@ int main() {
         workers.emplace_back([worker] {
             for (int index = 0; index < 256; ++index) {
                 std::string name =
-                    "_radek_thread_symbol_" + std::to_string(worker) + "_" + std::to_string(index);
+                    "_iostodroid_thread_symbol_" + std::to_string(worker) + "_" + std::to_string(index);
                 registerStub(name.c_str());
                 CHECK(lookup(name.c_str()) != nullptr);
             }
@@ -125,7 +125,7 @@ int main() {
     }
     for (auto &thread : workers)
         thread.join();
-    CHECK(lookup("_radek_thread_symbol_3_255") != nullptr);
+    CHECK(lookup("_iostodroid_thread_symbol_3_255") != nullptr);
 
     return 0;
 }

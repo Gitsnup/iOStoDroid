@@ -8,7 +8,7 @@
 #include <set>
 #include <string>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 
 /**
  * Bounded ARM32 SjLj context-chain adapters.
@@ -47,4 +47,4 @@ class SjLjUnwindAdapter {
     void registerBindings(ShimRegistry &registry);
 };
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

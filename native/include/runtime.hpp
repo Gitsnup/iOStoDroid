@@ -16,7 +16,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
-namespace radek::runtime {
+namespace iostodroid::runtime {
 using Selector = uint64_t;
 struct Class;
 struct Object {
@@ -297,4 +297,4 @@ class Sandbox {
         return std::string(std::istreambuf_iterator<char>(f), {});
     }
 };
-} // namespace radek::runtime
+} // namespace iostodroid::runtime

@@ -45,7 +45,7 @@ def main() -> None:
         executable,
         icon=False,
         display_name="Hello Test",
-        bundle_id="dev.radek.hellotest",
+        bundle_id="dev.iostodroid.hellotest",
     )
     print(OUTPUT)
 

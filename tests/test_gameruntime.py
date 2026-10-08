@@ -1,4 +1,4 @@
-"""Host tests for the game-runtime-v1 contract (radek.gameruntime)."""
+"""Host tests for the game-runtime-v1 contract (iostodroid.gameruntime)."""
 
 import json
 import os
@@ -12,8 +12,8 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from radek.archive import InputError
-from radek import gameruntime
+from iostodroid.archive import InputError
+from iostodroid import gameruntime
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ANGRY_BIRDS_IPA = REPO_ROOT / "tests" / "data" / "AngryBirds_v1.0_os30.ipa"
@@ -48,7 +48,7 @@ class NamingTests(unittest.TestCase):
 
     def test_game_package_format(self):
         package = gameruntime.game_package("a" * 64, "c" * 64)
-        self.assertEqual("dev.radek.gameruntime.p" + "a" * 20 + "c" * 8, package)
+        self.assertEqual("dev.iostodroid.gameruntime.p" + "a" * 20 + "c" * 8, package)
         self.assertLessEqual(len(package), 127)
         with self.assertRaises(InputError):
             gameruntime.game_package("short", "c" * 64)
@@ -57,9 +57,9 @@ class NamingTests(unittest.TestCase):
 
     def test_contract_constants_match_device_strings(self):
         self.assertEqual("game-runtime-v1", gameruntime.CONTRACT)
-        self.assertEqual("dev.radek.gameruntime.GameBootActivity", gameruntime.BOOT_ACTIVITY)
+        self.assertEqual("dev.iostodroid.gameruntime.GameBootActivity", gameruntime.BOOT_ACTIVITY)
         self.assertEqual(
-            "Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt",
+            "Java_dev_iostodroid_gameruntime_GameBootActivity_runGameBootAttempt",
             gameruntime.JNI_SYMBOL,
         )
         self.assertEqual("assets/gameboot/main-executable.bin", gameruntime.ASSET_EXECUTABLE)
@@ -177,7 +177,7 @@ class ProbeTests(unittest.TestCase):
 def make_synthetic_ipa(path: Path, executable_bytes: bytes) -> None:
     info = {
         "CFBundleExecutable": "Synthetic",
-        "CFBundleIdentifier": "dev.radek.synthetic",
+        "CFBundleIdentifier": "dev.iostodroid.synthetic",
         "CFBundleName": "Synthetic",
     }
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -203,7 +203,7 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(len(code), manifest["executable"]["bytes"])
             self.assertEqual({"files": 2, "bytes": len(b"hello") + len(plistlib.dumps({
                 "CFBundleExecutable": "Synthetic",
-                "CFBundleIdentifier": "dev.radek.synthetic",
+                "CFBundleIdentifier": "dev.iostodroid.synthetic",
                 "CFBundleName": "Synthetic"}))}, manifest["bundle"])
             self.assertEqual("NOT_PROBED", manifest["hostProbe"]["status"])
             self.assertTrue((output / "main-executable.bin").is_file())
@@ -225,7 +225,7 @@ class ManifestTests(unittest.TestCase):
 
 
 @unittest.skipUnless(ANGRY_BIRDS_IPA.is_file(), "Angry Birds test IPA is not checked out")
-@unittest.skipUnless(gameboot_available(), "radek-gameboot host binary is not built")
+@unittest.skipUnless(gameboot_available(), "iostodroid-gameboot host binary is not built")
 class AngryBirdsBootTests(unittest.TestCase):
     def test_angry_birds_boots_to_first_unimplemented_call(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -254,7 +254,7 @@ class AngryBirdsBootTests(unittest.TestCase):
 class SplashScreenLauncherTests(unittest.TestCase):
     def test_apk_launchers_render_bundle_splash_screen_instead_of_text_only(self):
         gameboot_java = (
-            REPO_ROOT / "gameruntime-template/src/main/java/dev/radek/gameruntime/GameBootActivity.java"
+            REPO_ROOT / "gameruntime-template/src/main/java/dev/iostodroid/gameruntime/GameBootActivity.java"
         ).read_text(encoding="utf-8")
         self.assertIn("splashImageView", gameboot_java)
         self.assertIn("parseSplashSheetDescriptor", gameboot_java)
@@ -264,13 +264,13 @@ class SplashScreenLauncherTests(unittest.TestCase):
 
         placeholder_java = (
             REPO_ROOT
-            / "placeholder-template/src/main/java/dev/radek/generated/GeneratedPlaceholderActivity.java"
+            / "placeholder-template/src/main/java/dev/iostodroid/generated/GeneratedPlaceholderActivity.java"
         ).read_text(encoding="utf-8")
         self.assertIn("readSplash", placeholder_java)
         self.assertIn("splash.png", placeholder_java)
 
         converted_java = (
-            REPO_ROOT / "converted-template/src/main/java/dev/radek/generated/MainActivity.java"
+            REPO_ROOT / "converted-template/src/main/java/dev/iostodroid/generated/MainActivity.java"
         ).read_text(encoding="utf-8")
         self.assertIn("readSplash", converted_java)
 

@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 from pathlib import Path
-from radek.apk import (
+from iostodroid.apk import (
     artifact_filename,
     build_apk,
     elf_info,
@@ -13,7 +13,7 @@ from radek.apk import (
     _validate_complete_game_metadata,
     _validate_packaged_payloads,
 )
-from radek.archive import InputError
+from iostodroid.archive import InputError
 
 
 class ELFTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class ELFTests(unittest.TestCase):
             elf_info(b)
 
     def test_arm64_elf_is_parsed_and_native_symbol_is_hashed(self):
-        name = b"Java_dev_radek_generated_MainActivity_runNative"
+        name = b"Java_dev_iostodroid_generated_MainActivity_runNative"
         strings = b"\0" + name + b"\0"
         text = struct.pack("<I", 0xD65F03C0)
         data = bytearray(0x400 + 4 * 64)
@@ -78,7 +78,7 @@ class ELFTests(unittest.TestCase):
         self.assertEqual(entry["sha256"], hashlib.sha256(text).hexdigest())
 
     def test_arm32_elf_is_parsed_and_native_symbol_is_hashed(self):
-        name = b"Java_dev_radek_generated_MainActivity_runNative"
+        name = b"Java_dev_iostodroid_generated_MainActivity_runNative"
         strings = b"\0" + name + b"\0"
         text = struct.pack("<I", 0xE12FFF1E)
         data = bytearray(0x300 + 4 * 40)
@@ -175,7 +175,7 @@ class NoPlaceholderPackagingTests(unittest.TestCase):
         source_hash = "0" * 64
         return {
             "contract": "complete-game-v1",
-            "package": "dev.radek.converted.p" + source_hash[:20],
+            "package": "dev.iostodroid.converted.p" + source_hash[:20],
             "source": {"sha256": source_hash},
             "targetAbi": "arm64-v8a",
             "conversion": {"outputBytes": 4, "targetAbi": "arm64-v8a", "backend": "test"},
@@ -221,16 +221,16 @@ class NoPlaceholderPackagingTests(unittest.TestCase):
             _validate_complete_game_metadata(
                 {
                     "contract": "closed-integer-entry-v1",
-                    "package": "dev.radek.converted.p" + "0" * 20,
+                    "package": "dev.iostodroid.converted.p" + "0" * 20,
                 },
-                "dev.radek.converted.p" + "0" * 20,
+                "dev.iostodroid.converted.p" + "0" * 20,
                 "arm64-v8a",
             )
 
     def test_candidate_api_mapping_cannot_satisfy_complete_game_contract(self):
         metadata = {
             "contract": "complete-game-v1",
-            "package": "dev.radek.converted.p" + "0" * 20,
+            "package": "dev.iostodroid.converted.p" + "0" * 20,
             "source": {"sha256": "0" * 64},
             "targetAbi": "arm64-v8a",
             "conversion": {"outputBytes": 4, "targetAbi": "arm64-v8a", "backend": "test"},
@@ -253,7 +253,7 @@ class NoPlaceholderPackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(InputError, "API replacement accounting"):
             _validate_complete_game_metadata(
                 metadata,
-                "dev.radek.converted.p" + "0" * 20,
+                "dev.iostodroid.converted.p" + "0" * 20,
                 "arm64-v8a",
             )
 
@@ -323,11 +323,11 @@ class ExperimentalShellTests(unittest.TestCase):
 
     @staticmethod
     def _metadata(**overrides):
-        from radek.apk import EXPERIMENTAL_SHELL_CONTRACT, EXPERIMENTAL_SHELL_NOTICE
+        from iostodroid.apk import EXPERIMENTAL_SHELL_CONTRACT, EXPERIMENTAL_SHELL_NOTICE
 
         metadata = {
             "contract": EXPERIMENTAL_SHELL_CONTRACT,
-            "generator": "RadekiOSConventor",
+            "generator": "iOStoDroid",
             "honestLabeling": True,
             "containsGameCode": False,
             "completeGameConversion": False,
@@ -355,7 +355,7 @@ class ExperimentalShellTests(unittest.TestCase):
                 package.writestr(name, payload)
 
     def test_sources_carry_honest_disclosure_and_never_claim_game(self):
-        from radek.apk import EXPERIMENTAL_SHELL_NOTICE, EXPERIMENTAL_SHELL_PACKAGE, experimental_shell_sources
+        from iostodroid.apk import EXPERIMENTAL_SHELL_NOTICE, EXPERIMENTAL_SHELL_PACKAGE, experimental_shell_sources
 
         with tempfile.TemporaryDirectory() as directory:
             root = experimental_shell_sources(Path(directory))
@@ -367,7 +367,7 @@ class ExperimentalShellTests(unittest.TestCase):
         self.assertEqual(EXPERIMENTAL_SHELL_NOTICE, "This inspection shell contains isolated analysis artifacts, not a runnable game.")
         self.assertEqual(EXPERIMENTAL_SHELL_NOTICE.count("."), 1)
         self.assertIn("shell_notice", activity)
-        self.assertIn("Radek Experimental Shell", strings)
+        self.assertIn("Iostodroid Experimental Shell", strings)
         # The launcher source is plain Java: no format-escaping leftovers.
         self.assertNotIn("{{", activity)
         self.assertIn("extends Activity {", activity)
@@ -375,7 +375,7 @@ class ExperimentalShellTests(unittest.TestCase):
         self.assertEqual(strings.count(EXPERIMENTAL_SHELL_NOTICE), 1)
 
     def test_valid_shell_zip_passes_sdk_free_checks(self):
-        from radek.apk import validate_experimental_shell
+        from iostodroid.apk import validate_experimental_shell
 
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "experimental-shell.apk"
@@ -385,7 +385,7 @@ class ExperimentalShellTests(unittest.TestCase):
         self.assertFalse(result["signatureVerified"])  # no toolchain -> not asserted
 
     def test_complete_game_contract_cannot_be_claimed_by_shell_metadata(self):
-        from radek.apk import validate_experimental_shell
+        from iostodroid.apk import validate_experimental_shell
 
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "shell.apk"
@@ -394,7 +394,7 @@ class ExperimentalShellTests(unittest.TestCase):
         self.assertEqual(result["status"], "INVALID")
 
     def test_missing_parts_are_rejected(self):
-        from radek.apk import validate_experimental_shell
+        from iostodroid.apk import validate_experimental_shell
 
         cases = (
             ("classes.dex",),
@@ -411,7 +411,7 @@ class ExperimentalShellTests(unittest.TestCase):
             self.assertEqual(validate_experimental_shell(missing)["status"], "INVALID")
 
     def test_stripped_disclosure_or_game_claim_is_rejected(self):
-        from radek.apk import validate_experimental_shell
+        from iostodroid.apk import validate_experimental_shell
 
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "shell.apk"
@@ -423,7 +423,7 @@ class ExperimentalShellTests(unittest.TestCase):
             self.assertEqual(validate_experimental_shell(apk)["status"], "INVALID")
 
     def test_corrupt_dex_is_rejected(self):
-        from radek.apk import validate_experimental_shell
+        from iostodroid.apk import validate_experimental_shell
 
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "shell.apk"
@@ -453,8 +453,8 @@ class ExperimentalShellBuildSimulationTests(unittest.TestCase):
         import json
         import shutil
 
-        from radek import apk as apk_module
-        from radek.apk import Toolchain, build_experimental_shell
+        from iostodroid import apk as apk_module
+        from iostodroid.apk import Toolchain, build_experimental_shell
         from tests.test_dex import dex
 
         with tempfile.TemporaryDirectory() as directory:
@@ -481,9 +481,9 @@ class ExperimentalShellBuildSimulationTests(unittest.TestCase):
                     with zipfile.ZipFile(out, "w") as package:
                         package.writestr("AndroidManifest.xml", b"<binary/>")
                         package.writestr("resources.arsc", b"\x00")
-                    (gen / "dev" / "radek" / "experimental" / "shell").mkdir(parents=True)
-                    (gen / "dev" / "radek" / "experimental" / "shell" / "R.java").write_text(
-                        "package dev.radek.experimental.shell; final class R {}"
+                    (gen / "dev" / "iostodroid" / "experimental" / "shell").mkdir(parents=True)
+                    (gen / "dev" / "iostodroid" / "experimental" / "shell" / "R.java").write_text(
+                        "package dev.iostodroid.experimental.shell; final class R {}"
                     )
                 elif tool == "d8":
                     out = Path(argv[argv.index("--output") + 1])

@@ -5,7 +5,7 @@
 #include <mutex>
 #include <optional>
 
-namespace radek::compat_runtime::audio {
+namespace iostodroid::compat_runtime::audio {
 
 /**
  * Narrow, state-only AudioSessionServices adapter.
@@ -39,4 +39,4 @@ class ShimAdapter {
     std::optional<bool> activeState() const;
 };
 
-} // namespace radek::compat_runtime::audio
+} // namespace iostodroid::compat_runtime::audio

@@ -47,25 +47,25 @@ std::vector<std::uint8_t> readMainBinary(const char *path) {
 
 int main(int argc, char **argv) {
     if (argc != 2) {
-        std::cerr << "usage: radek-gameboot <macho-main-executable>\n";
+        std::cerr << "usage: iostodroid-gameboot <macho-main-executable>\n";
         return 1;
     }
     try {
         const auto bytes = readMainBinary(argv[1]);
-        radek::compat_runtime::ShimRegistry shims;
-        radek::compat_runtime::objc::ShimAdapter objcShims;
-        radek::compat_runtime::libsystem::ShimAdapter libsystemShims;
-        radek::compat_runtime::audio::ShimAdapter audioShims;
-        radek::compat_runtime::SjLjUnwindAdapter sjljUnwind;
+        iostodroid::compat_runtime::ShimRegistry shims;
+        iostodroid::compat_runtime::objc::ShimAdapter objcShims;
+        iostodroid::compat_runtime::libsystem::ShimAdapter libsystemShims;
+        iostodroid::compat_runtime::audio::ShimAdapter audioShims;
+        iostodroid::compat_runtime::SjLjUnwindAdapter sjljUnwind;
         objcShims.registerBindings(shims);
         libsystemShims.registerBindings(shims);
         audioShims.registerBindings(shims);
         sjljUnwind.registerBindings(shims);
-        radek::compat_runtime::TrapShimAdapter traps;
-        const auto cpu = radek::compat_runtime::createArm32CpuBackend();
-        radek::compat_runtime::BootAttemptRunner runner(shims, *cpu, traps,
+        iostodroid::compat_runtime::TrapShimAdapter traps;
+        const auto cpu = iostodroid::compat_runtime::createArm32CpuBackend();
+        iostodroid::compat_runtime::BootAttemptRunner runner(shims, *cpu, traps,
                                                        objcShims.lifecycleHooks());
-        const radek::Json report = runner.run(bytes, true);
+        const iostodroid::Json report = runner.run(bytes, true);
         std::cout << report.dump() << "\n";
 
         const auto &fields = report.fields;

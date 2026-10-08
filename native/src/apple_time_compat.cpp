@@ -4,8 +4,8 @@
 #include <time.h>
 
 namespace {
-#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_CFAbsoluteTimeGetCurrent) || \
-    defined(RADEK_API_CACurrentMediaTime) || defined(RADEK_API_mach_absolute_time)
+#if !defined(IOSTODROID_API_REPLACEMENTS_ONLY) || defined(IOSTODROID_API_CFAbsoluteTimeGetCurrent) || \
+    defined(IOSTODROID_API_CACurrentMediaTime) || defined(IOSTODROID_API_mach_absolute_time)
 constexpr uint64_t kNanosecondsPerSecond = UINT64_C(1000000000);
 bool readClock(clockid_t clock, timespec &value) {
     return clock_gettime(clock, &value) == 0 && value.tv_sec >= 0 && value.tv_nsec >= 0 &&
@@ -13,11 +13,11 @@ bool readClock(clockid_t clock, timespec &value) {
 }
 #endif
 
-#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_CFAbsoluteTimeGetCurrent)
+#if !defined(IOSTODROID_API_REPLACEMENTS_ONLY) || defined(IOSTODROID_API_CFAbsoluteTimeGetCurrent)
 constexpr uint64_t kUnixToCFAbsoluteTime = UINT64_C(978307200);
 #endif
 
-#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_mach_absolute_time)
+#if !defined(IOSTODROID_API_REPLACEMENTS_ONLY) || defined(IOSTODROID_API_mach_absolute_time)
 uint64_t toNanoseconds(const timespec &value) {
     const auto seconds = static_cast<uint64_t>(value.tv_sec);
     if (seconds > std::numeric_limits<uint64_t>::max() / kNanosecondsPerSecond)
@@ -30,13 +30,13 @@ uint64_t toNanoseconds(const timespec &value) {
 }
 #endif
 
-#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_mach_timebase_info)
+#if !defined(IOSTODROID_API_REPLACEMENTS_ONLY) || defined(IOSTODROID_API_mach_timebase_info)
 constexpr int32_t kKernSuccess = 0;
 constexpr int32_t kKernInvalidArgument = 4;
 #endif
 } // namespace
 
-#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_CFAbsoluteTimeGetCurrent)
+#if !defined(IOSTODROID_API_REPLACEMENTS_ONLY) || defined(IOSTODROID_API_CFAbsoluteTimeGetCurrent)
 extern "C" double CFAbsoluteTimeGetCurrent(void) {
     timespec now{};
     if (!readClock(CLOCK_REALTIME, now))
@@ -46,7 +46,7 @@ extern "C" double CFAbsoluteTimeGetCurrent(void) {
 }
 #endif
 
-#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_CACurrentMediaTime)
+#if !defined(IOSTODROID_API_REPLACEMENTS_ONLY) || defined(IOSTODROID_API_CACurrentMediaTime)
 extern "C" double CACurrentMediaTime(void) {
     timespec now{};
     if (!readClock(CLOCK_MONOTONIC, now))
@@ -56,15 +56,15 @@ extern "C" double CACurrentMediaTime(void) {
 }
 #endif
 
-#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_mach_absolute_time)
+#if !defined(IOSTODROID_API_REPLACEMENTS_ONLY) || defined(IOSTODROID_API_mach_absolute_time)
 extern "C" uint64_t mach_absolute_time(void) {
     timespec now{};
     return readClock(CLOCK_MONOTONIC, now) ? toNanoseconds(now) : 0;
 }
 #endif
 
-#if !defined(RADEK_API_REPLACEMENTS_ONLY) || defined(RADEK_API_mach_timebase_info)
-extern "C" int32_t mach_timebase_info(radek_mach_timebase_info_data_t *info) {
+#if !defined(IOSTODROID_API_REPLACEMENTS_ONLY) || defined(IOSTODROID_API_mach_timebase_info)
+extern "C" int32_t mach_timebase_info(iostodroid_mach_timebase_info_data_t *info) {
     if (!info)
         return kKernInvalidArgument;
     // mach_absolute_time() is expressed in nanoseconds, so one tick is one ns.

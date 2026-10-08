@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PLACEHOLDER_ACTIVITY = ROOT / "placeholder-template/src/main/java/dev/radek/generated/GeneratedPlaceholderActivity.java"
-PLACEHOLDER_BUILDER = ROOT / "app/src/main/java/dev/radek/conventor/PlaceholderApkBuilder.kt"
+PLACEHOLDER_ACTIVITY = ROOT / "placeholder-template/src/main/java/dev/iostodroid/generated/GeneratedPlaceholderActivity.java"
+PLACEHOLDER_BUILDER = ROOT / "app/src/main/java/dev/iostodroid/conventor/PlaceholderApkBuilder.kt"
 
 
 class PlaceholderLauncherPrivacyTests(unittest.TestCase):

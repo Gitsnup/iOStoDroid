@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-namespace radek {
+namespace iostodroid {
 /// Instruction-level proof of the closed-integer ARM64 leaf subset
 /// (MOV-immediate, MOVK, register MOV, immediate ADD/SUB, RET).
 /// Returns the number of consumed source bytes on success, or 0 with a
@@ -16,4 +16,4 @@ size_t proveArm64IntegerLeaf(const uint8_t *code, size_t size, std::string *reas
 /// imports, dependencies, fixups or metadata, and returns its machine code
 /// plus recovered __cstring launch messages. Fails closed with UNSUPPORTED.
 Json recompileTrivial(const std::vector<uint8_t> &data);
-} // namespace radek
+} // namespace iostodroid

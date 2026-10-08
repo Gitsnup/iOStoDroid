@@ -1,6 +1,6 @@
 #include "ioscompat_registry.hpp"
 #include "apple_time_compat.h"
-#include "radek_ios_shims.h"
+#include "iostodroid_ios_shims.h"
 
 #include <array>
 #include <atomic>
@@ -13,8 +13,8 @@
 
 namespace {
 
-using radek_compat::Kind;
-using radek_compat::Record;
+using iostodroid_compat::Kind;
+using iostodroid_compat::Record;
 
 struct OwnedRecord {
     std::string darwin;
@@ -29,11 +29,11 @@ std::deque<OwnedRecord> g_records; // deque: element addresses stay stable
 std::unordered_map<std::string, std::size_t> g_index;
 std::size_t g_nextPoolSlot = 0;
 
-std::array<std::atomic<std::uint64_t>, radek_compat::kStubPoolSize> g_stubCalls{};
+std::array<std::atomic<std::uint64_t>, iostodroid_compat::kStubPoolSize> g_stubCalls{};
 std::atomic<std::uint64_t> g_overflowCalls{0};
 
 std::int64_t noteStubCall(std::size_t slot) {
-    if (slot < radek_compat::kStubPoolSize)
+    if (slot < iostodroid_compat::kStubPoolSize)
         g_stubCalls[slot].fetch_add(1, std::memory_order_relaxed);
     else
         g_overflowCalls.fetch_add(1, std::memory_order_relaxed);
@@ -44,30 +44,30 @@ std::int64_t noteStubCall(std::size_t slot) {
 
 template <std::size_t Slot> std::int64_t stubTrampoline() { return noteStubCall(Slot); }
 
-std::int64_t overflowTrampoline() { return noteStubCall(radek_compat::kStubPoolSize); }
+std::int64_t overflowTrampoline() { return noteStubCall(iostodroid_compat::kStubPoolSize); }
 
 // Fold expressions are seeded in 128-wide chunks: clang rejects a single fold
 // wider than its expression-nesting limit (256), while g++ accepts it.
 constexpr std::size_t kSeedChunkWidth = 128;
-static_assert(radek_compat::kStubPoolSize % kSeedChunkWidth == 0, "pool must split into chunks");
+static_assert(iostodroid_compat::kStubPoolSize % kSeedChunkWidth == 0, "pool must split into chunks");
 
 template <std::size_t Base, std::size_t... Off>
-void seedChunk(std::array<void (*)(), radek_compat::kStubPoolSize> &table,
+void seedChunk(std::array<void (*)(), iostodroid_compat::kStubPoolSize> &table,
                std::index_sequence<Off...>) {
     ((table[Base + Off] = reinterpret_cast<void (*)()>(&stubTrampoline<Base + Off>)), ...);
 }
 
 template <std::size_t... Chunk>
-void seedAll(std::array<void (*)(), radek_compat::kStubPoolSize> &table,
+void seedAll(std::array<void (*)(), iostodroid_compat::kStubPoolSize> &table,
              std::index_sequence<Chunk...>) {
     (seedChunk<Chunk * kSeedChunkWidth>(table, std::make_index_sequence<kSeedChunkWidth>{}), ...);
 }
 
-const std::array<void (*)(), radek_compat::kStubPoolSize> &trampolines() {
-    static const std::array<void (*)(), radek_compat::kStubPoolSize> table = [] {
-        std::array<void (*)(), radek_compat::kStubPoolSize> filled{};
+const std::array<void (*)(), iostodroid_compat::kStubPoolSize> &trampolines() {
+    static const std::array<void (*)(), iostodroid_compat::kStubPoolSize> table = [] {
+        std::array<void (*)(), iostodroid_compat::kStubPoolSize> filled{};
         seedAll(filled,
-                std::make_index_sequence<radek_compat::kStubPoolSize / kSeedChunkWidth>{});
+                std::make_index_sequence<iostodroid_compat::kStubPoolSize / kSeedChunkWidth>{});
         return filled;
     }();
     return table;
@@ -87,16 +87,16 @@ struct VerifiedSeed {
 };
 
 // The four time shims from apple_time_compat.cpp plus every shim declared in
-// radek_ios_shims.h. Both sides expand the same table, so the registry and the
+// iostodroid_ios_shims.h. Both sides expand the same table, so the registry and the
 // on-device resolver in jni.cpp can never disagree about what is implemented.
-#define RADEK_VERIFIED_SEED(darwin, android) {darwin, #android, toGeneric(&android)},
+#define IOSTODROID_VERIFIED_SEED(darwin, android) {darwin, #android, toGeneric(&android)},
 
 const VerifiedSeed kVerifiedSeeds[] = {
     {"_CFAbsoluteTimeGetCurrent", "CFAbsoluteTimeGetCurrent", toGeneric(&CFAbsoluteTimeGetCurrent)},
     {"_CACurrentMediaTime", "CACurrentMediaTime", toGeneric(&CACurrentMediaTime)},
     {"_mach_absolute_time", "mach_absolute_time", toGeneric(&mach_absolute_time)},
     {"_mach_timebase_info", "mach_timebase_info", toGeneric(&mach_timebase_info)},
-    RADEK_IOS_SHIM_TABLE(RADEK_VERIFIED_SEED)
+    IOSTODROID_IOS_SHIM_TABLE(IOSTODROID_VERIFIED_SEED)
 };
 
 bool validSymbolName(const char *name) {
@@ -128,7 +128,7 @@ Record publishRecord(const OwnedRecord &owned) {
 
 } // namespace
 
-namespace radek_compat {
+namespace iostodroid_compat {
 
 const Record *lookup(const char *darwinSymbol) {
     if (!validSymbolName(darwinSymbol))
@@ -155,7 +155,7 @@ bool registerStub(const char *darwinSymbol) {
         ++g_nextPoolSlot;
     void (*handler)() = slot < kStubPoolSize ? trampolines()[slot]
                                              : reinterpret_cast<void (*)()>(&overflowTrampoline);
-    std::string android = "radek_compat_stub_";
+    std::string android = "iostodroid_compat_stub_";
     android += std::to_string(slot);
     g_records.push_back({darwinSymbol, std::move(android), Kind::Stub, handler, slot});
     g_index.emplace(darwinSymbol, g_records.size() - 1);
@@ -217,34 +217,34 @@ std::uint64_t stubCallCount(const char *darwinSymbol) {
     return g_stubCalls[record.slot].load(std::memory_order_relaxed);
 }
 
-} // namespace radek_compat
+} // namespace iostodroid_compat
 
 // dlsym-visible C ABI for dynamic runtime hook registration and triage.
 extern "C" {
 
-const char *radek_compat_classify(const char *darwin_symbol) {
-    const Record *record = radek_compat::lookup(darwin_symbol);
+const char *iostodroid_compat_classify(const char *darwin_symbol) {
+    const Record *record = iostodroid_compat::lookup(darwin_symbol);
     if (!record)
         return nullptr;
     return record->kind == Kind::Verified ? "verified" : "stubbed";
 }
 
 // Resolution address for a registered symbol, or nullptr.
-void (*radek_compat_resolve(const char *darwin_symbol))(void) {
-    const Record *record = radek_compat::lookup(darwin_symbol);
+void (*iostodroid_compat_resolve(const char *darwin_symbol))(void) {
+    const Record *record = iostodroid_compat::lookup(darwin_symbol);
     return record ? record->handler : nullptr;
 }
 
-int radek_compat_register_stub(const char *darwin_symbol) {
-    return radek_compat::registerStub(darwin_symbol) ? 1 : 0;
+int iostodroid_compat_register_stub(const char *darwin_symbol) {
+    return iostodroid_compat::registerStub(darwin_symbol) ? 1 : 0;
 }
 
-unsigned long radek_compat_entry_count(void) { return radek_compat::size(); }
+unsigned long iostodroid_compat_entry_count(void) { return iostodroid_compat::size(); }
 
 // Copies one entry into out parameters; returns 0 on success, -1 out of range.
-int radek_compat_entry_at(unsigned long index, const char **darwin_symbol, const char **android_symbol,
+int iostodroid_compat_entry_at(unsigned long index, const char **darwin_symbol, const char **android_symbol,
                           int *kind, void (**handler)(void)) {
-    const Record *record = radek_compat::at(index);
+    const Record *record = iostodroid_compat::at(index);
     if (!record)
         return -1;
     if (darwin_symbol)
@@ -258,10 +258,10 @@ int radek_compat_entry_at(unsigned long index, const char **darwin_symbol, const
     return 0;
 }
 
-unsigned long long radek_compat_stub_call_total(void) { return radek_compat::stubCallTotal(); }
+unsigned long long iostodroid_compat_stub_call_total(void) { return iostodroid_compat::stubCallTotal(); }
 
-unsigned long long radek_compat_stub_call_count(const char *darwin_symbol) {
-    return radek_compat::stubCallCount(darwin_symbol);
+unsigned long long iostodroid_compat_stub_call_count(const char *darwin_symbol) {
+    return iostodroid_compat::stubCallCount(darwin_symbol);
 }
 
 } // extern "C"

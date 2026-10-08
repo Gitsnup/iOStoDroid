@@ -8,7 +8,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from radek.game import disasm, macho, objc_meta, pointers
+from iostodroid.game import disasm, macho, objc_meta, pointers
 
 DATA = Path(__file__).resolve().parent / "data" / "AngryBirds_v1.0_os30.ipa"
 

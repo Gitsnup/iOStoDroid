@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 namespace {
 constexpr std::uint32_t kMachMagic32 = 0xfeedface;
 constexpr std::uint32_t kFatMagic = 0xcafebabe;
@@ -329,12 +329,12 @@ std::string dependencyName(const ImageState &image, std::int64_t ordinal) {
     return "special-dylib-ordinal:" + std::to_string(ordinal);
 }
 
-radek::Json makeSymbolRecord(const std::string &symbol, const std::string &status,
+iostodroid::Json makeSymbolRecord(const std::string &symbol, const std::string &status,
                              const std::string &library, std::int64_t ordinal,
                              GuestAddress bindAddress, bool weakImport,
                              const ShimBinding *binding, const std::string &reason,
                              const char *source) {
-    radek::Json record = radek::Json::object();
+    iostodroid::Json record = iostodroid::Json::object();
     record["symbol"] = symbol;
     record["status"] = status;
     record["library"] = library;
@@ -1263,8 +1263,8 @@ void applyRebaseAndBindStreams(const Reader &reader, const ImageState &image,
 
 bool MachOLoadReport::imageMapped() const noexcept { return mapped; }
 
-radek::Json MachOLoadReport::toJson() const {
-    radek::Json report = radek::Json::object();
+iostodroid::Json MachOLoadReport::toJson() const {
+    iostodroid::Json report = iostodroid::Json::object();
     report["status"] = status;
     report["imageMapped"] = mapped;
     report["entryPoint"] = static_cast<std::uint64_t>(entryPoint);
@@ -1279,11 +1279,11 @@ radek::Json MachOLoadReport::toJson() const {
     if (firstMissingImport)
         report["firstMissingImport"] = *firstMissingImport;
     else
-        report["firstMissingImport"] = radek::Json();
-    report["resolvedSymbols"] = radek::Json::array();
-    report["unresolvedSymbols"] = radek::Json::array();
-    report["trappedSymbols"] = radek::Json::array();
-    report["unboundNlistSymbols"] = radek::Json::array();
+        report["firstMissingImport"] = iostodroid::Json();
+    report["resolvedSymbols"] = iostodroid::Json::array();
+    report["unresolvedSymbols"] = iostodroid::Json::array();
+    report["trappedSymbols"] = iostodroid::Json::array();
+    report["unboundNlistSymbols"] = iostodroid::Json::array();
     for (const auto &symbol : resolvedSymbols)
         report["resolvedSymbols"].push(symbol);
     for (const auto &symbol : unresolvedSymbols)
@@ -1445,4 +1445,4 @@ MachOLoadReport MachOLoader::loadWithTraps(const std::vector<std::uint8_t> &main
     return loadImpl(mainBinary, addressSpace, shims, slide, &trapContext);
 }
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

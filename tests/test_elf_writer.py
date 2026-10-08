@@ -2,10 +2,10 @@ import hashlib
 import struct
 import unittest
 
-from radek.archive import InputError
-from radek.elf import inspect
-from radek.elf_writer import build_shared_object
-from radek.ir import lift
+from iostodroid.archive import InputError
+from iostodroid.elf import inspect
+from iostodroid.elf_writer import build_shared_object
+from iostodroid.ir import lift
 
 
 class ELFWriterTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class ELFWriterTests(unittest.TestCase):
         self.assertEqual(info["architecture"], "arm64-v8a")
         self.assertEqual(info["needed"], [])
         self.assertEqual(info["undefinedSymbols"], [])
-        exported = info["exports"]["radek_recompiled_entry"]
+        exported = info["exports"]["iostodroid_recompiled_entry"]
         self.assertEqual(exported["size"], len(program.machine_code))
         self.assertEqual(exported["sha256"], hashlib.sha256(program.machine_code).hexdigest())
 
@@ -31,7 +31,7 @@ class ELFWriterTests(unittest.TestCase):
         self.assertEqual(info["architecture"], "armeabi-v7a")
         self.assertEqual(info["needed"], [])
         self.assertEqual(info["undefinedSymbols"], [])
-        self.assertEqual(info["exports"]["radek_recompiled_entry"]["size"], len(program.machine_code))
+        self.assertEqual(info["exports"]["iostodroid_recompiled_entry"]["size"], len(program.machine_code))
 
     def test_rejects_empty_code_bad_symbol_and_unsupported_architecture(self):
         for args in ((b"", "arm64"), (b"\xc0\x03\x5f\xd6", "x86_64"),

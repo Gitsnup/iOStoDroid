@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace radek::compat_runtime::libsystem {
+namespace iostodroid::compat_runtime::libsystem {
 namespace {
 
 constexpr std::size_t kCopyChunk = 64U * 1024U;
@@ -674,4 +674,4 @@ std::size_t ShimAdapter::heapBytes() const {
     return heapSize_;
 }
 
-} // namespace radek::compat_runtime::libsystem
+} // namespace iostodroid::compat_runtime::libsystem

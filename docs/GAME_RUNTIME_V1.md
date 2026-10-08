@@ -13,8 +13,8 @@ shows a preview or menu.
    (`assets/gameboot/main-executable.bin`), the bundle resources
    (`assets/bundle/**`), boot metadata (`assets/gameboot.json`), and the
    tested `libcompat_runtime_v1.so` guest-CPU runtime.
-2. The launcher (`dev.radek.gameruntime.GameBootActivity`) runs the boot once
-   through `Java_dev_radek_gameruntime_GameBootActivity_runGameBootAttempt`.
+2. The launcher (`dev.iostodroid.gameruntime.GameBootActivity`) runs the boot once
+   through `Java_dev_iostodroid_gameruntime_GameBootActivity_runGameBootAttempt`.
 3. Unimplemented imports are bound to abort-on-call traps. The guest executes
    real instructions from the Mach-O entry point until it calls (or touches
    data of) the first unimplemented import. Implemented adapters run for real
@@ -34,28 +34,28 @@ shows a preview or menu.
 | Item | Value |
 |---|---|
 | APK file | `<SanitizedIpaStem>-game.apk` |
-| Package | `dev.radek.gameruntime.p<source-sha256[0:20]><cert-sha256[0:8]>` |
-| Launcher | `dev.radek.gameruntime.GameBootActivity` |
+| Package | `dev.iostodroid.gameruntime.p<source-sha256[0:20]><cert-sha256[0:8]>` |
+| Launcher | `dev.iostodroid.gameruntime.GameBootActivity` |
 | Report key (device) | `gameRuntimeConversion` |
 | Manifest (host) | `game-runtime-manifest.json` |
 
-The host (`radek/gameruntime.py`) and the device (`ArtifactNames`,
+The host (`iostodroid/gameruntime.py`) and the device (`ArtifactNames`,
 `GameRuntimeArtifactContract`, `GameRuntimeApkBuilder`) implement the same
 naming and package rules; both sides pin them with tests.
 
 ## Host tooling
 
 ```
-python3 -m radek gameboot input.ipa --authorized --output job-dir
+python3 -m iostodroid gameboot input.ipa --authorized --output job-dir
 ```
 
 - Extracts the IPA with the standard archive bounds, selects the boot slice
   (thin ARM file, or the first 32-bit ARM slice of a FAT image), and probes it
-  with the `radek-gameboot` host binary (built by CMake with pinned Unicorn).
+  with the `iostodroid-gameboot` host binary (built by CMake with pinned Unicorn).
 - Writes `game-runtime-manifest.json` (contract inputs + `hostProbe` summary),
   `gameboot-report.json` (full native report), and `main-executable.bin` (the
   exact staged slice the device builder packs).
-- The probe never fails the command: without a built `radek-gameboot` binary
+- The probe never fails the command: without a built `iostodroid-gameboot` binary
   the manifest records `hostProbe.status: "NOT_PROBED"` with a reason.
 
 ## On-device builder

@@ -5,7 +5,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
-namespace radek {
+namespace iostodroid {
 struct Json {
     enum Kind { Null, Bool, Number, String, Array, Object } kind = Null;
     std::string value;
@@ -74,4 +74,4 @@ struct Json {
         return o + (kind == Array ? "]" : "}");
     }
 };
-} // namespace radek
+} // namespace iostodroid

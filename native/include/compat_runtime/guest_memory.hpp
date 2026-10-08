@@ -11,7 +11,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 
 using GuestAddress = std::uint32_t;
 
@@ -126,4 +126,4 @@ class GuestAddressSpace {
     std::size_t memoryLimit() const noexcept { return memoryLimit_; }
 };
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

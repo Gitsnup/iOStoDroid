@@ -19,28 +19,28 @@
 namespace {
 constexpr jsize kMaximumMainBinaryBytes = 256 * 1024 * 1024;
 
-jstring jsonString(JNIEnv *env, const radek::Json &json) {
+jstring jsonString(JNIEnv *env, const iostodroid::Json &json) {
     const std::string text = json.dump();
     return env->NewStringUTF(text.c_str());
 }
 
-radek::Json blockedReport(const std::string &message, bool authorizationConfirmed) {
-    radek::Json report = radek::Json::object();
+iostodroid::Json blockedReport(const std::string &message, bool authorizationConfirmed) {
+    iostodroid::Json report = iostodroid::Json::object();
     report["schemaVersion"] = std::uint64_t{1};
-    report["runtimeContract"] = radek::compat_runtime::kRuntimeContract;
-    report["runtimeLibrary"] = radek::compat_runtime::kRuntimeLibraryName;
-    report["reportArtifactName"] = radek::compat_runtime::kRuntimeReportFileName;
+    report["runtimeContract"] = iostodroid::compat_runtime::kRuntimeContract;
+    report["runtimeLibrary"] = iostodroid::compat_runtime::kRuntimeLibraryName;
+    report["reportArtifactName"] = iostodroid::compat_runtime::kRuntimeReportFileName;
     report["status"] = "not_runnable";
     report["authorizationConfirmed"] = authorizationConfirmed;
-    report["firstMissingImport"] = radek::Json();
-    report["resolvedSymbols"] = radek::Json::array();
-    report["unresolvedSymbols"] = radek::Json::array();
-    report["loader"] = radek::Json::object();
+    report["firstMissingImport"] = iostodroid::Json();
+    report["resolvedSymbols"] = iostodroid::Json::array();
+    report["unresolvedSymbols"] = iostodroid::Json::array();
+    report["loader"] = iostodroid::Json::object();
     report["loader"]["status"] = "NOT_ATTEMPTED";
     report["loader"]["imageMapped"] = false;
-    report["cpu"] = radek::Json::object();
+    report["cpu"] = iostodroid::Json::object();
     report["cpu"]["status"] = "NOT_ATTEMPTED";
-    report["execution"] = radek::Json::object();
+    report["execution"] = iostodroid::Json::object();
     report["execution"]["status"] = "NOT_ATTEMPTED";
     report["execution"]["entryPointReached"] = false;
     report["reason"] = message;
@@ -51,7 +51,7 @@ radek::Json blockedReport(const std::string &message, bool authorizationConfirme
 } // namespace
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_radek_compat_runtime_RuntimeBridge_runAuthorizedMainBinary(JNIEnv *env, jobject,
+Java_dev_iostodroid_compat_runtime_RuntimeBridge_runAuthorizedMainBinary(JNIEnv *env, jobject,
                                                                      jbyteArray mainBinary,
                                                                      jboolean authorizationConfirmed) {
     if (authorizationConfirmed != JNI_TRUE)
@@ -67,15 +67,15 @@ Java_dev_radek_compat_runtime_RuntimeBridge_runAuthorizedMainBinary(JNIEnv *env,
         env->GetByteArrayRegion(mainBinary, 0, length, reinterpret_cast<jbyte *>(bytes.data()));
         if (env->ExceptionCheck())
             return nullptr;
-        radek::compat_runtime::ShimRegistry shims;
-        radek::compat_runtime::objc::ShimAdapter objcShims;
-        radek::compat_runtime::audio::ShimAdapter audioShims;
-        radek::compat_runtime::SjLjUnwindAdapter sjljUnwind;
+        iostodroid::compat_runtime::ShimRegistry shims;
+        iostodroid::compat_runtime::objc::ShimAdapter objcShims;
+        iostodroid::compat_runtime::audio::ShimAdapter audioShims;
+        iostodroid::compat_runtime::SjLjUnwindAdapter sjljUnwind;
         objcShims.registerBindings(shims);
         audioShims.registerBindings(shims);
         sjljUnwind.registerBindings(shims);
-        const auto cpu = radek::compat_runtime::createArm32CpuBackend();
-        const radek::compat_runtime::GuestRunner runner(shims, *cpu);
+        const auto cpu = iostodroid::compat_runtime::createArm32CpuBackend();
+        const iostodroid::compat_runtime::GuestRunner runner(shims, *cpu);
         return jsonString(env, runner.runMainBinary(bytes, true));
     } catch (const std::exception &error) {
         const std::string detail = std::string("Runtime initialization failed closed: ") + error.what();
@@ -84,7 +84,7 @@ Java_dev_radek_compat_runtime_RuntimeBridge_runAuthorizedMainBinary(JNIEnv *env,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_radek_compat_runtime_RuntimeBridge_reportImportBlocked(JNIEnv *env, jobject,
+Java_dev_iostodroid_compat_runtime_RuntimeBridge_reportImportBlocked(JNIEnv *env, jobject,
                                                                 jstring message,
                                                                 jboolean authorizationConfirmed) {
     if (!message)

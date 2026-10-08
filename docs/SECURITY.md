@@ -7,7 +7,7 @@ code signatures as a source of trust.
 
 There is no fixed archive size limit: 512 MiB was an arbitrary guard that stopped real games from ever
 being analyzed. An archive is bounded by the device's own free storage, which both the host CLI
-(`radek.archive.require_free_space`) and the Android importer (`SafeZip.requireStorage`) check before
+(`iostodroid.archive.require_free_space`) and the Android importer (`SafeZip.requireStorage`) check before
 reading it. The remaining limits are ZIP-bomb and device-memory guards, not input policy: 20,000
 members, 250:1 maximum member expansion ratio, 1 GiB per on-device member (256 MiB per host archive
 member), 256 MiB per on-device executable, 8 MiB plist, and bounded paths/depth. PNG dimensions and CgBI inflation are bounded. Native counts/ranges, ULEB

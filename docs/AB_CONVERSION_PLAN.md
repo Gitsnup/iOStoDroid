@@ -33,7 +33,7 @@ on iPhone 3G (ARMv6) and 3GS (ARMv7-A)). The APK ships:
    `lang::Throwable` across frames; verified against GCC's documented ABI and
    the binary's own landing pads, reimplemented — no GPL code in the runtime).
 
-Convert-time (host) components in `radek/game/`:
+Convert-time (host) components in `iostodroid/game/`:
 
 - [x] `macho.py` — exact classic-Mach-O parser (survey-proven on the real binary)
 - [ ] `disasm.py` — recursive-descent ARM + literal/xref resolution

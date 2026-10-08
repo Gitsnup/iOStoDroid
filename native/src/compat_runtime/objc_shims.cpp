@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace radek::compat_runtime::objc {
+namespace iostodroid::compat_runtime::objc {
 namespace {
 constexpr std::size_t kGuestPageSize = 4096;
 constexpr std::size_t kClassNameOffset = 64;
@@ -944,7 +944,7 @@ void ShimAdapter::registerBindings(ShimRegistry &registry) {
     if (nextCallout_ > 0xf000ffffU - 4U)
         throw std::overflow_error("Objective-C lifecycle callout range is exhausted");
     ShimBinding lifecycleContinuationBinding;
-    lifecycleContinuationBinding.darwinSymbol = "_radek_lifecycle_continuation";
+    lifecycleContinuationBinding.darwinSymbol = "_iostodroid_lifecycle_continuation";
     lifecycleContinuationBinding.library = "UIKit";
     lifecycleContinuationBinding.adapterName = "uikit-lifecycle-continuation";
     lifecycleContinuationBinding.guestAddress = nextCallout_;
@@ -953,7 +953,7 @@ void ShimAdapter::registerBindings(ShimRegistry &registry) {
     };
     nextCallout_ += 4U;
     registry.registerBinding(std::move(lifecycleContinuationBinding));
-    const auto lifecycleContinuation = registry.resolve("_radek_lifecycle_continuation");
+    const auto lifecycleContinuation = registry.resolve("_iostodroid_lifecycle_continuation");
     if (!lifecycleContinuation || !lifecycleContinuation->invoke)
         throw std::runtime_error("Objective-C lifecycle continuation was not registered");
     lifecycleContinuationAddress_ = lifecycleContinuation->guestAddress;
@@ -963,7 +963,7 @@ void ShimAdapter::registerBindings(ShimRegistry &registry) {
                              });
 
     constexpr const char *copyContinuationSymbol =
-        "_radek_objc_setProperty_copy_continuation";
+        "_iostodroid_objc_setProperty_copy_continuation";
     registerFunction(registry, copyContinuationSymbol,
                      "objc_setProperty_copy_continuation",
                      [this](auto &registers, auto &memory, auto &reason) {
@@ -1938,4 +1938,4 @@ bool ShimAdapter::dispatch(CpuRegisterState &registers, GuestAddressSpace &memor
     }
 }
 
-} // namespace radek::compat_runtime::objc
+} // namespace iostodroid::compat_runtime::objc

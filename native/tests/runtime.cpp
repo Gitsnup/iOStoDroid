@@ -1,7 +1,7 @@
 #include "runtime.hpp"
 #include <cstdlib>
 #include <iostream>
-using namespace radek::runtime;
+using namespace iostodroid::runtime;
 #define CHECK(x)                                                                                             \
     do {                                                                                                     \
         if (!(x))                                                                                            \
@@ -110,7 +110,7 @@ int main() {
     std::free(memory);
     auto tmp =
         std::filesystem::temp_directory_path() /
-        ("radek-runtime-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        ("iostodroid-runtime-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     Sandbox fs(tmp);
     fs.write("Documents", "nested/file.txt", "data");
     CHECK(fs.read("Documents", "nested/file.txt") == "data");

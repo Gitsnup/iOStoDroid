@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
-from radek.archive import *
+from iostodroid.archive import *
 from .fixtures import ipa
 
 

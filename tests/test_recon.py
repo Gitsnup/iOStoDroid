@@ -5,15 +5,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from radek.analysis import analyze
-from radek.recon import reconstruct
-from radek.recon import objc as objc_mod
-from radek.recon.apis import classify as classify_import
-from radek.recon import swift as swift_mod
-from radek.recon.disasm import decode_arm64
-from radek.recon.image import load
-from radek.recon.report import blockers, markdown, summary
-from radek.recon.source import Reconstructor
+from iostodroid.analysis import analyze
+from iostodroid.recon import reconstruct
+from iostodroid.recon import objc as objc_mod
+from iostodroid.recon.apis import classify as classify_import
+from iostodroid.recon import swift as swift_mod
+from iostodroid.recon.disasm import decode_arm64
+from iostodroid.recon.image import load
+from iostodroid.recon.report import blockers, markdown, summary
+from iostodroid.recon.source import Reconstructor
 
 from .machobuild import (
     S_ATTR_PURE_INSTRUCTIONS,
@@ -277,7 +277,7 @@ class ReconstructionTests(Base):
         slice_data = result["images"][0]["slices"][0]
         stats = slice_data["disassembly"]
         self.assertEqual(stats["functions"], 2)
-        from radek.recon.disasm import disassemble
+        from iostodroid.recon.disasm import disassemble
 
         decoded_functions, decoded_stats = disassemble(load(path, info["slices"][0]))
         self.assertEqual(decoded_stats["instructions"], len({
@@ -346,7 +346,7 @@ class ReconstructionTests(Base):
 
     def test_common_darwin_game_dylibs_get_named_attribution(self):
         # Framework/dylib names are attribution labels, not implementation claims.
-        from radek.recon.apis import framework_of
+        from iostodroid.recon.apis import framework_of
 
         self.assertEqual(framework_of("/usr/lib/libsqlite3.dylib"), "SQLite")
         self.assertEqual(framework_of("/usr/lib/libz.1.dylib"), "zlib")
@@ -423,7 +423,7 @@ class ReconstructionTests(Base):
 
 class DisassemblyTests(Base):
     def test_arm32_branch_and_pc_relative_loads(self):
-        from radek.recon.disasm import decode_arm
+        from iostodroid.recon.disasm import decode_arm
 
         start = 0x4000
         target = 0x5000
@@ -448,7 +448,7 @@ class DisassemblyTests(Base):
         self.assertEqual((add_sp.mnemonic, add_sp.kind, add_sp.immediate), ("add", "arith", 4))
 
     def test_branch_targets_and_returns(self):
-        from radek.recon.disasm import decode_arm, decode_arm64, decode_thumb
+        from iostodroid.recon.disasm import decode_arm, decode_arm64, decode_thumb
 
         self.assertEqual(decode_arm64(ret(), 0x1000).kind, "ret")
         self.assertEqual(decode_arm64(movz(0, 42), 0x1000).immediate, 42)

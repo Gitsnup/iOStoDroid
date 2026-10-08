@@ -88,7 +88,7 @@ def main() -> None:
         executable,
         icon=False,
         display_name="Simple IPA",
-        bundle_id="dev.radek.simpleipa",
+        bundle_id="dev.iostodroid.simpleipa",
     )
     print(f"{OUTPUT} ({len(CODE)} native entry bytes, return {RETURN_VALUE})")
 

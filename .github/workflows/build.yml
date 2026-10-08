@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: radek-build-${{ github.ref }}
+  group: iostodroid-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -40,7 +40,7 @@ jobs:
         run: python3 tools/build_native.py
       - name: Configure and run CMake compat-runtime-v1 with pinned Unicorn ARM32 host tests
         run: |
-          cmake -S native -B .local/native-cmake -DRADEK_BUILD_COMPAT_RUNTIME=ON -DRADEK_FETCH_UNICORN=ON
+          cmake -S native -B .local/native-cmake -DIOSTODROID_BUILD_COMPAT_RUNTIME=ON -DIOSTODROID_FETCH_UNICORN=ON
           cmake --build .local/native-cmake --parallel 2
           ctest --test-dir .local/native-cmake --output-on-failure
       - name: Validate compat-runtime-v1 smoke database
@@ -54,7 +54,7 @@ jobs:
       - name: Probe Angry Birds game-runtime boot attempt
         run: |
           set -e
-          python3 -m radek gameboot tests/data/AngryBirds_v1.0_os30.ipa --authorized --output .local/angrybirds-gameboot
+          python3 -m iostodroid gameboot tests/data/AngryBirds_v1.0_os30.ipa --authorized --output .local/angrybirds-gameboot
           python3 - <<'EOF'
           import json, sys
           manifest = json.load(open(".local/angrybirds-gameboot/game-runtime-manifest.json"))
@@ -81,7 +81,7 @@ jobs:
           set -e
           test -f tests/data/sample-leaf.ipa
           set +e
-          python3 -m radek convert tests/data/sample-leaf.ipa --authorized --output .local/sample-conversion
+          python3 -m iostodroid convert tests/data/sample-leaf.ipa --authorized --output .local/sample-conversion
           code=$?
           set -e
           echo "convert exit code: $code (3 = BLOCKED, the expected honest state)"
@@ -124,12 +124,12 @@ jobs:
           print("sample conversion honest-status checks passed")
           EOF
       - name: Validate the labelled experimental shell APK
-        run: python3 -m radek validate-shell .local/sample-conversion/experimental-shell.apk
+        run: python3 -m iostodroid validate-shell .local/sample-conversion/experimental-shell.apk
       - name: Convert IPA (hello-test must fully convert end to end)
         run: |
           set -e
           test -f tests/data/hello-test.ipa
-          python3 -m radek convert tests/data/hello-test.ipa --authorized --output .local/hello-conversion
+          python3 -m iostodroid convert tests/data/hello-test.ipa --authorized --output .local/hello-conversion
           python3 - <<'EOF'
           import json, sys
           report = json.load(open(".local/hello-conversion/report.json"))
@@ -154,15 +154,15 @@ jobs:
       - name: Validate hello-test converted APK
         run: |
           set -e
-          PKG="dev.radek.converted.p$(python3 -c "import hashlib; print(hashlib.sha256(open('tests/data/hello-test.ipa','rb').read()).hexdigest()[:20])")"
-          python3 -m radek validate .local/hello-conversion/hello-test.apk \
+          PKG="dev.iostodroid.converted.p$(python3 -c "import hashlib; print(hashlib.sha256(open('tests/data/hello-test.ipa','rb').read()).hexdigest()[:20])")"
+          python3 -m iostodroid validate .local/hello-conversion/hello-test.apk \
             --package "$PKG" \
-            --entry dev.radek.generated.MainActivity
+            --entry dev.iostodroid.generated.MainActivity
       - name: Convert IPA (simple.ipa exercises a longer statically recompiled routine)
         run: |
           set -e
           test -f tests/data/simple.ipa
-          python3 -m radek convert tests/data/simple.ipa --authorized --output .local/simple-conversion
+          python3 -m iostodroid convert tests/data/simple.ipa --authorized --output .local/simple-conversion
           python3 - <<'EOF'
           import json, pathlib, sys
           report = json.load(open(".local/simple-conversion/report.json"))
@@ -188,10 +188,10 @@ jobs:
       - name: Validate simple converted APK
         run: |
           set -e
-          PKG="dev.radek.converted.p$(python3 -c "import hashlib; print(hashlib.sha256(open('tests/data/simple.ipa','rb').read()).hexdigest()[:20])")"
-          python3 -m radek validate .local/simple-conversion/simple.apk \
+          PKG="dev.iostodroid.converted.p$(python3 -c "import hashlib; print(hashlib.sha256(open('tests/data/simple.ipa','rb').read()).hexdigest()[:20])")"
+          python3 -m iostodroid validate .local/simple-conversion/simple.apk \
             --package "$PKG" \
-            --entry dev.radek.generated.MainActivity
+            --entry dev.iostodroid.generated.MainActivity
       - name: Android unit tests, converter APK, and compat-runtime-v1 Android library
         run: python3 tools/ci_run.py ./gradlew --no-daemon :app:testDebugUnitTest :gameruntime-template:testDebugUnitTest :app:lintDebug :app:assembleDebug :compat-runtime-v1:lintDebug :compat-runtime-v1:assembleDebug
       - name: Verify game-runtime shared libraries are packaged in the converter APK
@@ -214,13 +214,13 @@ jobs:
       - name: Validate converter application APK
         run: |
           mkdir -p artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk artifacts/RadekiOSConventor-debug.apk
-          python3 -m radek validate artifacts/RadekiOSConventor-debug.apk --package dev.radek.conventor --entry dev.radek.conventor.MainActivity --converter-app > artifacts/validation.json
-      - name: Upload RadekiOSConventor APK
+          cp app/build/outputs/apk/debug/app-debug.apk artifacts/iOStoDroid-debug.apk
+          python3 -m iostodroid validate artifacts/iOStoDroid-debug.apk --package dev.iostodroid.conventor --entry dev.iostodroid.conventor.MainActivity --converter-app > artifacts/validation.json
+      - name: Upload iOStoDroid APK
         uses: actions/upload-artifact@v6
         with:
-          name: RadekiOSConventor-debug.apk
-          path: artifacts/RadekiOSConventor-debug.apk
+          name: iOStoDroid-debug.apk
+          path: artifacts/iOStoDroid-debug.apk
           if-no-files-found: error
       - name: Collect sample conversion artifacts
         if: always() && hashFiles('.local/sample-conversion/**') != ''

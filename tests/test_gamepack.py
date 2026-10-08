@@ -16,18 +16,18 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from radek import apk as apk_module
-from radek import gamepack as gamepack_module
-from radek.apk import _validate_complete_game_metadata
-from radek.elf import inspect as inspect_elf
-from radek.gamepack import (
+from iostodroid import apk as apk_module
+from iostodroid import gamepack as gamepack_module
+from iostodroid.apk import _validate_complete_game_metadata
+from iostodroid.elf import inspect as inspect_elf
+from iostodroid.gamepack import (
     COMPLETE_GAME_ENTRY,
     COMPLETE_GAME_JNI_SYMBOL,
     _launch_message_from_cstrings,
     assess_complete_conversion,
     complete_game_metadata,
 )
-from radek.pipeline import Pipeline
+from iostodroid.pipeline import Pipeline
 from tests.fixtures import ipa, macho
 
 HELLO_PATH = Path(__file__).resolve().parent.parent / "tests" / "data" / "hello-test.ipa"
@@ -42,7 +42,7 @@ SIMPLE_LAUNCH_MESSAGE = _SIMPLE_MODULE.LAUNCH_MESSAGE
 
 
 def _fake_toolchain(root: Path):
-    from radek.apk import Toolchain
+    from iostodroid.apk import Toolchain
 
     sdk = root / "sdk"
     build = sdk / "build-tools" / "35.0.0"
@@ -80,9 +80,9 @@ def _fake_run_factory(calls: list):
                 package.writestr("AndroidManifest.xml", b"\x03\x00" + bytes(6))
                 package.writestr("resources.arsc", b"\x00\x01\x02\x03")
                 package.writestr("res/drawable-nodpi/converted_icon.png", b"\x89PNG-fake-icon")
-            (gen / "dev" / "radek" / "generated").mkdir(parents=True)
-            (gen / "dev" / "radek" / "generated" / "R.java").write_text(
-                "package dev.radek.generated; final class R {}"
+            (gen / "dev" / "iostodroid" / "generated").mkdir(parents=True)
+            (gen / "dev" / "iostodroid" / "generated" / "R.java").write_text(
+                "package dev.iostodroid.generated; final class R {}"
             )
             return ""
         if tool == "d8":
@@ -124,8 +124,8 @@ class HelloIpaEligibilityTests(unittest.TestCase):
 
         with zipfile_module.ZipFile(HELLO_PATH) as archive:
             data = archive.read("Payload/Fixture.app/Fixture")
-        from radek.analysis import analyze as analyze_binary, dependency_graph, prove_leaf
-        from radek.recon import reconstruct
+        from iostodroid.analysis import analyze as analyze_binary, dependency_graph, prove_leaf
+        from iostodroid.recon import reconstruct
 
         tmp_app = self.root / "app"
         (tmp_app).mkdir()
@@ -153,8 +153,8 @@ class HelloIpaEligibilityTests(unittest.TestCase):
 
         with zipfile_module.ZipFile(source) as archive:
             data = archive.read("Payload/Fixture.app/Fixture")
-        from radek.analysis import analyze as analyze_binary, dependency_graph, prove_leaf
-        from radek.recon import reconstruct
+        from iostodroid.analysis import analyze as analyze_binary, dependency_graph, prove_leaf
+        from iostodroid.recon import reconstruct
 
         tmp_app = self.root / "app-icon"
         tmp_app.mkdir()
@@ -176,8 +176,8 @@ class HelloIpaEligibilityTests(unittest.TestCase):
         source = ipa(self.root / "imports.ipa", macho(code, imports=("_UIView",)), icon=False)
         with zipfile.ZipFile(source) as archive:
             data = archive.read("Payload/Fixture.app/Fixture")
-        from radek.analysis import analyze as analyze_binary, dependency_graph, prove_leaf
-        from radek.recon import reconstruct
+        from iostodroid.analysis import analyze as analyze_binary, dependency_graph, prove_leaf
+        from iostodroid.recon import reconstruct
 
         tmp_app = self.root / "app-imports"
         tmp_app.mkdir()
@@ -205,7 +205,7 @@ class SimpleIpaFixtureTests(unittest.TestCase):
                 macho(SIMPLE_CODE, cstring=SIMPLE_LAUNCH_MESSAGE.encode("ascii") + bytes([0])),
                 icon=False,
                 display_name="Simple IPA",
-                bundle_id="dev.radek.simpleipa",
+                bundle_id="dev.iostodroid.simpleipa",
             )
             self.assertEqual(SIMPLE_PATH.read_bytes(), regenerated.read_bytes())
 
@@ -213,7 +213,7 @@ class SimpleIpaFixtureTests(unittest.TestCase):
 class CompleteGameMetadataTests(unittest.TestCase):
     def test_metadata_satisfies_strict_validator(self):
         metadata = complete_game_metadata(
-            {"name": "Hello Test", "originalName": "hello-test.ipa", "bundleId": "dev.radek.hellotest"},
+            {"name": "Hello Test", "originalName": "hello-test.ipa", "bundleId": "dev.iostodroid.hellotest"},
             "ab" * 32,
             "arm64-v8a",
             b"\x1f\x03\x80\xd6",
@@ -221,14 +221,14 @@ class CompleteGameMetadataTests(unittest.TestCase):
             "hello test succesfull",
         )
         game = _validate_complete_game_metadata(
-            metadata, "dev.radek.converted.p" + "ab" * 10, "arm64-v8a"
+            metadata, "dev.iostodroid.converted.p" + "ab" * 10, "arm64-v8a"
         )
         self.assertEqual(game["status"], "COMPLETE")
         self.assertEqual(metadata["launchMessage"], "hello test succesfull")
         self.assertEqual(metadata["conversion"]["outputBytes"], 4)
 
     def test_jni_symbol_is_a_valid_elf_export(self):
-        from radek.elf_writer import build_shared_object
+        from iostodroid.elf_writer import build_shared_object
 
         code = bytes.fromhex("4002805221040011c0035fd6")
         blob = build_shared_object(code, "arm64", symbol=COMPLETE_GAME_JNI_SYMBOL)
@@ -356,7 +356,7 @@ class NativeTrivialProverTests(unittest.TestCase):
     def _run(self, payload: bytes) -> dict:
         import subprocess
 
-        from radek.analysis import analyzer_path
+        from iostodroid.analysis import analyzer_path
 
         binary = Path(self.tmp.name) / "executable"
         binary.write_bytes(payload)
@@ -393,8 +393,8 @@ class NativeTrivialProverTests(unittest.TestCase):
         import hashlib
         import os
         import subprocess
-        from radek.c_backend import emit
-        from radek.ir import lift
+        from iostodroid.c_backend import emit
+        from iostodroid.ir import lift
 
         self.assertTrue(SIMPLE_PATH.is_file(), "committed simple.ipa fixture is missing")
         with zipfile.ZipFile(SIMPLE_PATH) as archive:
@@ -423,7 +423,7 @@ class NativeTrivialProverTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            native_entry = ctypes.CDLL(str(library)).radek_recompiled_entry
+            native_entry = ctypes.CDLL(str(library)).iostodroid_recompiled_entry
             native_entry.restype = ctypes.c_uint32
             self.assertEqual(native_entry(), SIMPLE_RETURN_VALUE)
 

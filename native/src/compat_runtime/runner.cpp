@@ -7,7 +7,7 @@
 #include <set>
 #include <string>
 
-namespace radek::compat_runtime {
+namespace iostodroid::compat_runtime {
 namespace {
 const char *executionStatusName(CpuExecutionStatus status) {
     switch (status) {
@@ -31,19 +31,19 @@ const char *executionStatusName(CpuExecutionStatus status) {
     return "UNKNOWN";
 }
 
-radek::Json registerReport(const CpuRegisterState &registers) {
-    radek::Json result = radek::Json::object();
+iostodroid::Json registerReport(const CpuRegisterState &registers) {
+    iostodroid::Json result = iostodroid::Json::object();
     for (std::size_t index = 0; index < registers.r.size(); ++index)
         result["r" + std::to_string(index)] = static_cast<std::uint64_t>(registers.r[index]);
     result["cpsr"] = static_cast<std::uint64_t>(registers.cpsr);
     return result;
 }
 
-void appendImportArrays(radek::Json &report, const radek::Json &loader) {
+void appendImportArrays(iostodroid::Json &report, const iostodroid::Json &loader) {
     const auto resolved = loader.fields.find("resolvedSymbols");
     const auto unresolved = loader.fields.find("unresolvedSymbols");
-    report["resolvedSymbols"] = resolved == loader.fields.end() ? radek::Json::array() : resolved->second;
-    report["unresolvedSymbols"] = unresolved == loader.fields.end() ? radek::Json::array() : unresolved->second;
+    report["resolvedSymbols"] = resolved == loader.fields.end() ? iostodroid::Json::array() : resolved->second;
+    report["unresolvedSymbols"] = unresolved == loader.fields.end() ? iostodroid::Json::array() : unresolved->second;
 }
 
 // Maps a fresh 64 KiB boot stack and lays out a minimal Darwin-style
@@ -58,9 +58,9 @@ bool prepareBootStack(GuestAddressSpace &addressSpace, CpuRegisterState &registe
     //   SP+4:  argv[0] -> program name string
     //   SP+8:  argv[1] = NULL
     //   SP+12: envp[0] = NULL
-    //   SP+16: "radek-gameboot\0"
+    //   SP+16: "iostodroid-gameboot\0"
     constexpr GuestAddress frameSize = 32;
-    constexpr char programName[] = "radek-gameboot";
+    constexpr char programName[] = "iostodroid-gameboot";
     GuestAddress base = 0;
     try {
         base = addressSpace.mapAny(stackSize, MemoryPermission::Read | MemoryPermission::Write,
@@ -85,9 +85,9 @@ bool prepareBootStack(GuestAddressSpace &addressSpace, CpuRegisterState &registe
 }
 } // namespace
 
-radek::Json GuestRunner::runMainBinary(const std::vector<std::uint8_t> &mainBinary,
+iostodroid::Json GuestRunner::runMainBinary(const std::vector<std::uint8_t> &mainBinary,
                                        bool authorizationConfirmed) const {
-    radek::Json report = radek::Json::object();
+    iostodroid::Json report = iostodroid::Json::object();
     report["schemaVersion"] = std::uint64_t{1};
     report["runtimeContract"] = kRuntimeContract;
     report["runtimeLibrary"] = kRuntimeLibraryName;
@@ -95,23 +95,23 @@ radek::Json GuestRunner::runMainBinary(const std::vector<std::uint8_t> &mainBina
     report["status"] = "not_runnable";
     report["authorizationConfirmed"] = authorizationConfirmed;
     report["inputEmbeddedInRuntimeArtifact"] = false;
-    report["firstMissingImport"] = radek::Json();
-    report["functionOrigin"] = radek::Json();
-    report["resolvedSymbols"] = radek::Json::array();
-    report["unresolvedSymbols"] = radek::Json::array();
+    report["firstMissingImport"] = iostodroid::Json();
+    report["functionOrigin"] = iostodroid::Json();
+    report["resolvedSymbols"] = iostodroid::Json::array();
+    report["unresolvedSymbols"] = iostodroid::Json::array();
 
     if (!authorizationConfirmed) {
         report["reason"] = "User authorization was not confirmed.";
-        report["loader"] = radek::Json::object();
-        report["cpu"] = radek::Json::object();
-        report["execution"] = radek::Json::object();
+        report["loader"] = iostodroid::Json::object();
+        report["cpu"] = iostodroid::Json::object();
+        report["execution"] = iostodroid::Json::object();
         return report;
     }
     if (mainBinary.empty()) {
         report["reason"] = "IPA main executable is empty.";
-        report["loader"] = radek::Json::object();
-        report["cpu"] = radek::Json::object();
-        report["execution"] = radek::Json::object();
+        report["loader"] = iostodroid::Json::object();
+        report["cpu"] = iostodroid::Json::object();
+        report["execution"] = iostodroid::Json::object();
         return report;
     }
 
@@ -124,20 +124,20 @@ radek::Json GuestRunner::runMainBinary(const std::vector<std::uint8_t> &mainBina
     if (load.firstMissingImport)
         report["firstMissingImport"] = *load.firstMissingImport;
 
-    radek::Json cpuReport = radek::Json::object();
+    iostodroid::Json cpuReport = iostodroid::Json::object();
     cpuReport["backend"] = cpu_.name();
     cpuReport["backendAvailable"] = cpu_.available();
     cpuReport["status"] = "NOT_ATTEMPTED";
     report["cpu"] = cpuReport;
-    radek::Json execution = radek::Json::object();
+    iostodroid::Json execution = iostodroid::Json::object();
     execution["status"] = "NOT_ATTEMPTED";
     execution["entryPointReached"] = false;
-    execution["functionOrigin"] = radek::Json();
+    execution["functionOrigin"] = iostodroid::Json();
     report["execution"] = execution;
 
-    radek::Json functionOrigin;
+    iostodroid::Json functionOrigin;
     if (load.entryPoint != 0) {
-        functionOrigin = radek::Json::object();
+        functionOrigin = iostodroid::Json::object();
         functionOrigin["kind"] = "macho-entrypoint";
         functionOrigin["sourceImage"] = "main-executable";
         functionOrigin["loadCommand"] = load.entryPointSource;
@@ -232,9 +232,9 @@ radek::Json GuestRunner::runMainBinary(const std::vector<std::uint8_t> &mainBina
     return report;
 }
 
-radek::Json BootAttemptRunner::run(const std::vector<std::uint8_t> &mainBinary,
+iostodroid::Json BootAttemptRunner::run(const std::vector<std::uint8_t> &mainBinary,
                                    bool authorizationConfirmed) {
-    radek::Json report = radek::Json::object();
+    iostodroid::Json report = iostodroid::Json::object();
     report["schemaVersion"] = std::uint64_t{1};
     report["runtimeContract"] = kRuntimeContract;
     report["runtimeLibrary"] = kRuntimeLibraryName;
@@ -243,26 +243,26 @@ radek::Json BootAttemptRunner::run(const std::vector<std::uint8_t> &mainBinary,
     report["trapMode"] = true;
     report["authorizationConfirmed"] = authorizationConfirmed;
     report["inputEmbeddedInRuntimeArtifact"] = false;
-    report["firstMissingImport"] = radek::Json();
-    report["trappedImport"] = radek::Json();
-    report["functionOrigin"] = radek::Json();
-    report["resolvedSymbols"] = radek::Json::array();
-    report["unresolvedSymbols"] = radek::Json::array();
-    report["trappedSymbols"] = radek::Json::array();
-    report["unboundNlistSymbols"] = radek::Json::array();
+    report["firstMissingImport"] = iostodroid::Json();
+    report["trappedImport"] = iostodroid::Json();
+    report["functionOrigin"] = iostodroid::Json();
+    report["resolvedSymbols"] = iostodroid::Json::array();
+    report["unresolvedSymbols"] = iostodroid::Json::array();
+    report["trappedSymbols"] = iostodroid::Json::array();
+    report["unboundNlistSymbols"] = iostodroid::Json::array();
 
     if (!authorizationConfirmed) {
         report["reason"] = "User authorization was not confirmed.";
-        report["loader"] = radek::Json::object();
-        report["cpu"] = radek::Json::object();
-        report["execution"] = radek::Json::object();
+        report["loader"] = iostodroid::Json::object();
+        report["cpu"] = iostodroid::Json::object();
+        report["execution"] = iostodroid::Json::object();
         return report;
     }
     if (mainBinary.empty()) {
         report["reason"] = "IPA main executable is empty.";
-        report["loader"] = radek::Json::object();
-        report["cpu"] = radek::Json::object();
-        report["execution"] = radek::Json::object();
+        report["loader"] = iostodroid::Json::object();
+        report["cpu"] = iostodroid::Json::object();
+        report["execution"] = iostodroid::Json::object();
         return report;
     }
 
@@ -281,20 +281,20 @@ radek::Json BootAttemptRunner::run(const std::vector<std::uint8_t> &mainBinary,
     if (load.firstMissingImport)
         report["firstMissingImport"] = *load.firstMissingImport;
 
-    radek::Json cpuReport = radek::Json::object();
+    iostodroid::Json cpuReport = iostodroid::Json::object();
     cpuReport["backend"] = cpu_.name();
     cpuReport["backendAvailable"] = cpu_.available();
     cpuReport["status"] = "NOT_ATTEMPTED";
     report["cpu"] = cpuReport;
-    radek::Json execution = radek::Json::object();
+    iostodroid::Json execution = iostodroid::Json::object();
     execution["status"] = "NOT_ATTEMPTED";
     execution["entryPointReached"] = false;
-    execution["functionOrigin"] = radek::Json();
+    execution["functionOrigin"] = iostodroid::Json();
     report["execution"] = execution;
 
-    radek::Json functionOrigin;
+    iostodroid::Json functionOrigin;
     if (load.entryPoint != 0) {
-        functionOrigin = radek::Json::object();
+        functionOrigin = iostodroid::Json::object();
         functionOrigin["kind"] = "macho-entrypoint";
         functionOrigin["sourceImage"] = "main-executable";
         functionOrigin["loadCommand"] = load.entryPointSource;
@@ -386,7 +386,7 @@ radek::Json BootAttemptRunner::run(const std::vector<std::uint8_t> &mainBinary,
     auto result = cpu_.executeGuestFunction(prepared, memory, registers);
     std::uint64_t totalInstructions = result.instructions;
     bool mainThreadEntryAttempted = false;
-    radek::Json mainLoop = radek::Json::object();
+    iostodroid::Json mainLoop = iostodroid::Json::object();
     mainLoop["attempted"] = false;
     mainLoop["instructions"] = std::uint64_t{0};
     mainLoop["status"] = "NOT_REACHED";
@@ -480,4 +480,4 @@ radek::Json BootAttemptRunner::run(const std::vector<std::uint8_t> &mainBinary,
     return report;
 }
 
-} // namespace radek::compat_runtime
+} // namespace iostodroid::compat_runtime

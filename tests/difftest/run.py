@@ -23,8 +23,8 @@ import io
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from radek.game import macho, disasm, lift  # noqa: E402
-from radek.game.lift import sanitize  # noqa: E402
+from iostodroid.game import macho, disasm, lift  # noqa: E402
+from iostodroid.game.lift import sanitize  # noqa: E402
 
 STACK_BASE, STACK_SIZE = 0x30000000, 0x10000
 SCR0_BASE, SCR1_BASE, SCR_SIZE = 0x10000000, 0x11000000, 0x10000
@@ -153,7 +153,7 @@ def write_build(img, funcs, ctx, out, shims):
         for a in addrs:
             f.write(out[a])
             f.write("\n")
-    shutil.copy("radek/game/rt/cpu.h", os.path.join(BUILD, "cpu.h"))
+    shutil.copy("iostodroid/game/rt/cpu.h", os.path.join(BUILD, "cpu.h"))
     shutil.copy(os.path.join(os.path.dirname(__file__), "dt_main.c"),
                 os.path.join(BUILD, "dt_main.c"))
     # -O0 on purpose: fault-time CPU-struct readback must reflect the latest
@@ -500,7 +500,7 @@ def main() -> int:
     seeds = int(os.environ.get("DIFFTEST_SEEDS", "3"))
     img, funcs, ctx = load_all()
     print(f"functions: {len(funcs)}", flush=True)
-    deps = ["radek/game/lift.py", "radek/game/rt/cpu.h",
+    deps = ["iostodroid/game/lift.py", "iostodroid/game/rt/cpu.h",
             "tests/difftest/dt_main.c", "tests/difftest/run.py",
             "tests/data/AngryBirds_v1.0_os30.ipa"]
     stamp = ";".join(f"{p}:{os.path.getmtime(p)}" for p in deps)

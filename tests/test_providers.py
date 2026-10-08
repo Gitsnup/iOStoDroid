@@ -1,8 +1,8 @@
 """Tests for the iOS -> Android provider table.
 
 The table exists in two places because both the host CLI and the Android app must
-report the same thing: `radek/providers.py` and
-`app/src/main/java/dev/radek/conventor/Providers.kt`. One test here parses the
+report the same thing: `iostodroid/providers.py` and
+`app/src/main/java/dev/iostodroid/conventor/Providers.kt`. One test here parses the
 Kotlin source and asserts the two agree, so they cannot drift.
 """
 
@@ -10,11 +10,11 @@ import re
 import unittest
 from pathlib import Path
 
-from radek import providers
+from iostodroid import providers
 
 ROOT = Path(__file__).resolve().parent.parent
-KOTLIN = ROOT / "app/src/main/java/dev/radek/conventor/Providers.kt"
-API_MAPPER_KOTLIN = ROOT / "app/src/main/java/dev/radek/conventor/AndroidApiMapper.kt"
+KOTLIN = ROOT / "app/src/main/java/dev/iostodroid/conventor/Providers.kt"
+API_MAPPER_KOTLIN = ROOT / "app/src/main/java/dev/iostodroid/conventor/AndroidApiMapper.kt"
 NATIVE_JNI = ROOT / "native/src/jni.cpp"
 
 # Dependency names commonly seen in on-device compatibility reports.
@@ -120,7 +120,7 @@ class ProviderTests(unittest.TestCase):
             ("_CFAbsoluteTimeGetCurrent", "CFAbsoluteTimeGetCurrent"),
             ("_CACurrentMediaTime", "CACurrentMediaTime"),
             ("_mach_timebase_info", "mach_timebase_info"),
-            ("_malloc", "libioscompat.so:radek_compat_malloc"),
+            ("_malloc", "libioscompat.so:iostodroid_compat_malloc"),
         ):
             with self.subTest(symbol=symbol):
                 provider = providers.for_symbol(symbol)

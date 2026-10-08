@@ -1,4 +1,4 @@
-# RadekiOSConventor
+# iOStoDroid
 
 An **offline IPA inspection and bounded native-reconstruction workbench** for authorized inputs. It includes an Android importer/analyzer, a C++ Mach-O parser, and Python reconstruction tools.
 
@@ -43,7 +43,7 @@ When (and only when) the entry routine passes the closed-integer proof, the host
 
 - `recompiled-entry.bin`: lowered ARM64/ARMv7 function bytes;
 - `librecompiled-entry.so`: a minimal, relocation-free Android ET_DYN library exporting
-  `radek_recompiled_entry`, statically checked for ABI, export size/hash, and undefined symbols;
+  `iostodroid_recompiled_entry`, statically checked for ABI, export size/hash, and undefined symbols;
 - `recompiled-entry.c`: a portable C rendering of the same proof-carrying integer operations,
   executable in host tests to compare return-value semantics;
 - `leaf-experiment.ll`: supplementary textual LLVM IR for the same proven leaf.
@@ -67,7 +67,7 @@ pointer slots when statically readable.
 
 ## APK output policy
 
-- CI builds **only the RadekiOSConventor importer/analyzer APK** (`RadekiOSConventor-debug.apk`),
+- CI builds **only the iOStoDroid importer/analyzer APK** (`iOStoDroid-debug.apk`),
   plus the hello-test and longer simple-test bounded conversions used to exercise the complete-game pipeline.
 - Importing an IPA runs analysis and — when the executable passes the bounded conversion proof —
   automatically finishes the conversion into a signed, installable APK; no separate action is
@@ -82,10 +82,10 @@ pointer slots when statically readable.
   passes source-identity, complete reachable-code/API/resource, ABI, packaging and provenance
   checks. Preview-shell APK metadata and provider paths are separate; a preview shell can never
   satisfy the host APK contract. The host CLI **is** a producer for that contract for the proven
-  bounded subset only (see `radek/gamepack.py`); IPAs outside the subset stay `NOT_BUILT`.
+  bounded subset only (see `iostodroid/gamepack.py`); IPAs outside the subset stay `NOT_BUILT`.
 - The `experimental-shell-v1` APK is a third, distinct category: a signed, honestly labelled
   inspection shell for the isolated statically recompiled artifacts and compatibility-registry source. It is
-  produced only on the `convert` path, is validated with `python3 -m radek validate-shell`, and can
+  produced only on the `convert` path, is validated with `python3 -m iostodroid validate-shell`, and can
   never be attached as a complete-game host APK.
 - The original IPA archive itself is retained only in private analysis storage until the library
   entry is deleted and is never embedded whole into an APK. Bounded conversions package the
@@ -136,7 +136,7 @@ proof of compatible C++ objects, exceptions, or linkage.
 
 `libioscompat.so` also carries a dynamic symbol-resolution registry: individually verified
 implementation entries plus a pool of stub trampolines. Symbols that would otherwise stay unmapped
-can be registered at runtime (`radek_compat_register_stub` / `NativeBridge.compatRegisterStub`) and
+can be registered at runtime (`iostodroid_compat_register_stub` / `NativeBridge.compatRegisterStub`) and
 then resolve to an explicit stub handler instead of nothing. The on-device triage reports those as
 `compat stub handler(s) registered (unimplemented)` — a resolution category that is never counted
 toward verified implementations or generated API implementations. The host likewise generates a per-IPA
@@ -167,8 +167,8 @@ entirely inside the proven subset, so analysis reaches PARTIAL with nonzero stat
 coverage and a complete compatibility registry. Run it through both paths:
 
 ```sh
-python3 -m radek analyze tests/data/sample-leaf.ipa --authorized --output .local/analysis
-python3 -m radek convert tests/data/sample-leaf.ipa --authorized --output .local/conversion
+python3 -m iostodroid analyze tests/data/sample-leaf.ipa --authorized --output .local/analysis
+python3 -m iostodroid convert tests/data/sample-leaf.ipa --authorized --output .local/conversion
 # .local/conversion holds librecompiled-entry.so, ioscompat/ registry source, and — when an
 # Android toolchain is installed — experimental-shell.apk. State is BLOCKED: no game APK.
 ```
@@ -179,7 +179,7 @@ runtime dependencies, and is inside the same narrow static recompilation subset:
 
 ```sh
 python3 tools/make_simple_ipa.py  # deterministically regenerates tests/data/simple.ipa
-python3 -m radek convert tests/data/simple.ipa --authorized --output .local/simple-conversion
+python3 -m iostodroid convert tests/data/simple.ipa --authorized --output .local/simple-conversion
 # With an Android SDK/NDK toolchain, this reaches READY and writes simple.apk.
 ```
 
@@ -187,7 +187,7 @@ For other synthetic Mach-O inputs, `tools/make_fixture.py` produces variants:
 
 ```sh
 python3 tools/make_fixture.py --arch arm64 --output .local/fixture.ipa
-python3 -m radek analyze .local/fixture.ipa --authorized --output .local/analysis
+python3 -m iostodroid analyze .local/fixture.ipa --authorized --output .local/analysis
 # Inspect .local/analysis/librecompiled-entry.so and report.json.
 # No game APK is produced.
 ```
@@ -195,7 +195,7 @@ python3 -m radek analyze .local/fixture.ipa --authorized --output .local/analysi
 To inspect an authorized IPA:
 
 ```sh
-python3 -m radek analyze authorized.ipa --authorized --output workspace/analysis
+python3 -m iostodroid analyze authorized.ipa --authorized --output workspace/analysis
 ```
 
 A new output directory is required. Reports and logs persist; temporary extraction workspaces are
@@ -210,7 +210,7 @@ missing-toolchain report. Device execution and gameplay are not claimed as teste
 
 Open **Actions → Build and validate Android APKs → Run workflow** and select the branch containing
 this implementation. Pushes and pull requests also run CI. After a successful run, download the
-**RadekiOSConventor-debug.apk** importer artifact. CI runs native, Python and Android importer tests,
+**iOStoDroid-debug.apk** importer artifact. CI runs native, Python and Android importer tests,
 validates the importer APK, converts `tests/data/hello-test.ipa` end to end with the host CLI, and
 validates the resulting bounded complete-game APK (`complete-game-v1`) alongside the honestly
 blocked sample leaf.

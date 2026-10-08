@@ -27,9 +27,9 @@ except ImportError:
     HAVE_KEYSTONE = False
 
 if HAVE_CAPSTONE and HAVE_KEYSTONE:
-    from radek.game import lift
-    from radek.game.disasm import Function
-    from radek.game.lift import LiftContext, LiftError
+    from iostodroid.game import lift
+    from iostodroid.game.disasm import Function
+    from iostodroid.game.lift import LiftContext, LiftError
 
     _KS = Ks(KS_ARCH_ARM, KS_MODE_ARM)
 
